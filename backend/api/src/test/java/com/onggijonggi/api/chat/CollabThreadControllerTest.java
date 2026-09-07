@@ -2,6 +2,12 @@ package com.onggijonggi.api.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import com.onggijonggi.api.auth.UserIdentityService;
+import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.ThrMbr;
+import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.persistence.MsgRepository;
+import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -28,6 +34,15 @@ class CollabThreadControllerTest {
 
 	@Autowired
 	private CollabRoomFixture.CollabRooms rooms;
+
+	@Autowired
+	private MsgRepository msgRepository;
+
+	@Autowired
+	private ThrMbrRepository thrMbrRepository;
+
+	@Autowired
+	private UserIdentityService userIdentityService;
 
 	private RestTestClient restTestClient;
 
@@ -63,6 +78,44 @@ class CollabThreadControllerTest {
 		rooms.openRoom("threads-participants-owner");
 
 		assertThat(listThreadsAs("threads-participants-owner")).contains("\"participants\":[]");
+	}
+
+	@Test
+	void returnsSavedMessagesInSeqOrderForAParticipant() {
+		UUID thrId = rooms.openRoom("messages-owner", "messages-member");
+		UUID ownerId = userIdentityService.resolveOrProvision("messages-owner").block();
+		ThrMbr ownerMembership = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, ownerId, ThrMbrStatus.ACTIVE)
+				.orElseThrow();
+		msgRepository.save(Msg.human(thrId, 0, ownerMembership.getId(), "안녕 AI야"));
+		Msg agentMsg = Msg.pendingAgent(thrId, 1);
+		agentMsg.complete("안녕하세요! 무엇을 도와드릴까요?");
+		msgRepository.save(agentMsg);
+
+		String body = restTestClient.get()
+				.uri("/api/collab/threads/{threadId}/messages", thrId)
+				.header(HttpHeaders.AUTHORIZATION,
+						"Bearer " + TestJwtSupport.signedJwt("messages-member", List.of("USER")))
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(String.class)
+				.returnResult()
+				.getResponseBody();
+
+		assertThat(body).contains("\"안녕 AI야\"");
+		assertThat(body).contains("\"안녕하세요! 무엇을 도와드릴까요?\"");
+		assertThat(body.indexOf("안녕 AI야")).isLessThan(body.indexOf("안녕하세요! 무엇을 도와드릴까요?"));
+	}
+
+	@Test
+	void rejectsMessageHistoryForNonParticipants() {
+		UUID thrId = rooms.openRoom("messages-private-owner");
+
+		restTestClient.get()
+				.uri("/api/collab/threads/{threadId}/messages", thrId)
+				.header(HttpHeaders.AUTHORIZATION,
+						"Bearer " + TestJwtSupport.signedJwt("messages-outsider", List.of("USER")))
+				.exchange()
+				.expectStatus().isNotFound();
 	}
 
 	private String listThreadsAs(String subject) {
