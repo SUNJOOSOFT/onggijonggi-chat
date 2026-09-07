@@ -1,5 +1,7 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgStatus;
 import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
@@ -22,7 +24,9 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -363,6 +367,82 @@ class CollabMessageDispatcherTest {
 	}
 
 	@Test
+	void persistsHumanMessageAfterBroadcast() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "일반 발화"), room.membership.generation());
+
+		verify(msgPersistenceService, timeout(1000)).persistHumanMessageBlocking(room.threadId, room.userId,
+				"일반 발화");
+	}
+
+	@Test
+	void doesNotPersistHumanMessageWhenDeliveryFails() {
+		FailingRoomSessionRegistry registry = new FailingRoomSessionRegistry();
+		registry.failBroadcasts = true;
+		TestRoom room = new TestRoom(registry);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "일반 발화"), room.membership.generation());
+
+		verify(msgPersistenceService, never()).persistHumanMessageBlocking(any(), any(), any());
+	}
+
+	@Test
+	void createsPendingAgentMessageThenCompletesItWithFullContentOnSuccess() {
+		TestRoom room = new TestRoom();
+		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("hello", " world"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI hi"), room.membership.generation());
+
+		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "hello world");
+	}
+
+	@Test
+	void marksAgentMessageFailedWhenTurnErrors() {
+		TestRoom room = new TestRoom();
+		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		Sinks.One<String> firstResponse = Sinks.one();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(firstResponse.asMono().flux());
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+		firstResponse.tryEmitError(new IllegalStateException("gateway failure"));
+
+		verify(msgPersistenceService, timeout(1000)).failBlocking(pending.getId(), MsgStatus.FAILED);
+	}
+
+	@Test
+	void marksAgentMessageCancelledWhenRoomClosesDuringActiveTurn() {
+		TestRoom room = new TestRoom();
+		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.never());
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+		room.registry.leave(room.threadId, room.connectionId, room.userId)
+				.ifPresent(generation -> dispatcher.closeGeneration(room.threadId, generation));
+
+		verify(msgPersistenceService, timeout(1000)).failBlocking(pending.getId(), MsgStatus.CANCELLED);
+	}
+
+	@Test
 	void rejectsInvalidAiSettingsAtStartup() {
 		RoomSessionRegistry registry = new RoomSessionRegistry();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
@@ -388,6 +468,12 @@ class CollabMessageDispatcherTest {
 			Duration timeout, int maxPending, VirtualTimeScheduler scheduler) {
 		return new CollabMessageDispatcher(registry, llm, mock(MsgPersistenceService.class), "test-model", timeout,
 				maxPending, scheduler);
+	}
+
+	private static CollabMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
+			MsgPersistenceService msgPersistenceService) {
+		return new CollabMessageDispatcher(registry, llm, msgPersistenceService, "test-model",
+				Duration.ofSeconds(120), 20, VirtualTimeScheduler.create());
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
