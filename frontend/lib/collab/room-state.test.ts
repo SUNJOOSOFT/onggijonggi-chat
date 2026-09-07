@@ -15,6 +15,14 @@ function join(userId: string): WsFrame {
   return { type: 'presence.join', sessionId: THREAD, userId };
 }
 
+function leave(userId: string): WsFrame {
+  return { type: 'presence.leave', sessionId: THREAD, userId };
+}
+
+function snapshot(...participants: string[]): WsFrame {
+  return { type: 'presence.snapshot', sessionId: THREAD, participants };
+}
+
 function say(from: string, content: string): WsFrame {
   return { type: 'chat.message', sessionId: THREAD, from, content };
 }
@@ -51,10 +59,67 @@ describe('applyFrame - presence.join', () => {
     expect(state.participants).toEqual(['sujin', 'minho']);
   });
 
-  it('스냅샷 재생으로 같은 사람이 다시 와도 한 번만 센다', () => {
-    // 서버는 전용 스냅샷 프레임이 없어 기존 참여자의 presence.join을 되풀이해 보낸다.
+  it('같은 사람의 join이 두 번 와도 한 번만 센다', () => {
     const state = fold([join('sujin'), join('minho'), join('sujin')]);
     expect(state.participants).toEqual(['sujin', 'minho']);
+  });
+});
+
+describe('applyFrame - presence.snapshot', () => {
+  it('붙는 순간 받은 명단으로 목록을 채운다 (본인 포함)', () => {
+    // 서버가 보내는 명단에는 본인이 들어 있다 — 자기 입장은 자기가 받지 않기 때문이다.
+    const state = fold([snapshot('sujin', 'minho')]);
+    expect(state.participants).toEqual(['sujin', 'minho']);
+  });
+
+  it('재연결로 다시 오면 그 사이 놓친 입퇴장까지 한 번에 맞춘다', () => {
+    const state = fold([
+      snapshot('sujin', 'minho'),
+      snapshot('minho', 'jiwoo'),
+    ]);
+    expect(state.participants).toEqual(['minho', 'jiwoo']);
+  });
+
+  it('명단 뒤에 도착한 입퇴장을 이어서 반영한다', () => {
+    const state = fold([
+      snapshot('sujin', 'minho'),
+      join('jiwoo'),
+      leave('sujin'),
+    ]);
+    expect(state.participants).toEqual(['minho', 'jiwoo']);
+  });
+});
+
+describe('applyFrame - presence.leave', () => {
+  it('나간 사람을 목록에서 지운다', () => {
+    const state = fold([join('sujin'), join('minho'), leave('sujin')]);
+    expect(state.participants).toEqual(['minho']);
+  });
+
+  it('목록에 없는 사람의 퇴장은 아무것도 바꾸지 않는다', () => {
+    // 스냅샷을 못 받아 존재를 모르던 사람의 퇴장이 도착할 수 있다(#26 코멘트).
+    const state = fold([join('sujin'), leave('minho')]);
+    expect(state.participants).toEqual(['sujin']);
+  });
+
+  it('나갔다 다시 들어오면 맨 뒤에 붙는다', () => {
+    const state = fold([
+      join('sujin'),
+      join('minho'),
+      leave('sujin'),
+      join('sujin'),
+    ]);
+    expect(state.participants).toEqual(['minho', 'sujin']);
+  });
+
+  it('참여자만 건드리고 메시지는 남긴다', () => {
+    const state = fold([
+      join('sujin'),
+      say('sujin', '먼저 가볼게요'),
+      leave('sujin'),
+    ]);
+    expect(state.participants).toEqual([]);
+    expect(state.messages).toHaveLength(1);
   });
 });
 

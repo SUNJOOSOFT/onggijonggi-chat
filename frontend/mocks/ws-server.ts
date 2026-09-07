@@ -54,6 +54,21 @@ function broadcast(job: MockAiJob, frame: WsFrame): boolean {
   return registry.broadcastIfCurrent(job.threadId, job.generation, frame);
 }
 
+/**
+ * presence 프레임을 정해진 상대에게만 보낸다. registry.broadcastIfCurrent를 쓰지 않는 이유는
+ * 그쪽이 방 전원에게 보내기 때문이다 — 실서버는 입퇴장을 당사자에게 보내지 않는다
+ * (RoomSessionRegistry). 목업이 계약과 어긋나면 화면 검증이 거짓 통과한다(#33·#19).
+ */
+function sendPresence(
+  targets: RoomMember[],
+  type: 'presence.join' | 'presence.leave',
+  threadId: string,
+  userId: string,
+): void {
+  const text = JSON.stringify({ type, sessionId: threadId, userId });
+  for (const target of targets) target.send(text);
+}
+
 /** 어떤 프레임을 보낼지는 `aiTurnFrames`(순수 함수, rooms.ts)가 정하고, 여기서는 실제
  * 소켓 방송과 프레임 사이 sleep만 맡는다. 마지막 프레임 뒤에는 sleep하지 않는다. */
 async function streamAiAnswer(job: MockAiJob): Promise<void> {
@@ -155,7 +170,23 @@ const server = Bun.serve<SocketData>({
         userId,
         send: (text) => ws.send(text),
       };
+      // 입장을 알릴 상대는 "들어가기 전에 이미 있던 사람"이라 join 전에 찍어둔다.
+      const others = registry.membersOf(threadId);
       ws.data.generation = registry.join(threadId, member);
+      // 스냅샷은 이 연결에게만, 본인을 포함해서 보낸다(#26).
+      member.send(
+        JSON.stringify({
+          type: 'presence.snapshot',
+          sessionId: threadId,
+          participants: [
+            ...new Set(registry.membersOf(threadId).map((m) => m.userId)),
+          ],
+        }),
+      );
+      // 그 사용자의 첫 연결일 때만 입장이다 — 탭을 더 여는 것은 입장이 아니다.
+      if (!others.some((other) => other.userId === userId)) {
+        sendPresence(others, 'presence.join', threadId, userId);
+      }
       console.log(`[mock-ws] join ${userId} → ${threadId}`);
     },
 
@@ -219,11 +250,14 @@ const server = Bun.serve<SocketData>({
 
     close(ws) {
       const { connectionId, threadId, userId, generation } = ws.data;
-      if (
-        generation !== null &&
-        registry.leave(threadId, connectionId, generation)
-      ) {
+      if (generation === null) return;
+      if (registry.leave(threadId, connectionId, generation)) {
         aiQueue.closeRoom(threadId, generation);
+      }
+      // 방이 비었으면 remaining이 빈 배열이라 아무 데도 나가지 않는다 — 실서버도 그렇다.
+      const remaining = registry.membersOf(threadId);
+      if (!remaining.some((other) => other.userId === userId)) {
+        sendPresence(remaining, 'presence.leave', threadId, userId);
       }
       console.log(`[mock-ws] leave ${userId} ← ${threadId}`);
     },

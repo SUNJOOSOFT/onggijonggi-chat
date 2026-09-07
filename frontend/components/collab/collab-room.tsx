@@ -184,6 +184,27 @@ export function CollabRoom({ threadId }: { threadId: string }) {
             <CollabInput canSend={connection === 'open'} onSend={send} />
           </div>
         </main>
+
+        {/* 접속자 목록(#26) — "지금 방에 붙어 있는 사람"이다. 방에 들어올 자격이 있는
+            참여자 명단(#23)과는 다른 목록이라 같은 자리에 겹쳐 그리지 않는다.
+            보여줄 수 있는 것이 userId(UUID)뿐이라 잘라서 그리고 전체는 title로 남긴다 —
+            사람이 읽을 이름을 어디서 얻을지는 #111·#128이 정한다. */}
+        <aside className="hidden w-56 shrink-0 flex-col gap-2 border-l p-4 sm:flex">
+          <h2 className="text-xs font-medium text-muted-foreground">
+            참여자 {state.participants.length}
+          </h2>
+          <ul className="flex flex-col gap-1">
+            {state.participants.map((participant) => (
+              <li
+                key={participant}
+                title={participant}
+                className="truncate text-sm"
+              >
+                {participant}
+              </li>
+            ))}
+          </ul>
+        </aside>
       </div>
     </div>
   );

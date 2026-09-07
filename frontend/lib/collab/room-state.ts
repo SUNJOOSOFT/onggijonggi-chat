@@ -7,8 +7,10 @@
  살아남을 규칙이라는 것이다 — 방 레지스트리(#16)와 `@AI` 분기(#17)가 서버에 들어와도 프레임을
  상태로 접는 방식 자체는 바뀌지 않는다.
 
- `chat.answer`의 citations·restrictedResultsOmitted는 현재 AI 답변에 누적한다. 참여자 퇴장은
- 서버가 `presence.leave`를 보내지만(#25), 이를 읽어 참여자를 지우는 것은 #26의 몫이라 지금은 도착해도 버린다.
+ `chat.answer`의 citations·restrictedResultsOmitted는 현재 AI 답변에 누적한다. 참여자 목록은
+ 붙는 순간 오는 `presence.snapshot`(#26)으로 채우고, 그 뒤로는 `presence.join`·`presence.leave`
+ (#25)로 갱신한다 — 이 목록은 "지금 방에 붙어 있는 사람"이지 "이 방에 들어올 자격이 있는
+ 사람"이 아니다(후자는 #20·#23의 몫이다).
  *********************************************************/
 
 import type { Citation } from '@/lib/api/chat';
@@ -42,7 +44,7 @@ export interface RoomError {
 }
 
 export interface RoomState {
-  /** 입장 순서대로의 참여자. presence.join 재생이 스냅샷을 겸하므로 중복은 여기서 거른다. */
+  /** 입장 순서대로의 참여자. 같은 사람의 join이 두 번 도착해도(재연결·스냅샷 재생) 한 번만 센다. */
   participants: string[];
   messages: CollabMessage[];
   error: RoomError | null;
@@ -148,7 +150,7 @@ function extendAnswer(
 
 /**
  * 프레임 하나를 상태에 접는다. 알 수 없는 프레임은 parse-frame.ts가 이미 걸러내므로
- * 여기 도착하는 것은 계약 안의 네 가지뿐이고, switch는 그 넷을 모두 다룬다.
+ * 여기 도착하는 것은 계약 안의 여섯 가지뿐이고, switch는 그 여섯을 모두 다룬다.
  */
 export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
   switch (frame.type) {
@@ -156,6 +158,19 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       if (state.participants.includes(frame.userId)) return state;
       return { ...state, participants: [...state.participants, frame.userId] };
     }
+
+    // 명단은 서버가 방금 뜬 것이라 지금까지 쌓인 것보다 정확하다 — 덧붙이지 않고 갈아끼운다.
+    // 재연결하면 다시 오므로, 끊긴 사이에 오간 입퇴장을 놓쳤어도 여기서 맞춰진다.
+    case 'presence.snapshot':
+      return { ...state, participants: [...new Set(frame.participants)] };
+
+    case 'presence.leave':
+      return {
+        ...state,
+        participants: state.participants.filter(
+          (participant) => participant !== frame.userId,
+        ),
+      };
 
     case 'chat.message':
       return appendMessage(state, frame.from, frame.content, false);

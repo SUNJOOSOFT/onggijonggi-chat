@@ -4,6 +4,8 @@ import type {
   ChatAnswerFrame,
   ChatMessageFrame,
   PresenceJoinFrame,
+  PresenceLeaveFrame,
+  PresenceSnapshotFrame,
   WsErrorFrame,
 } from './frames';
 
@@ -45,6 +47,28 @@ describe('routeFrame', () => {
     const onPresenceJoin = vi.fn();
     routeFrame(frame, { onPresenceJoin });
     expect(onPresenceJoin).toHaveBeenCalledExactlyOnceWith(frame);
+  });
+
+  it('presence.leave를 라우팅한다', () => {
+    const frame: PresenceLeaveFrame = {
+      type: 'presence.leave',
+      sessionId: 's1',
+      userId: 'u1',
+    };
+    const onPresenceLeave = vi.fn();
+    routeFrame(frame, { onPresenceLeave });
+    expect(onPresenceLeave).toHaveBeenCalledExactlyOnceWith(frame);
+  });
+
+  it('presence.snapshot을 라우팅한다', () => {
+    const frame: PresenceSnapshotFrame = {
+      type: 'presence.snapshot',
+      sessionId: 's1',
+      participants: ['u1'],
+    };
+    const onPresenceSnapshot = vi.fn();
+    routeFrame(frame, { onPresenceSnapshot });
+    expect(onPresenceSnapshot).toHaveBeenCalledExactlyOnceWith(frame);
   });
 
   it('error를 라우팅한다', () => {

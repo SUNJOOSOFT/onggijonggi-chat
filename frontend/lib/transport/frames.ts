@@ -43,11 +43,42 @@ export interface ChatMessageFrame {
   content: string;
 }
 
-/** 참여자 입장 이벤트. 퇴장 대칭 이벤트는 아직 없다(이슈 #25 논의 중). */
+/** 참여자 입장 이벤트. */
 export interface PresenceJoinFrame {
   type: 'presence.join';
   sessionId: string;
   userId: string;
+}
+
+/**
+ * 참여자 퇴장 이벤트(이슈 #25). join과 필드가 같아 한 타입으로 합치고 싶어지지만, 판별 유니온의
+ * 태그가 곧 계약이라 서버 record와 1:1로 둔다.
+ *
+ * 같은 사용자의 다른 연결이 남아 있으면 서버가 보내지 않는다 — 탭을 하나 더 열었다 닫은 것은
+ * 퇴장이 아니기 때문이다(RoomSessionRegistry.Departure). 방의 마지막 사람이 나갈 때도 받을
+ * 상대가 없어 나가지 않는다.
+ */
+export interface PresenceLeaveFrame {
+  type: 'presence.leave';
+  sessionId: string;
+  userId: string;
+}
+
+/**
+ * 연결이 붙는 순간 그 연결에만 오는 참여자 명단(이슈 #26). join·leave가 "방금 일어난 일"이라면
+ * 이쪽은 "지금 상태"다.
+ *
+ * 본인이 들어 있다. 자기 입장은 자기가 받지 않는 설계라 본인을 빼면 스스로를 목록에 넣을 방법이
+ * 없다 — 프레임이 싣는 userId는 서버의 app_user.id인데 그 값은 브라우저 세션에 없다.
+ *
+ * 입장 이벤트를 되풀이하는 방식 대신 타입을 나눈 이유는 #111(입퇴장 시스템 메시지)이 같은
+ * presence.join을 읽기 때문이다. 명단 재생과 실제 입장이 같은 타입이면 방에 들어갈 때마다
+ * 이미 있던 사람들이 방금 들어온 것처럼 보인다.
+ */
+export interface PresenceSnapshotFrame {
+  type: 'presence.snapshot';
+  sessionId: string;
+  participants: string[];
 }
 
 /** 스트림 중 발생한 오류. HTTP 쪽 BffErrorEnvelope(lib/api/errors.ts)와 code/message/traceId를
@@ -67,6 +98,8 @@ export type WsFrame =
   | ChatAnswerFrame
   | ChatMessageFrame
   | PresenceJoinFrame
+  | PresenceLeaveFrame
+  | PresenceSnapshotFrame
   | WsErrorFrame;
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */
