@@ -28,8 +28,11 @@ import { Markdown } from '@/components/markdown';
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import { fetchCollabThreads } from '@/lib/api/collab';
-import type { CollabMessage } from '@/lib/collab/room-state';
-import { isForbidden } from '@/lib/collab/room-state';
+import type {
+  CollabMessage,
+  CollabPresenceNotice,
+} from '@/lib/collab/room-state';
+import { isForbidden, isPresenceNotice } from '@/lib/collab/room-state';
 import {
   type RoomConnection,
   useCollabRoom,
@@ -42,6 +45,28 @@ const CONNECTION_LABEL: Record<RoomConnection, string> = {
   reconnecting: '다시 연결하는 중…',
   stalled: '연결하지 못했습니다',
 };
+
+/**
+ * 사람을 가리키는 표시. 지금 손에 있는 것이 userId(UUID)뿐이라 앞부분만 잘라 쓴다 —
+ * 사람이 읽을 이름을 어디서 얻을지는 #128이 정하고, 그때 이 함수 하나만 바꾸면 된다.
+ */
+function shortUserId(userId: string): string {
+  return userId.slice(0, 8);
+}
+
+/** 입퇴장 시스템 라인(#111). 말풍선도 작성자 머리글도 없이 흐름 가운데에 옅게 남긴다 —
+ * 사람이 한 말이 아니기 때문이다. */
+function PresenceRow({ notice }: { notice: CollabPresenceNotice }) {
+  return (
+    <p
+      title={notice.userId}
+      className="px-3 py-1 text-center text-xs text-muted-foreground"
+    >
+      {shortUserId(notice.userId)}님이{' '}
+      {notice.event === 'join' ? '입장했습니다' : '퇴장했습니다'}
+    </p>
+  );
+}
 
 /** 사람 메시지는 보낸 사람 이름을, AI 답변은 "AI"를 머리에 달고 배경으로 구분한다. */
 function MessageRow({ message }: { message: CollabMessage }) {
@@ -174,9 +199,13 @@ export function CollabRoom({ threadId }: { threadId: string }) {
                 아직 메시지가 없습니다.
               </p>
             )}
-            {state.messages.map((message) => (
-              <MessageRow key={message.id} message={message} />
-            ))}
+            {state.messages.map((entry) =>
+              isPresenceNotice(entry) ? (
+                <PresenceRow key={entry.id} notice={entry} />
+              ) : (
+                <MessageRow key={entry.id} message={entry} />
+              ),
+            )}
             <div ref={endRef} className="min-h-6 shrink-0" />
           </div>
 
@@ -195,12 +224,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
           </h2>
           <ul className="flex flex-col gap-1">
             {state.participants.map((participant) => (
-              <li
-                key={participant}
-                title={participant}
-                className="truncate text-sm"
-              >
-                {participant}
+              <li key={participant} title={participant} className="text-sm">
+                {shortUserId(participant)}
               </li>
             ))}
           </ul>
