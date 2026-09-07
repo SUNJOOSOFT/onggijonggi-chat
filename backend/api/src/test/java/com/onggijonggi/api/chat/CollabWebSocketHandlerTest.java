@@ -79,6 +79,25 @@ class CollabWebSocketHandlerTest {
 	}
 
 	@Test
+	void sendsAParticipantSnapshotAsTheFirstFrame() throws Exception {
+		UUID threadId = rooms.openRoom("snapshot-user");
+		// 스냅샷만 기다리고 끝내면 수신이 먼저 완료돼 세션이 닫히고, 뒤늦게 나가는 첫 전송이
+		// 깨진다(WsTestExchange의 전송 지연, 이슈 #102). 메시지를 하나 주고받으며 순서를 본다.
+		List<String> received = exchange("snapshot-user", threadId,
+				List.of("{\"type\":\"chat.message\",\"content\":\"hello\"}"), 2,
+				frameTypes("presence.snapshot", "chat.message"));
+
+		WsFrame frame = objectMapper.readValue(received.get(0), WsFrame.class);
+
+		assertThat(frame).isInstanceOfSatisfying(PresenceSnapshotFrame.class, snapshot -> {
+			assertThat(snapshot.sessionId()).isEqualTo(threadId);
+			// 방에 혼자여도 자기 자신은 들어 있다(이슈 #26). userId는 fixture가 돌려주지 않아
+			// 값 자체는 RoomSessionRegistryTest가 확인한다.
+			assertThat(snapshot.participants()).hasSize(1);
+		});
+	}
+
+	@Test
 	void keepsConnectionAfterMalformedFrameAndUsesDistinctTraceIds() throws Exception {
 		UUID threadId = rooms.openRoom("malformed-user");
 		List<String> received = exchange("malformed-user", threadId,
@@ -122,7 +141,8 @@ class CollabWebSocketHandlerTest {
 					return WsTestExchange.exchange(session, active -> Flux.just(
 							active.binaryMessage(factory -> factory.wrap(new byte[] {1, 2, 3})),
 							active.textMessage("{\"type\":\"chat.message\",\"content\":\"after binary\"}")),
-							2, message -> received.add(message.getPayloadAsText()));
+							2, message -> received.add(message.getPayloadAsText()), () -> {
+							}, WsTestExchange.exceptPresenceSnapshot());
 				}))
 				.block(WsTestTimeouts.BLOCK);
 
@@ -364,7 +384,15 @@ class CollabWebSocketHandlerTest {
 				.isInstanceOf(WebSocketClientHandshakeException.class);
 	}
 
+	/** 참여자 스냅샷(이슈 #26)은 연결마다 첫 프레임으로 반드시 온다 — 그것을 보는 테스트가
+	 * 아니면 세지 않는다. 세면 모든 테스트의 기대 프레임 수가 하나씩 밀린다. */
 	private List<String> exchange(String subject, UUID threadId, List<String> outbound, int expectedFrames) {
+		return exchange(subject, threadId, outbound, expectedFrames,
+				WsTestExchange.exceptPresenceSnapshot());
+	}
+
+	private List<String> exchange(String subject, UUID threadId, List<String> outbound, int expectedFrames,
+			Predicate<WebSocketMessage> interesting) {
 		String token = TestJwtSupport.signedJwt(subject, List.of("USER"));
 		List<String> received = new CopyOnWriteArrayList<>();
 
@@ -372,7 +400,8 @@ class CollabWebSocketHandlerTest {
 				.execute(wsUri(threadId), allowedHeaders(), protocolHandler(token, session -> {
 					return WsTestExchange.exchange(session,
 							active -> Flux.fromIterable(outbound).map(active::textMessage), expectedFrames,
-							message -> received.add(message.getPayloadAsText()));
+							message -> received.add(message.getPayloadAsText()), () -> {
+							}, interesting);
 				}))
 				.block(WsTestTimeouts.BLOCK);
 

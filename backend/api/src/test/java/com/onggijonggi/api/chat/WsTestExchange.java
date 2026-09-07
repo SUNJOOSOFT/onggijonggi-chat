@@ -35,6 +35,15 @@ final class WsTestExchange {
 	private WsTestExchange() {
 	}
 
+	/**
+	 * 참여자 스냅샷(이슈 #26)은 연결마다 첫 프레임으로 반드시 온다. 그 프레임을 보는 테스트가
+	 * 아니면 이 조건으로 걸러야 한다 — 세어 버리면 기대 프레임 수가 하나씩 밀리고, 기대 수를
+	 * 채운 수신이 먼저 끝나면 지연된 첫 전송이 닫힌 세션에 부딪힌다.
+	 */
+	static Predicate<WebSocketMessage> exceptPresenceSnapshot() {
+		return message -> !message.getPayloadAsText().contains("\"type\":\"presence.snapshot\"");
+	}
+
 	static Mono<Void> exchange(WebSocketSession session,
 			Function<WebSocketSession, Publisher<WebSocketMessage>> outbound, long expectedFrames,
 			Consumer<WebSocketMessage> onInbound) {

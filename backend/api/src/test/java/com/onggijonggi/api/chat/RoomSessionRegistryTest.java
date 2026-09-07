@@ -346,6 +346,55 @@ class RoomSessionRegistryTest {
 		}
 	}
 
+	@Test
+	void snapshotHoldsEveryoneInTheRoomIncludingTheJoiner() {
+		UUID roomId = UUID.randomUUID();
+		UUID firstUserId = UUID.randomUUID();
+		UUID secondUserId = UUID.randomUUID();
+
+		RoomSessionRegistry.RoomMembership first = registry.join(roomId, UUID.randomUUID(), firstUserId);
+		RoomSessionRegistry.RoomMembership second = registry.join(roomId, UUID.randomUUID(), secondUserId);
+
+		// 혼자 들어온 첫 입장자도 자기 자신을 받는다 — 자기 입장 통보는 오지 않으므로 이 명단이
+		// 클라이언트가 스스로를 목록에 넣을 유일한 근거다(이슈 #26).
+		assertThat(first.snapshot().sessionId()).isEqualTo(roomId);
+		assertThat(first.snapshot().participants()).containsExactly(firstUserId);
+		// 뒤에 온 사람은 입장 순서대로 방 전원을 받는다.
+		assertThat(second.snapshot().participants()).containsExactly(firstUserId, secondUserId);
+	}
+
+	@Test
+	void snapshotCountsATwoTabUserOnce() {
+		UUID roomId = UUID.randomUUID();
+		UUID twoTabUserId = UUID.randomUUID();
+		UUID watcherUserId = UUID.randomUUID();
+		registry.join(roomId, UUID.randomUUID(), twoTabUserId);
+		registry.join(roomId, UUID.randomUUID(), twoTabUserId);
+
+		RoomSessionRegistry.RoomMembership watcher = registry.join(roomId, UUID.randomUUID(), watcherUserId);
+
+		// 명단은 연결이 아니라 사람이다 — 탭을 두 개 연 사람이 두 명으로 보이면 안 된다.
+		assertThat(watcher.snapshot().participants()).containsExactly(twoTabUserId, watcherUserId);
+	}
+
+	@Test
+	void snapshotLeavesOutWhoeverAlreadyWent() {
+		UUID roomId = UUID.randomUUID();
+		UUID stayingUserId = UUID.randomUUID();
+		UUID leavingUserId = UUID.randomUUID();
+		UUID leavingConnectionId = UUID.randomUUID();
+		registry.join(roomId, UUID.randomUUID(), stayingUserId);
+		registry.join(roomId, leavingConnectionId, leavingUserId);
+
+		registry.leave(roomId, leavingConnectionId, leavingUserId);
+		RoomSessionRegistry.RoomMembership late = registry.join(roomId, UUID.randomUUID(), UUID.randomUUID());
+
+		// 늦게 온 사람은 이미 나간 사람의 퇴장 통보를 받을 수 없다. 명단에서도 빠져 있어야
+		// 모르는 사람이 목록에 남지 않는다.
+		assertThat(late.snapshot().participants()).doesNotContain(leavingUserId);
+		assertThat(late.snapshot().participants()).startsWith(stayingUserId);
+	}
+
 	private void broadcastRange(UUID roomId, UUID roomGeneration, String prefix, CountDownLatch start) {
 		await(start);
 		for (int i = 0; i < 100; i++) {

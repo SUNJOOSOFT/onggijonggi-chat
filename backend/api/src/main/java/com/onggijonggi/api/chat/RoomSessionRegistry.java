@@ -1,6 +1,8 @@
 package com.onggijonggi.api.chat;
 
-import java.util.HashMap;
+import java.util.ArrayList;
+import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
@@ -26,20 +28,29 @@ public class RoomSessionRegistry {
 	private final ConcurrentMap<UUID, RoomState> rooms = new ConcurrentHashMap<>();
 
 	/**
-	 * 연결을 방에 등록하고 그 방의 세대와 프레임 스트림을 돌려준다. 그 사용자의 첫 연결이고 이미
-	 * 있던 참여자가 하나라도 있으면 그들에게 입장을 알린다 — 첫 연결이면 알릴 상대가 없어 아무것도
-	 * 내지 않는다. 이 구분은 취향이 아니라 필요다: sink의 warm-up 버퍼는 한 칸뿐이라, 빈 방에
-	 * 프레임을 밀어 넣으면 그 자리가 채워져 뒤이어 오는 첫 메시지가 밀려난다(이슈 #102).
+	 * 연결을 방에 등록하고 그 방의 세대와 프레임 스트림, 그리고 그 연결에만 보낼 참여자
+	 * 스냅샷을 돌려준다. 그 사용자의 첫 연결이고 이미 있던 참여자가 하나라도 있으면 그들에게
+	 * 입장을 알린다 — 첫 연결이면 알릴 상대가 없어 아무것도 내지 않는다. 이 구분은 취향이 아니라
+	 * 필요다: sink의 warm-up 버퍼는 한 칸뿐이라, 빈 방에 프레임을 밀어 넣으면 그 자리가 채워져
+	 * 뒤이어 오는 첫 메시지가 밀려난다(이슈 #102).
+	 *
+	 * 스냅샷은 방송이 아니라 이 연결의 값이라 sink를 거치지 않는다 — warm-up 버퍼를 건드리지
+	 * 않는다는 뜻이고, 그래서 방의 첫 입장자에게도 그대로 내려보낼 수 있다. 명단은 멤버십을
+	 * 바꾼 잠금 안에서 뜬다 — 밖에서 뜨면 그 사이에 들어온 사람이 명단에도 없고 입장 통보도
+	 * 못 받는 연결이 생긴다.
 	 */
 	public RoomMembership join(UUID threadId, UUID connectionId, UUID userId) {
+		List<UUID> participants = new ArrayList<>();
 		RoomState room = rooms.compute(threadId, (ignored, current) -> {
 			RoomState joined = current == null ? new RoomState() : current;
 			if (joined.add(connectionId, userId)) {
 				joined.emitPresence(new PresenceJoinFrame(threadId, userId));
 			}
+			participants.addAll(joined.participants());
 			return joined;
 		});
-		return new RoomMembership(room.generation(), room.frames());
+		return new RoomMembership(room.generation(),
+				new PresenceSnapshotFrame(threadId, List.copyOf(participants)), room.frames());
 	}
 
 	/**
@@ -79,7 +90,11 @@ public class RoomSessionRegistry {
 		return Optional.ofNullable(emptiedGeneration[0]);
 	}
 
-	public record RoomMembership(UUID generation, Flux<WsFrame> frames) {
+	/**
+	 * 이 연결이 방에 대해 아는 전부. snapshot은 연결이 붙는 순간의 명단이고, frames는 그 뒤로
+	 * 방에서 일어나는 일이다 — 둘을 이어 붙여 내보내는 것은 {@link CollabWebSocketHandler}가 한다.
+	 */
+	public record RoomMembership(UUID generation, PresenceSnapshotFrame snapshot, Flux<WsFrame> frames) {
 	}
 
 	/**
@@ -102,8 +117,9 @@ public class RoomSessionRegistry {
 
 	private static final class RoomState {
 
-		/** connectionId에서 그 연결을 연 userId로. 한 사용자가 탭·재연결로 여러 연결을 가질 수 있다. */
-		private final Map<UUID, UUID> connections = new HashMap<>();
+		/** connectionId에서 그 연결을 연 userId로. 한 사용자가 탭·재연결로 여러 연결을 가질 수 있다.
+		 * 스냅샷이 입장 순서대로 나가야 해서 순서를 지키는 구현을 쓴다. */
+		private final Map<UUID, UUID> connections = new LinkedHashMap<>();
 
 		private final UUID generation = UUID.randomUUID();
 
@@ -127,6 +143,11 @@ public class RoomSessionRegistry {
 
 		UUID generation() {
 			return generation;
+		}
+
+		/** 지금 방에 있는 사용자를 입장 순서대로. 같은 사람의 연결이 여럿이어도 한 번만 센다. */
+		synchronized List<UUID> participants() {
+			return connections.values().stream().distinct().toList();
 		}
 
 		/**
