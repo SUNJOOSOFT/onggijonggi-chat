@@ -3,6 +3,7 @@ package com.onggijonggi.common.chat.persistence;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 
@@ -17,5 +18,8 @@ public interface ThrMbrRepository extends JpaRepository<ThrMbr, UUID> {
 	boolean existsByThrIdAndUserIdAndStatus(UUID thrId, UUID userId, ThrMbrStatus status);
 
 	List<ThrMbr> findByUserIdAndStatus(UUID userId, ThrMbrStatus status);
+
+	/** HUMAN 메시지의 thr_mbr_id를 채우는 데 쓴다 — "그때 그 참여"를 가리키게 하기 위함(msg 테이블 설계). */
+	Optional<ThrMbr> findByThrIdAndUserIdAndStatus(UUID thrId, UUID userId, ThrMbrStatus status);
 
 }

@@ -6,13 +6,17 @@ import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.util.Comparator;
 import java.util.List;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -31,12 +35,17 @@ public class CollabThreadController {
 	private final CurrentActorProvider currentActorProvider;
 	private final ThrRepository thrRepository;
 	private final ThrMbrRepository thrMbrRepository;
+	private final MsgRepository msgRepository;
+	private final ThreadMembershipService threadMembershipService;
 
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
-			ThrMbrRepository thrMbrRepository) {
+			ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
+			ThreadMembershipService threadMembershipService) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
+		this.msgRepository = msgRepository;
+		this.threadMembershipService = threadMembershipService;
 	}
 
 	/** 어떤 방을 내려줄지 고르는 것은 서버 몫이라, 호출자가 참가자인 방만 나간다. */
@@ -69,6 +78,24 @@ public class CollabThreadController {
 				.sorted(Comparator.comparing(Thr::getCreatedAt).reversed())
 				.map(CollabThreadSummary::from)
 				.toList();
+	}
+
+	/**
+	* 참가자가 아니거나 존재하지 않는 스레드면 404 — listMessages(ChatController)와 같은 이유로 존재
+	* 여부를 노출하지 않는다.
+	*/
+	@GetMapping("/api/collab/threads/{threadId}/messages")
+	public Flux<MsgItem> listMessages(@PathVariable UUID threadId) {
+		return currentActorProvider.currentActor()
+				.map(CurrentActor::userId)
+				.flatMap(userId -> threadMembershipService.isActiveParticipant(threadId, userId))
+				.flatMap(participant -> participant
+						? Mono.just(true)
+						: Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND)))
+				.then(Mono.fromCallable(() -> msgRepository.findByThrIdOrderBySeqAsc(threadId))
+						.subscribeOn(Schedulers.boundedElastic()))
+				.flatMapMany(Flux::fromIterable)
+				.map(MsgItem::from);
 	}
 
 }

@@ -368,12 +368,16 @@ class CollabMessageDispatcherTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
 
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, " ", Duration.ofSeconds(1), 0, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, " ",
+						Duration.ofSeconds(1), 0, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, "model", Duration.ZERO, 0, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, "model",
+						Duration.ZERO, 0, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, "model", Duration.ofSeconds(1), -1, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, "model",
+						Duration.ofSeconds(1), -1, scheduler));
 	}
 
 	private static CollabMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm) {
@@ -382,7 +386,8 @@ class CollabMessageDispatcherTest {
 
 	private static CollabMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
 			Duration timeout, int maxPending, VirtualTimeScheduler scheduler) {
-		return new CollabMessageDispatcher(registry, llm, "test-model", timeout, maxPending, scheduler);
+		return new CollabMessageDispatcher(registry, llm, mock(MsgPersistenceService.class), "test-model", timeout,
+				maxPending, scheduler);
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
@@ -447,7 +452,8 @@ class CollabMessageDispatcherTest {
 
 		RacyDispatcher(RoomSessionRegistry registry, LlmChatStreamService llm, CountDownLatch stateFetched,
 				CountDownLatch proceed) {
-			super(registry, llm, "test-model", Duration.ofSeconds(120), 20, VirtualTimeScheduler.create());
+			super(registry, llm, mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20,
+					VirtualTimeScheduler.create());
 			this.stateFetched = stateFetched;
 			this.proceed = proceed;
 		}

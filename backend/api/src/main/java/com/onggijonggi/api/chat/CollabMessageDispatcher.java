@@ -1,5 +1,7 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.openai.errors.OpenAIServiceException;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
@@ -11,12 +13,15 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import reactor.core.Disposable;
 import reactor.core.Disposables;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
 
@@ -27,9 +32,13 @@ import reactor.core.scheduler.Schedulers;
 @Component
 public class CollabMessageDispatcher {
 
+	private static final Logger log = LoggerFactory.getLogger(CollabMessageDispatcher.class);
+
 	private final RoomSessionRegistry roomSessionRegistry;
 
 	private final LlmChatStreamService llmChatStreamService;
+
+	private final MsgPersistenceService msgPersistenceService;
 
 	private final String modelId;
 
@@ -44,15 +53,17 @@ public class CollabMessageDispatcher {
 	@Autowired
 	public CollabMessageDispatcher(RoomSessionRegistry roomSessionRegistry,
 			LlmChatStreamService llmChatStreamService,
+			MsgPersistenceService msgPersistenceService,
 			@Value("${app.collab.ai.model:${spring.ai.openai.chat.options.model}}") String modelId,
 			@Value("${app.collab.ai.turn-timeout:120s}") Duration turnTimeout,
 			@Value("${app.collab.ai.max-pending-per-room:20}") int maxPendingPerRoom) {
-		this(roomSessionRegistry, llmChatStreamService, modelId, turnTimeout, maxPendingPerRoom,
-				Schedulers.parallel());
+		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, modelId, turnTimeout,
+				maxPendingPerRoom, Schedulers.parallel());
 	}
 
 	CollabMessageDispatcher(RoomSessionRegistry roomSessionRegistry, LlmChatStreamService llmChatStreamService,
-			String modelId, Duration turnTimeout, int maxPendingPerRoom, Scheduler deadlineScheduler) {
+			MsgPersistenceService msgPersistenceService, String modelId, Duration turnTimeout,
+			int maxPendingPerRoom, Scheduler deadlineScheduler) {
 		if (modelId == null || modelId.isBlank()) {
 			throw new IllegalArgumentException("app.collab.ai.model must not be blank");
 		}
@@ -64,6 +75,7 @@ public class CollabMessageDispatcher {
 		}
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.llmChatStreamService = llmChatStreamService;
+		this.msgPersistenceService = msgPersistenceService;
 		this.modelId = modelId;
 		this.turnTimeout = turnTimeout;
 		this.maxPendingPerRoom = maxPendingPerRoom;
@@ -96,6 +108,8 @@ public class CollabMessageDispatcher {
 					closeGeneration(key, state, true);
 					return Optional.of(messageDeliveryFailed(command));
 				}
+
+				persistHumanMessageAsync(command);
 
 				AiMentionParser.MentionResult mention = AiMentionParser.parse(command.content());
 				if (!mention.mentioned()) {
@@ -148,18 +162,30 @@ public class CollabMessageDispatcher {
 	void onStateFetchedForTesting() {
 	}
 
+	/**
+	* PENDING msg 생성은 LLM 스트림 시작을 지연시키지 않도록 별도로 fire-and-forget 구독한다
+	* (activeTurn.pendingMsgId에 캐시된 Mono로 보관 — 완료/실패 저장 시점에 그 결과를 기다린다).
+	* 델타는 개별 저장하지 않고 buffer에 누적해 턴이 끝났을 때 한 번에 완료 처리한다
+	* (PersistingChatStreamService와 동일한 결).
+	*/
 	private void startTurn(RoomKey key, RoomAiState state, ActiveTurn activeTurn) {
+		StringBuilder buffer = new StringBuilder();
+		activeTurn.pendingMsgId.subscribe();
+
 		Disposable subscription = withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 				new ChatStreamRequest(activeTurn.turn.threadId(), modelId,
 						List.of(new ChatMessage("user", activeTurn.turn.prompt()))))))
 				.filter(delta -> !delta.isEmpty())
-				.doOnNext(delta -> broadcastDelta(activeTurn, delta))
+				.doOnNext(delta -> {
+					buffer.append(delta);
+					broadcastDelta(activeTurn, delta);
+				})
 				.concatWith(Flux.defer(() -> activeTurn.hasNonBlankOutput.get()
 						? Flux.empty()
 						: Flux.error(new EmptyLlmOutputException())))
 				.subscribe(ignored -> {
-				}, error -> handleTurnError(key, state, activeTurn, error),
-						() -> handleTurnComplete(key, state, activeTurn));
+				}, error -> handleTurnError(key, state, activeTurn, buffer.toString(), error),
+						() -> handleTurnComplete(key, state, activeTurn, buffer.toString()));
 
 		synchronized (state) {
 			if (!state.closed && state.active == activeTurn) {
@@ -208,7 +234,7 @@ public class CollabMessageDispatcher {
 		}
 	}
 
-	private void handleTurnComplete(RoomKey key, RoomAiState state, ActiveTurn activeTurn) {
+	private void handleTurnComplete(RoomKey key, RoomAiState state, ActiveTurn activeTurn, String content) {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), "", List.of(), false, ChatAnswerStatus.DONE))) {
@@ -219,10 +245,12 @@ public class CollabMessageDispatcher {
 			closeGeneration(key, state, true);
 			return;
 		}
+		persistAgentCompletion(activeTurn, content);
 		advance(key, state, activeTurn);
 	}
 
-	private void handleTurnError(RoomKey key, RoomAiState state, ActiveTurn activeTurn, Throwable error) {
+	private void handleTurnError(RoomKey key, RoomAiState state, ActiveTurn activeTurn, String content,
+			Throwable error) {
 		if (error instanceof StaleGenerationException) {
 			closeGeneration(key, state);
 			return;
@@ -245,6 +273,7 @@ public class CollabMessageDispatcher {
 			closeGeneration(key, state, true);
 			return;
 		}
+		persistAgentFailure(activeTurn, MsgStatus.FAILED);
 		advance(key, state, activeTurn);
 	}
 
@@ -285,6 +314,7 @@ public class CollabMessageDispatcher {
 		}
 		if (activeTurn != null) {
 			activeTurn.subscription.dispose();
+			persistAgentFailure(activeTurn, MsgStatus.CANCELLED);
 		}
 		if (notifyPendingCancellation && pendingTurnsCancelled) {
 			try {
@@ -302,13 +332,47 @@ public class CollabMessageDispatcher {
 				command.traceId());
 	}
 
+	/**
+	* 방송이 이미 끝난 뒤 fire-and-forget으로 저장한다 — Mono.fromCallable(...).subscribeOn(...)은
+	* 스케줄만 하고 즉시 반환되므로, 이 메서드를 synchronized(state) 블록 안에서 불러도 락을
+	* 블로킹하지 않는다. 저장 실패는 로그만 남기고 삼킨다(채팅 자체를 막지 않는다).
+	*/
+	private void persistHumanMessageAsync(ChatMessageCommand command) {
+		Mono.fromCallable(() -> msgPersistenceService.persistHumanMessageBlocking(command.threadId(),
+					command.from(), command.content()))
+				.subscribeOn(Schedulers.boundedElastic())
+				.doOnError(e -> log.error("HUMAN 메시지 저장 실패 threadId={} traceId={}", command.threadId(),
+						command.traceId(), e))
+				.onErrorComplete()
+				.subscribe();
+	}
+
+	/** PENDING 생성이 실패해 pendingMsgId가 비어있으면(empty) 완료 저장도 조용히 건너뛴다. */
+	private void persistAgentCompletion(ActiveTurn activeTurn, String content) {
+		activeTurn.pendingMsgId
+				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.completeBlocking(msgId, content))
+						.subscribeOn(Schedulers.boundedElastic())
+						.doOnError(e -> log.error("agent 메시지 완료 저장 실패 msgId={}", msgId, e)))
+				.onErrorComplete()
+				.subscribe();
+	}
+
+	private void persistAgentFailure(ActiveTurn activeTurn, MsgStatus terminalStatus) {
+		activeTurn.pendingMsgId
+				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.failBlocking(msgId, terminalStatus))
+						.subscribeOn(Schedulers.boundedElastic())
+						.doOnError(e -> log.error("agent 메시지 실패 저장 실패 msgId={}", msgId, e)))
+				.onErrorComplete()
+				.subscribe();
+	}
+
 	private record RoomKey(UUID threadId, UUID roomGeneration) {
 	}
 
 	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId) {
 	}
 
-	private static final class ActiveTurn {
+	private final class ActiveTurn {
 
 		private final PendingTurn turn;
 
@@ -318,8 +382,24 @@ public class CollabMessageDispatcher {
 
 		private final Deque<String> leadingWhitespace = new ArrayDeque<>();
 
+		/**
+		* PENDING 행 생성 결과(성공 시 msgId, 실패 시 empty)를 캐시해 여러 번 구독해도 한 번만
+		* 실행한다 — startTurn()이 즉시 fire-and-forget으로 시작하고, 완료/실패 저장은 이 Mono가
+		* 끝날 때까지 기다렸다가 msgId를 얻는다.
+		*/
+		private final Mono<UUID> pendingMsgId;
+
 		ActiveTurn(PendingTurn turn) {
 			this.turn = turn;
+			this.pendingMsgId = Mono.fromCallable(() -> msgPersistenceService.createPendingAgentMessageBlocking(
+						turn.threadId()))
+					.subscribeOn(Schedulers.boundedElastic())
+					.map(Msg::getId)
+					.onErrorResume(e -> {
+						log.error("PENDING agent 메시지 생성 실패 threadId={}", turn.threadId(), e);
+						return Mono.empty();
+					})
+					.cache();
 		}
 	}
 
