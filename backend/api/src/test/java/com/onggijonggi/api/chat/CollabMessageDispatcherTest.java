@@ -443,6 +443,27 @@ class CollabMessageDispatcherTest {
 	}
 
 	@Test
+	void completesWithGeneratedContentEvenWhenTheDoneFrameBroadcastFails() {
+		FailingRoomSessionRegistry registry = new FailingRoomSessionRegistry();
+		TestRoom room = new TestRoom(registry);
+		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		Sinks.Many<String> source = Sinks.many().unicast().onBackpressureBuffer();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(source.asFlux());
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+		source.tryEmitNext("answer");
+		registry.failBroadcasts = true;
+		source.tryEmitComplete();
+
+		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "answer");
+		verify(msgPersistenceService, never()).failBlocking(pending.getId(), MsgStatus.CANCELLED);
+	}
+
+	@Test
 	void rejectsInvalidAiSettingsAtStartup() {
 		RoomSessionRegistry registry = new RoomSessionRegistry();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);

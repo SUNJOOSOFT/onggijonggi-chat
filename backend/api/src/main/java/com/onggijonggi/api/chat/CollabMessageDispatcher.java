@@ -234,14 +234,22 @@ public class CollabMessageDispatcher {
 		}
 	}
 
+	/**
+	* DONE 프레임 방송이 실패해도 응답 생성 자체는 이미 끝난 뒤라, closeGeneration()의 CANCELLED
+	* 처리보다 먼저 COMPLETE로 저장한다 — 그러지 않으면 스트리밍으로 이미 전달된 답변이 DB에는
+	* 빈 CANCELLED로 남아 새로고침 후 사라져 보인다. persistAgentCompletion()의 CAS 가드가 이후
+	* closeGeneration()의 CANCELLED 시도를 무시하게 만든다.
+	*/
 	private void handleTurnComplete(RoomKey key, RoomAiState state, ActiveTurn activeTurn, String content) {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), "", List.of(), false, ChatAnswerStatus.DONE))) {
+				persistAgentCompletion(activeTurn, content);
 				closeGeneration(key, state);
 				return;
 			}
 		} catch (RuntimeException ignored) {
+			persistAgentCompletion(activeTurn, content);
 			closeGeneration(key, state, true);
 			return;
 		}
@@ -347,8 +355,15 @@ public class CollabMessageDispatcher {
 				.subscribe();
 	}
 
-	/** PENDING 생성이 실패해 pendingMsgId가 비어있으면(empty) 완료 저장도 조용히 건너뛴다. */
+	/**
+	* PENDING 생성이 실패해 pendingMsgId가 비어있으면(empty) 완료 저장도 조용히 건너뛴다.
+	* terminalPersisted CAS로 같은 턴에 대해 완료/실패 저장이 두 번 이상 시도되는 것을 막는다 —
+	* completed_at·status 전이는 한 번만 유효하고, DB 트리거도 두 번째 UPDATE를 거부한다.
+	*/
 	private void persistAgentCompletion(ActiveTurn activeTurn, String content) {
+		if (!activeTurn.terminalPersisted.compareAndSet(false, true)) {
+			return;
+		}
 		activeTurn.pendingMsgId
 				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.completeBlocking(msgId, content))
 						.subscribeOn(Schedulers.boundedElastic())
@@ -358,6 +373,9 @@ public class CollabMessageDispatcher {
 	}
 
 	private void persistAgentFailure(ActiveTurn activeTurn, MsgStatus terminalStatus) {
+		if (!activeTurn.terminalPersisted.compareAndSet(false, true)) {
+			return;
+		}
 		activeTurn.pendingMsgId
 				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.failBlocking(msgId, terminalStatus))
 						.subscribeOn(Schedulers.boundedElastic())
@@ -388,6 +406,9 @@ public class CollabMessageDispatcher {
 		* 끝날 때까지 기다렸다가 msgId를 얻는다.
 		*/
 		private final Mono<UUID> pendingMsgId;
+
+		/** 완료/실패 저장이 이 턴에 대해 이미 한 번 시도됐는지 — 두 번째 시도는 조용히 건너뛴다. */
+		private final AtomicBoolean terminalPersisted = new AtomicBoolean();
 
 		ActiveTurn(PendingTurn turn) {
 			this.turn = turn;
