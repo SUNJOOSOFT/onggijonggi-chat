@@ -83,7 +83,8 @@ class WsOriginHandshakeTest {
 						return WsTestExchange.exchange(session,
 								active -> Mono.just(active.textMessage(
 										"{\"type\":\"chat.message\",\"content\":\"origin check\"}")),
-								1, message -> received.set(message.getPayloadAsText()));
+								1, message -> received.set(message.getPayloadAsText()), () -> {
+								}, WsTestExchange.exceptPresenceSnapshot());
 					}
 				})
 				.block(WsTestTimeouts.BLOCK);

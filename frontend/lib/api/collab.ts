@@ -22,6 +22,11 @@ export interface CollabThreadSummary {
   participants: string[];
 }
 
+/** POST /api/collab/threads 성공 응답. 생성 직후 방으로 이동하는 데 id만 필요하다. */
+export interface CreateCollabThreadResponse {
+  id: string;
+}
+
 /** 참여 중인 협업 채널 목록. 실패하면 예외를 던져 호출부가 안내하게 한다. */
 export async function fetchCollabThreads(): Promise<CollabThreadSummary[]> {
   const res = await authFetch(bffUrl(COLLAB_THREADS_PATH));
@@ -29,4 +34,19 @@ export async function fetchCollabThreads(): Promise<CollabThreadSummary[]> {
     throw new Error(await res.text());
   }
   return res.json() as Promise<CollabThreadSummary[]>;
+}
+
+/** 협업방을 만들고 새 방 UUID를 돌려준다. 제목 검증은 서버가 최종 책임진다. */
+export async function createCollabThread(
+  title: string,
+): Promise<CreateCollabThreadResponse> {
+  const res = await authFetch(bffUrl(COLLAB_THREADS_PATH), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ title }),
+  });
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<CreateCollabThreadResponse>;
 }

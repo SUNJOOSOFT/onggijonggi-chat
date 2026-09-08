@@ -101,7 +101,13 @@ export function parseInboundMessage(raw: string): InboundParseResult {
       return { kind: 'malformed' };
     }
     if (
-      ['chat.answer', 'presence.join', 'error'].includes(String(value.type))
+      [
+        'chat.answer',
+        'presence.join',
+        'presence.leave',
+        'presence.snapshot',
+        'error',
+      ].includes(String(value.type))
     ) {
       return { kind: 'ignore' };
     }

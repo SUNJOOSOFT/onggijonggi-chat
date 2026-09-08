@@ -55,12 +55,13 @@ public class CollabThreadController {
 	private final ThreadParticipantService threadParticipantService;
 	private final ThreadLifecycleService threadLifecycleService;
 	private final KeycloakAdminClient keycloakAdminClient;
+	private final CollabThreadCreationService collabThreadCreationService;
 
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
 			ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
 			ThreadMembershipService threadMembershipService,
 			ThreadParticipantService threadParticipantService, ThreadLifecycleService threadLifecycleService,
-			KeycloakAdminClient keycloakAdminClient) {
+			KeycloakAdminClient keycloakAdminClient, CollabThreadCreationService collabThreadCreationService) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
@@ -69,6 +70,7 @@ public class CollabThreadController {
 		this.threadParticipantService = threadParticipantService;
 		this.threadLifecycleService = threadLifecycleService;
 		this.keycloakAdminClient = keycloakAdminClient;
+		this.collabThreadCreationService = collabThreadCreationService;
 	}
 
 	/**
@@ -97,6 +99,17 @@ public class CollabThreadController {
 						.subscribeOn(Schedulers.boundedElastic())
 						.flatMap(threads -> summariesFor(threads, userId)))
 				.flatMapMany(Flux::fromIterable);
+	}
+
+	/** 인증된 사용자는 제목만으로 방을 만들며, 생성 서비스가 최초 OWNER 참가를 함께 만든다. */
+	@PostMapping("/api/collab/threads")
+	@ResponseStatus(HttpStatus.CREATED)
+	public Mono<CreateCollabThreadResponse> createThread(@Valid @RequestBody CreateCollabThreadRequest request) {
+		return actorUserId()
+				.flatMap(userId -> Mono.fromCallable(() -> collabThreadCreationService
+						.createBlocking(userId, request.title()))
+						.subscribeOn(Schedulers.boundedElastic()))
+				.map(CreateCollabThreadResponse::new);
 	}
 
 	/** 명단은 참가자면 누구나 본다 — 제거·위임 대상을 지목하려면 먼저 누가 있는지 알아야 한다. */

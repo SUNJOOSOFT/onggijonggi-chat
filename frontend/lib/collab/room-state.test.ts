@@ -2,17 +2,27 @@ import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
 import type { WsFrame } from '@/lib/transport/frames';
 import {
+  type CollabMessage,
   type RoomState,
   applyFrame,
   clearRoomError,
   initialRoomState,
   isForbidden,
+  isPresenceNotice,
 } from './room-state';
 
 const THREAD = 'thread-1';
 
 function join(userId: string): WsFrame {
   return { type: 'presence.join', sessionId: THREAD, userId };
+}
+
+function leave(userId: string): WsFrame {
+  return { type: 'presence.leave', sessionId: THREAD, userId };
+}
+
+function snapshot(...participants: string[]): WsFrame {
+  return { type: 'presence.snapshot', sessionId: THREAD, participants };
 }
 
 function say(from: string, content: string): WsFrame {
@@ -37,6 +47,13 @@ function answer(
   };
 }
 
+/** 입퇴장 시스템 라인(#111)을 뺀 사람·AI 메시지만. 대화 쪽을 보는 테스트가 쓴다. */
+function chats(state: RoomState): CollabMessage[] {
+  return state.messages.filter(
+    (entry): entry is CollabMessage => !isPresenceNotice(entry),
+  );
+}
+
 /** 프레임을 순서대로 접는다 — 테스트가 화면 없이 대화 한 판을 재현하는 방법이다. */
 function fold(
   frames: WsFrame[],
@@ -51,10 +68,123 @@ describe('applyFrame - presence.join', () => {
     expect(state.participants).toEqual(['sujin', 'minho']);
   });
 
-  it('스냅샷 재생으로 같은 사람이 다시 와도 한 번만 센다', () => {
-    // 서버는 전용 스냅샷 프레임이 없어 기존 참여자의 presence.join을 되풀이해 보낸다.
+  it('같은 사람의 join이 두 번 와도 한 번만 센다', () => {
     const state = fold([join('sujin'), join('minho'), join('sujin')]);
     expect(state.participants).toEqual(['sujin', 'minho']);
+  });
+});
+
+describe('applyFrame - presence.snapshot', () => {
+  it('붙는 순간 받은 명단으로 목록을 채운다 (본인 포함)', () => {
+    // 서버가 보내는 명단에는 본인이 들어 있다 — 자기 입장은 자기가 받지 않기 때문이다.
+    const state = fold([snapshot('sujin', 'minho')]);
+    expect(state.participants).toEqual(['sujin', 'minho']);
+  });
+
+  it('재연결로 다시 오면 그 사이 놓친 입퇴장까지 한 번에 맞춘다', () => {
+    const state = fold([
+      snapshot('sujin', 'minho'),
+      snapshot('minho', 'jiwoo'),
+    ]);
+    expect(state.participants).toEqual(['minho', 'jiwoo']);
+  });
+
+  it('명단 뒤에 도착한 입퇴장을 이어서 반영한다', () => {
+    const state = fold([
+      snapshot('sujin', 'minho'),
+      join('jiwoo'),
+      leave('sujin'),
+    ]);
+    expect(state.participants).toEqual(['minho', 'jiwoo']);
+  });
+});
+
+describe('applyFrame - presence.leave', () => {
+  it('나간 사람을 목록에서 지운다', () => {
+    const state = fold([join('sujin'), join('minho'), leave('sujin')]);
+    expect(state.participants).toEqual(['minho']);
+  });
+
+  it('목록에 없는 사람의 퇴장은 아무것도 바꾸지 않는다', () => {
+    // 스냅샷을 못 받아 존재를 모르던 사람의 퇴장이 도착할 수 있다(#26 코멘트).
+    const state = fold([join('sujin'), leave('minho')]);
+    expect(state.participants).toEqual(['sujin']);
+    // 흐름에도 남기지 않는다 — 목록에서 지울 사람이 없으면 알릴 사건도 없다.
+    expect(state.messages).toEqual([
+      { id: 'm1', event: 'join', userId: 'sujin' },
+    ]);
+  });
+
+  it('나갔다 다시 들어오면 맨 뒤에 붙는다', () => {
+    const state = fold([
+      join('sujin'),
+      join('minho'),
+      leave('sujin'),
+      join('sujin'),
+    ]);
+    expect(state.participants).toEqual(['minho', 'sujin']);
+  });
+
+  it('참여자만 건드리고 대화 메시지는 남긴다', () => {
+    const state = fold([
+      join('sujin'),
+      say('sujin', '먼저 가볼게요'),
+      leave('sujin'),
+    ]);
+    expect(state.participants).toEqual([]);
+    // 흐름에는 입장·퇴장 시스템 라인이 함께 남는다(#111) — 대화 메시지만 세어 확인한다.
+    expect(chats(state)).toHaveLength(1);
+  });
+});
+
+describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
+  it('입장과 퇴장을 흐름에 시간 순서로 남긴다', () => {
+    const state = fold([
+      join('sujin'),
+      say('sujin', '안녕하세요'),
+      leave('sujin'),
+    ]);
+    expect(state.messages).toEqual([
+      { id: 'm1', event: 'join', userId: 'sujin' },
+      {
+        id: 'm2',
+        from: 'sujin',
+        content: '안녕하세요',
+        streaming: false,
+        citations: [],
+        restrictedResultsOmitted: false,
+      },
+      { id: 'm3', event: 'leave', userId: 'sujin' },
+    ]);
+  });
+
+  it('명단(스냅샷)은 줄을 만들지 않는다 — 상태이지 사건이 아니다', () => {
+    // 붙는 순간 받는 명단으로 "N명이 입장했습니다"가 우수수 뜨면 안 된다. B안(전용 스냅샷
+    // 프레임)을 택한 이유가 이것이다(#26).
+    const state = fold([snapshot('sujin', 'minho')]);
+    expect(state.messages).toEqual([]);
+    expect(state.participants).toEqual(['sujin', 'minho']);
+  });
+
+  it('이미 아는 사람의 join이 또 와도 줄을 늘리지 않는다', () => {
+    const state = fold([join('sujin'), join('sujin')]);
+    expect(state.messages).toHaveLength(1);
+  });
+
+  it('시스템 라인이 흐르는 AI 답변을 끊지 않는다', () => {
+    // 답변이 흐르는 도중 누가 들어와도 이어지는 delta는 같은 말풍선에 붙어야 한다.
+    const state = fold([
+      answer('요약을 ', 'streaming'),
+      join('minho'),
+      answer('시작합니다', 'done'),
+    ]);
+    expect(chats(state)).toHaveLength(1);
+    expect(chats(state)[0].content).toBe('요약을 시작합니다');
+    expect(state.messages[1]).toEqual({
+      id: 'm2',
+      event: 'join',
+      userId: 'minho',
+    });
   });
 });
 
@@ -95,7 +225,7 @@ describe('applyFrame - chat.answer', () => {
       answer('첫 답변', 'done'),
       answer('두 번째 답변', 'done'),
     ]);
-    expect(state.messages.map((m) => m.content)).toEqual([
+    expect(chats(state).map((m) => m.content)).toEqual([
       '첫 답변',
       '두 번째 답변',
     ]);
@@ -114,7 +244,7 @@ describe('applyFrame - chat.answer', () => {
       answer('따르면 10%입니다.', 'done'),
     ]);
 
-    expect(state.messages.map((m) => m.from)).toEqual([null, 'minho']);
+    expect(chats(state).map((m) => m.from)).toEqual([null, 'minho']);
     expect(state.messages[0]).toMatchObject({
       content: '제12조에 따르면 10%입니다.',
       streaming: false,
@@ -123,7 +253,7 @@ describe('applyFrame - chat.answer', () => {
 
   it('사람 메시지 뒤에 오면 그 메시지에 섞이지 않는다', () => {
     const state = fold([say('sujin', '@AI 요약해줘'), answer('요약', 'done')]);
-    expect(state.messages.map((m) => m.from)).toEqual(['sujin', null]);
+    expect(chats(state).map((m) => m.from)).toEqual(['sujin', null]);
   });
 
   it('토큰보다 먼저 온 citations를 답변에 누적하고 docId 중복은 최신 값으로 바꾼다', () => {
@@ -225,7 +355,7 @@ describe('applyFrame - error', () => {
       },
     ]);
 
-    expect(state.messages[0].streaming).toBe(true);
+    expect(chats(state)[0].streaming).toBe(true);
     expect(state.error?.message).toBe(
       '메시지를 전달하지 못했어요. 연결을 확인하고 다시 보내 주세요.',
     );

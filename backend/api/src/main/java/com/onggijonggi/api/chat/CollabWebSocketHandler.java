@@ -40,7 +40,8 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 
 	private static final CloseStatus SLOW_CONSUMER = new CloseStatus(1011, "outbound buffer overflow");
 
-	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join", "presence.leave", "error");
+	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join",
+			"presence.leave", "presence.snapshot", "error");
 
 	private final ObjectMapper objectMapper;
 
@@ -125,8 +126,10 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		Sinks.One<Void> outboundOverflow = Sinks.one();
 		RoomSessionRegistry.RoomMembership membership = roomSessionRegistry.join(threadId, connectionId, userId);
 
-		Flux<WsFrame> roomFrames = bufferForConnection(
-				membership.frames(), outboundOverflow);
+		// 참여자 스냅샷(#26)은 방송이 아니라 이 연결의 값이라, 방 버퍼 밖에서 맨 앞에 붙인다 —
+		// 느린 소비자용 버퍼 한 칸을 명단이 차지할 이유가 없다.
+		Flux<WsFrame> roomFrames = bufferForConnection(membership.frames(), outboundOverflow)
+				.startWith(membership.snapshot());
 
 		Flux<WsFrame> inboundResponses = session.receive()
 				.concatMap(message -> handleInbound(message, threadId, userId, membership.generation()))

@@ -333,14 +333,19 @@ class CollabMessageDispatcherTest {
 	}
 
 	@Test
-	void cancelsTheRunningTurnWhenTheLastConnectionLeaves() {
+	void cancelsTheRunningTurnWhenTheLastConnectionLeaves() throws InterruptedException {
 		TestRoom room = new TestRoom();
+		CountDownLatch subscribed = new CountDownLatch(1);
 		AtomicBoolean cancelled = new AtomicBoolean();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.<String>never().doOnCancel(() -> cancelled.set(true)));
+		when(llm.streamChat(any())).thenReturn(Flux.defer(() -> {
+			subscribed.countDown();
+			return Flux.<String>never().doOnCancel(() -> cancelled.set(true));
+		}));
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+		assertThat(subscribed.await(1, TimeUnit.SECONDS)).isTrue();
 		room.registry.leave(room.threadId, room.connectionId, room.userId)
 				.ifPresent(generation -> dispatcher.closeGeneration(room.threadId, generation));
 
@@ -349,18 +354,54 @@ class CollabMessageDispatcherTest {
 	}
 
 	@Test
-	void cancelsAllRunningTurnsWhenTheServerShutsDown() {
+	void cancelsAllRunningTurnsWhenTheServerShutsDown() throws InterruptedException {
 		TestRoom room = new TestRoom();
+		CountDownLatch subscribed = new CountDownLatch(1);
 		AtomicBoolean cancelled = new AtomicBoolean();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.<String>never().doOnCancel(() -> cancelled.set(true)));
+		when(llm.streamChat(any())).thenReturn(Flux.defer(() -> {
+			subscribed.countDown();
+			return Flux.<String>never().doOnCancel(() -> cancelled.set(true));
+		}));
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+		assertThat(subscribed.await(1, TimeUnit.SECONDS)).isTrue();
 		dispatcher.closeAllGenerations();
 
 		awaitTrue(cancelled);
 		assertThat(cancelled).isTrue();
+	}
+
+	@Test
+	void doesNotStartTheLlmWhenTheRoomClosesDuringContextLookup() throws InterruptedException {
+		TestRoom room = new TestRoom();
+		CountDownLatch contextStarted = new CountDownLatch(1);
+		CountDownLatch releaseContext = new CountDownLatch(1);
+		CountDownLatch llmSubscribed = new CountDownLatch(1);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.defer(() -> {
+			llmSubscribed.countDown();
+			return Flux.never();
+		}));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(eq(room.threadId), eq(room.userId),
+				eq("@AI first"), anyInt())).thenAnswer(invocation -> {
+			contextStarted.countDown();
+			releaseContext.await(1, TimeUnit.SECONDS);
+			return List.of();
+		});
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		try {
+			dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+			assertThat(contextStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			dispatcher.closeAllGenerations();
+		} finally {
+			releaseContext.countDown();
+		}
+
+		assertThat(llmSubscribed.await(250, TimeUnit.MILLISECONDS)).isFalse();
 	}
 
 	@Test

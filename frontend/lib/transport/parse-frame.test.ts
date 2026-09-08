@@ -125,6 +125,42 @@ describe('parseFrame', () => {
     });
   });
 
+  it('presence.leave를 파싱한다', () => {
+    const frame = parseFrame({
+      type: 'presence.leave',
+      sessionId: 's1',
+      userId: 'u1',
+    });
+    expect(frame).toEqual({
+      type: 'presence.leave',
+      sessionId: 's1',
+      userId: 'u1',
+    });
+  });
+
+  it('presence.snapshot을 파싱한다', () => {
+    const frame = parseFrame({
+      type: 'presence.snapshot',
+      sessionId: 's1',
+      participants: ['u1', 'u2'],
+    });
+    expect(frame).toEqual({
+      type: 'presence.snapshot',
+      sessionId: 's1',
+      participants: ['u1', 'u2'],
+    });
+  });
+
+  it('참여자가 혼자여도 배열로 온다', () => {
+    expect(
+      parseFrame({
+        type: 'presence.snapshot',
+        sessionId: 's1',
+        participants: 'u1',
+      }),
+    ).toBeNull();
+  });
+
   it('error를 파싱한다 (sessionId 있음)', () => {
     const frame = parseFrame({
       type: 'error',
@@ -156,9 +192,9 @@ describe('parseFrame', () => {
     }
   });
 
-  it('알 수 없는 type은 null (미래의 presence.leave 등에 대비)', () => {
+  it('알 수 없는 type은 null (계약이 넓어지기 전의 새 프레임에 대비)', () => {
     expect(
-      parseFrame({ type: 'presence.leave', sessionId: 's1', userId: 'u1' }),
+      parseFrame({ type: 'presence.away', sessionId: 's1', userId: 'u1' }),
     ).toBeNull();
   });
 

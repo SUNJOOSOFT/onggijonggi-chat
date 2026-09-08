@@ -4,12 +4,15 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.onggijonggi.api.auth.UserIdentityService;
 import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrMbr;
+import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -75,6 +78,55 @@ class CollabThreadControllerTest {
 		rooms.openRoom("threads-other-owner");
 
 		assertThat(listThreadsAs("threads-loner")).isEqualTo("[]");
+	}
+
+	@Test
+	void createsAnActiveCollabThreadWithTheCreatorAsItsOnlyOwner() {
+		String title = "  새 \"협업방\"  ";
+
+		createThread("create-owner", title)
+				.expectStatus().isCreated()
+				.expectBody()
+				.jsonPath("$.id").isNotEmpty();
+
+		Thr created = threadsNamed(title).get(0);
+		UUID ownerId = userIdentityService.resolveOrProvision("create-owner").block();
+		List<ThrMbr> members = thrMbrRepository.findByThrIdAndStatus(created.getId(), ThrMbrStatus.ACTIVE);
+		assertThat(created.getTitle()).isEqualTo(title);
+		assertThat(created.getCreatedUserId()).isEqualTo(ownerId);
+		assertThat(members).singleElement().satisfies(member -> {
+			assertThat(member.getUserId()).isEqualTo(ownerId);
+			assertThat(member.getCreatedByUserId()).isEqualTo(ownerId);
+			assertThat(member.getRole()).isEqualTo(ThrMbrRole.OWNER);
+		});
+	}
+
+	@Test
+	void rejectsBlankAndTooLongTitlesWithoutCreatingAThread() {
+		long before = thrRepository.count();
+
+		createThread("create-invalid", "   ")
+				.expectStatus().isBadRequest()
+				.expectBody()
+				.jsonPath("$.error.code").isEqualTo("VALIDATION_ERROR");
+		createThread("create-invalid", "a".repeat(256))
+				.expectStatus().isBadRequest()
+				.expectBody()
+				.jsonPath("$.error.code").isEqualTo("VALIDATION_ERROR");
+
+		assertThat(thrRepository.count()).isEqualTo(before);
+	}
+
+	@Test
+	void allowsDifferentRoomsToHaveTheSameTitle() {
+		String title = "중복 가능한 제목";
+
+		createThread("create-duplicate", title).expectStatus().isCreated();
+		createThread("create-duplicate", title).expectStatus().isCreated();
+
+		assertThat(threadsNamed(title)).hasSize(2)
+				.extracting(Thr::getId)
+				.doesNotHaveDuplicates();
 	}
 
 	/**
@@ -218,6 +270,19 @@ class CollabThreadControllerTest {
 				.expectBody(String.class)
 				.returnResult()
 				.getResponseBody();
+	}
+
+	private RestTestClient.ResponseSpec createThread(String subject, String title) {
+		return restTestClient.post()
+				.uri("/api/collab/threads")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt(subject, List.of("USER")))
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
+				.body(Map.of("title", title))
+				.exchange();
+	}
+
+	private List<Thr> threadsNamed(String title) {
+		return thrRepository.findAll().stream().filter(thread -> thread.getTitle().equals(title)).toList();
 	}
 
 }

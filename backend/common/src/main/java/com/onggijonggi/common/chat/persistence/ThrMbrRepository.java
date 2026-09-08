@@ -34,8 +34,8 @@ public interface ThrMbrRepository extends JpaRepository<ThrMbr, UUID> {
 
 	/**
 	* transferOwnership: 두 참가 행의 role을 한 UPDATE로 맞바꾼다. 서비스에서 두 번 저장하면
-	* 그 사이에 OWNER가 0명이거나 2명인 상태가 보일 수 있는데, 이 저장소에는 트랜잭션 관용구가
-	* 없어(모든 쓰기가 save() 한 번이다) 새 경계를 들이는 대신 레포 메서드 하나를 원자 단위로 쓴다.
+	* 그 사이에 OWNER가 0명이거나 2명인 상태가 보일 수 있다. 이 전이는 한 조건부 UPDATE로 경쟁 조건까지
+	* 표현할 수 있으므로, 레포 메서드 하나를 원자 단위로 쓴다.
 	* WHERE에 지금 role·status까지 넣는 것은, 다른 위임이 먼저 끝난 뒤에도 두 행이 그대로 갱신되면
 	* 호출부의 행 수 검증이 경합을 못 잡기 때문이다.
 	* @param thrId 대상 Thread

@@ -78,6 +78,19 @@ class WsFrameTest {
 	}
 
 	@Test
+	void deserializesPresenceSnapshotByTypeTag() throws Exception {
+		UUID sessionId = UUID.randomUUID();
+		UUID first = UUID.randomUUID();
+		UUID second = UUID.randomUUID();
+		String json = "{\"type\":\"presence.snapshot\",\"sessionId\":\"%s\",\"participants\":[\"%s\",\"%s\"]}"
+				.formatted(sessionId, first, second);
+
+		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
+
+		assertThat(frame).isEqualTo(new PresenceSnapshotFrame(sessionId, List.of(first, second)));
+	}
+
+	@Test
 	void allFrameTypesRoundTripThroughJson() throws Exception {
 		UUID sessionId = UUID.randomUUID();
 		UUID userId = UUID.randomUUID();
@@ -86,6 +99,7 @@ class WsFrameTest {
 						List.of(new Citation("doc-001", "제목", "발췌", 0.91)), false, ChatAnswerStatus.DONE),
 				new PresenceJoinFrame(sessionId, userId),
 				new PresenceLeaveFrame(sessionId, userId),
+				new PresenceSnapshotFrame(sessionId, List.of(userId)),
 				new ChatMessageFrame(sessionId, userId, "content"),
 				new ErrorFrame(sessionId, "FORBIDDEN", "권한이 없습니다.", "trace-1"));
 

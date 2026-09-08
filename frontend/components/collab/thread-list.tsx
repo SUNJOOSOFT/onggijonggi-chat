@@ -11,15 +11,27 @@
  *********************************************************/
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
+import { type FormEvent, useEffect, useState } from 'react';
 
 import { SidebarToggle } from '@/components/sidebar-toggle';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
 
-import { type CollabThreadSummary, fetchCollabThreads } from '@/lib/api/collab';
+import {
+  createCollabThread,
+  type CollabThreadSummary,
+  fetchCollabThreads,
+} from '@/lib/api/collab';
+import { resolveChatError } from '@/lib/api/errors';
 
 export function ThreadList() {
+  const router = useRouter();
   const [threads, setThreads] = useState<CollabThreadSummary[] | null>(null);
   const [failed, setFailed] = useState(false);
+  const [title, setTitle] = useState('');
+  const [creating, setCreating] = useState(false);
+  const [createError, setCreateError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -35,6 +47,26 @@ export function ThreadList() {
     };
   }, []);
 
+  async function createThread(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (title.trim() === '') {
+      setCreateError('방 제목을 입력해 주세요.');
+      return;
+    }
+    setCreating(true);
+    setCreateError(null);
+    try {
+      const created = await createCollabThread(title);
+      router.push(`/collab/${created.id}`);
+    } catch (error) {
+      setCreateError(
+        resolveChatError(error instanceof Error ? error : new Error()).message,
+      );
+    } finally {
+      setCreating(false);
+    }
+  }
+
   return (
     <div className="flex h-dvh flex-col">
       {/* 목록 본문은 가운데 정렬이지만 헤더는 그러지 않는다 — 사이드바 토글이 1:1 채팅
@@ -45,6 +77,33 @@ export function ThreadList() {
       </header>
 
       <div className="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-4 overflow-y-auto p-6">
+        <form
+          className="flex flex-col gap-2 sm:flex-row"
+          onSubmit={createThread}
+        >
+          <Input
+            aria-describedby={createError ? 'create-thread-error' : undefined}
+            disabled={creating}
+            maxLength={255}
+            onChange={(event) => setTitle(event.target.value)}
+            placeholder="새 협업방 제목"
+            value={title}
+          />
+          <Button disabled={creating} type="submit">
+            {creating ? '만드는 중…' : '만들기'}
+          </Button>
+        </form>
+
+        {createError && (
+          <p
+            className="text-sm text-destructive"
+            id="create-thread-error"
+            role="alert"
+          >
+            {createError}
+          </p>
+        )}
+
         {failed && (
           <p className="rounded-lg bg-muted px-4 py-3 text-sm">
             목록을 불러오지 못했습니다. 잠시 후 다시 시도해주세요.

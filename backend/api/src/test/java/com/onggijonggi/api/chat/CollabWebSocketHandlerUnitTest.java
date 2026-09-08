@@ -57,6 +57,11 @@ class CollabWebSocketHandlerUnitTest {
 		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just(principal));
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("ws-user")).thenReturn(Mono.just(userId));
+		// 연결이 붙는 순간 참여자 스냅샷(이슈 #26)이 한 장 나가므로 textMessage가 실제 값을
+		// 돌려줘야 한다 — mock의 기본값(null)이면 직렬화 단계에서 NPE가 난다.
+		when(session.textMessage(anyString())).thenAnswer(invocation -> new WebSocketMessage(
+				WebSocketMessage.Type.TEXT, DefaultDataBufferFactory.sharedInstance.wrap(
+						invocation.<String>getArgument(0).getBytes(java.nio.charset.StandardCharsets.UTF_8))));
 		when(session.receive()).thenReturn(Flux.defer(() -> {
 			receiveSubscriptions.incrementAndGet();
 			return Flux.empty();
@@ -122,6 +127,11 @@ class CollabWebSocketHandlerUnitTest {
 		when(jwt.getExpiresAt()).thenReturn(Instant.now().plusMillis(50));
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("expiring-user")).thenReturn(Mono.just(userId));
+		// 연결이 붙는 순간 참여자 스냅샷(이슈 #26)이 한 장 나가므로 textMessage가 실제 값을
+		// 돌려줘야 한다 — mock의 기본값(null)이면 직렬화 단계에서 NPE가 난다.
+		when(session.textMessage(anyString())).thenAnswer(invocation -> new WebSocketMessage(
+				WebSocketMessage.Type.TEXT, DefaultDataBufferFactory.sharedInstance.wrap(
+						invocation.<String>getArgument(0).getBytes(java.nio.charset.StandardCharsets.UTF_8))));
 		when(session.receive()).thenReturn(Flux.never());
 		when(session.send(any())).thenAnswer(invocation -> Flux.from(invocation.getArgument(0)).then());
 		when(session.close(any(CloseStatus.class))).thenReturn(Mono.empty());

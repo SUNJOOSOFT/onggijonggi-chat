@@ -1,7 +1,7 @@
 /********************************************************
  파일명 : parse-frame.ts (lib/transport)
- 설 명 : 서버가 보낸 원시 JSON(unknown)을 WsFrame으로 검증·변환한다. 미지 type(예: 향후
- presence.leave)이나 스키마가 안 맞는 프레임은 예외를 던지지 않고 null로 조용히 흘려보낸다 —
+ 설 명 : 서버가 보낸 원시 JSON(unknown)을 WsFrame으로 검증·변환한다. 미지 type이나 스키마가
+ 안 맞는 프레임은 예외를 던지지 않고 null로 조용히 흘려보낸다 —
  프레임 하나가 깨졌다고 어댑터 전체(스트림 소비)가 죽으면 안 되기 때문이다. 호출부(frame-router.ts
  또는 그 소비자)가 null을 로그로 남길지는 그쪽 책임으로 남긴다.
  *********************************************************/
@@ -41,6 +41,18 @@ const presenceJoinFrameSchema = z.object({
   userId: z.string(),
 });
 
+const presenceLeaveFrameSchema = z.object({
+  type: z.literal('presence.leave'),
+  sessionId: z.string(),
+  userId: z.string(),
+});
+
+const presenceSnapshotFrameSchema = z.object({
+  type: z.literal('presence.snapshot'),
+  sessionId: z.string(),
+  participants: z.array(z.string()),
+});
+
 /** 연결 수립 자체가 실패하는 경우처럼 특정 세션에 속하지 않는 오류는 sessionId가 null일 수
  * 있다(ErrorFrame.java 주석과 동일 계약). */
 const wsErrorFrameSchema = z.object({
@@ -51,12 +63,14 @@ const wsErrorFrameSchema = z.object({
   traceId: z.string(),
 });
 
-/** type 필드로 판별하는 유니온. 알려진 4개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
+/** type 필드로 판별하는 유니온. 알려진 6개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
  * 포함) 파싱이 실패한다 — parseFrame이 그 실패를 null로 흡수한다. */
 const wsFrameSchema = z.discriminatedUnion('type', [
   chatAnswerFrameSchema,
   chatMessageFrameSchema,
   presenceJoinFrameSchema,
+  presenceLeaveFrameSchema,
+  presenceSnapshotFrameSchema,
   wsErrorFrameSchema,
 ]);
 

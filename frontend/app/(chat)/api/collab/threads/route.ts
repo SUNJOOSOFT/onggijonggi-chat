@@ -57,3 +57,37 @@ export async function GET() {
 
   return Response.json(THREADS);
 }
+
+/** 실 BFF가 없는 개발 모드에서도 #146 생성 화면을 같은 최소 계약으로 확인한다. */
+export async function POST(request: Request) {
+  if (!isMockMode()) {
+    return new Response('Mock disabled: real BFF is configured', {
+      status: 404,
+    });
+  }
+
+  let body: unknown;
+  try {
+    body = await request.json();
+  } catch {
+    return errorResponse('MALFORMED_REQUEST', '요청 본문을 읽을 수 없습니다.');
+  }
+  const title =
+    body !== null && typeof body === 'object' && 'title' in body
+      ? (body as { title?: unknown }).title
+      : undefined;
+  if (typeof title !== 'string' || title.trim() === '' || title.length > 255) {
+    return errorResponse(
+      'VALIDATION_ERROR',
+      'title: 올바른 방 제목을 입력해 주세요.',
+    );
+  }
+
+  const id = crypto.randomUUID();
+  THREADS.unshift({ id, title, participants: [] });
+  return Response.json({ id }, { status: 201 });
+}
+
+function errorResponse(code: string, message: string) {
+  return Response.json({ error: { code, message } }, { status: 400 });
+}
