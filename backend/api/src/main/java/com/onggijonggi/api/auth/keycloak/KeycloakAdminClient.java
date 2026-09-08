@@ -11,7 +11,7 @@ import org.springframework.util.LinkedMultiValueMap;
 import org.springframework.util.MultiValueMap;
 import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
-import org.springframework.web.reactive.function.client.WebClientResponseException;
+import org.springframework.web.reactive.function.client.WebClientException;
 import reactor.core.publisher.Mono;
 
 /**
@@ -45,11 +45,14 @@ public class KeycloakAdminClient {
 
 	/**
 	 * subject(AppUser.keycloakSubj, JWT sub 클레임과 같은 값)로 표시 이름을 조회한다. app_user.id(내부
-	 * UUID)와는 다른 값이라 호출부가 미리 keycloakSubj로 바꿔서 넘겨야 한다. 탈퇴 등으로 못 찾으면 빈
-	 * Optional — 대체 문구는 호출부가 정한다.
+	 * UUID)와는 다른 값이라 호출부가 미리 keycloakSubj로 바꿔서 넘겨야 한다. 탈퇴로 못 찾은 경우뿐
+	 * 아니라 토큰 발급 실패·타임아웃·5xx 등 Admin API 쪽 오류 전부를 빈 Optional로 삼킨다 — 표시
+	 * 이름 하나 못 가져온 것 때문에 호출부의 스레드 목록 조회 전체가 죽으면 안 된다.
 	 */
 	public Mono<Optional<String>> displayName(String subject) {
-		return adminToken().flatMap(token -> lookupUser(subject, token));
+		return adminToken()
+				.flatMap(token -> lookupUser(subject, token))
+				.onErrorResume(WebClientException.class, ignored -> Mono.just(Optional.empty()));
 	}
 
 	private Mono<Optional<String>> lookupUser(String subject, String token) {
@@ -58,8 +61,7 @@ public class KeycloakAdminClient {
 				.headers(headers -> headers.setBearerAuth(token))
 				.retrieve()
 				.bodyToMono(UserRepresentation.class)
-				.map(user -> Optional.ofNullable(user.username()))
-				.onErrorResume(WebClientResponseException.NotFound.class, ignored -> Mono.just(Optional.empty()));
+				.map(user -> Optional.ofNullable(user.username()));
 	}
 
 	private Mono<String> adminToken() {

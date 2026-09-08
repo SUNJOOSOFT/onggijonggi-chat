@@ -9,9 +9,8 @@ import java.util.UUID;
  * Description : GET /api/collab/threads 응답 항목. 필드 구성은 01·CLIENT의
  *               CollabThreadSummary(frontend/lib/api/collab.ts)와 같아야 한다.
  *
- *               participants는 방을 제목만으로 가려내기 어려워 화면이 함께 보여주는 표시 이름인데,
- *               app_user에 이름 컬럼이 없어 지금은 늘 비어 나간다. 채우는 시점·방법은 이슈 #22를
- *               확인한다.
+ *               participants는 방을 제목만으로 가려내기 어려워 화면이 함께 보여주는 표시 이름이다.
+ *               app_user에 이름 컬럼을 두지 않고 Keycloak을 정본으로 삼아 요청 시점에 채운다(이슈 #128).
  */
 public record CollabThreadSummary(
 		UUID id,
@@ -19,8 +18,8 @@ public record CollabThreadSummary(
 		List<String> participants
 ) {
 
-	static CollabThreadSummary from(Thr thr) {
-		return new CollabThreadSummary(thr.getId(), thr.getTitle(), List.of());
+	static CollabThreadSummary from(Thr thr, List<String> participants) {
+		return new CollabThreadSummary(thr.getId(), thr.getTitle(), participants);
 	}
 
 }

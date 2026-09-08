@@ -26,7 +26,8 @@ import org.springframework.test.web.servlet.client.RestTestClient;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
+@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class,
+		FakeKeycloakAdminConfig.class})
 class CollabThreadControllerTest {
 
 	@LocalServerPort
@@ -72,12 +73,17 @@ class CollabThreadControllerTest {
 		assertThat(listThreadsAs("threads-loner")).isEqualTo("[]");
 	}
 
-	/** app_user에 이름 컬럼이 없어 participants는 아직 채우지 않는다(이슈 #22 코멘트). */
+	/**
+	* app_user에는 이름 컬럼이 없어(이슈 #22 코멘트) Keycloak을 정본으로 표시 이름을 채운다(이슈 #128).
+	* FakeKeycloakAdminConfig가 subject를 그대로 표시 이름으로 돌려주므로 subject가 그대로 보인다.
+	*/
 	@Test
-	void returnsEmptyParticipantsUntilDisplayNamesExist() {
-		rooms.openRoom("threads-participants-owner");
+	void fillsParticipantsWithDisplayNamesFromKeycloak() {
+		rooms.openRoom("threads-participants-owner", "threads-participants-member");
 
-		assertThat(listThreadsAs("threads-participants-owner")).contains("\"participants\":[]");
+		String body = listThreadsAs("threads-participants-owner");
+
+		assertThat(body).contains("\"participants\":[\"threads-participants-owner\",\"threads-participants-member\"]");
 	}
 
 	@Test

@@ -37,6 +37,11 @@ class KeycloakAdminClientTest {
 	private final AtomicReference<ClientRequest> lastUserRequest = new AtomicReference<>();
 
 	private KeycloakAdminClient clientReturning(String username, long expiresInSeconds) {
+		return clientRespondingWith(HttpStatus.NOT_FOUND, username, expiresInSeconds);
+	}
+
+	private KeycloakAdminClient clientRespondingWith(HttpStatus userLookupFailureStatus, String username,
+			long expiresInSeconds) {
 		WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
 			if (request.url().toString().endsWith("/protocol/openid-connect/token")) {
 				tokenRequests.incrementAndGet();
@@ -46,7 +51,7 @@ class KeycloakAdminClientTest {
 			}
 			lastUserRequest.set(request);
 			if (username == null) {
-				return Mono.just(ClientResponse.create(HttpStatus.NOT_FOUND).build());
+				return Mono.just(ClientResponse.create(userLookupFailureStatus).build());
 			}
 			return Mono.just(jsonResponse("""
 					{ "id": "%s", "username": "%s", "firstName": "무시됨" }
@@ -80,6 +85,19 @@ class KeycloakAdminClientTest {
 	@Test
 	void returnsEmptyWhenUserNotFound() {
 		KeycloakAdminClient client = clientReturning(null, 60);
+
+		StepVerifier.create(client.displayName(SUBJECT))
+				.expectNext(Optional.empty())
+				.verifyComplete();
+	}
+
+	/**
+	* NotFound가 아닌 오류(5xx 등 Admin API 쪽 장애)도 예외로 전파하지 않는다 — 표시 이름 하나
+	* 실패했다고 호출부의 스레드 목록 조회 전체가 죽으면 안 된다.
+	*/
+	@Test
+	void returnsEmptyWhenAdminApiFails() {
+		KeycloakAdminClient client = clientRespondingWith(HttpStatus.INTERNAL_SERVER_ERROR, null, 60);
 
 		StepVerifier.create(client.displayName(SUBJECT))
 				.expectNext(Optional.empty())

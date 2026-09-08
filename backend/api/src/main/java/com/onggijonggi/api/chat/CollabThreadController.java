@@ -2,6 +2,7 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.auth.CurrentActorProvider;
+import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbr;
@@ -12,7 +13,10 @@ import com.onggijonggi.common.chat.persistence.ThrRepository;
 import jakarta.validation.Valid;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
+import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -47,25 +51,28 @@ public class CollabThreadController {
 	private final MsgRepository msgRepository;
 	private final ThreadMembershipService threadMembershipService;
 	private final ThreadParticipantService threadParticipantService;
+	private final KeycloakAdminClient keycloakAdminClient;
 
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
 			ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
 			ThreadMembershipService threadMembershipService,
-			ThreadParticipantService threadParticipantService) {
+			ThreadParticipantService threadParticipantService, KeycloakAdminClient keycloakAdminClient) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.threadMembershipService = threadMembershipService;
 		this.threadParticipantService = threadParticipantService;
+		this.keycloakAdminClient = keycloakAdminClient;
 	}
 
 	/** 어떤 방을 내려줄지 고르는 것은 서버 몫이라, 호출자가 참가자인 방만 나간다. */
 	@GetMapping("/api/collab/threads")
 	public Flux<CollabThreadSummary> listThreads() {
 		return actorUserId()
-				.flatMap(userId -> Mono.fromCallable(() -> joinedCollabThreads(userId))
-						.subscribeOn(Schedulers.boundedElastic()))
+				.flatMap(userId -> Mono.fromCallable(() -> joinedThreads(userId))
+						.subscribeOn(Schedulers.boundedElastic())
+						.flatMap(threads -> summariesFor(threads, userId)))
 				.flatMapMany(Flux::fromIterable);
 	}
 
@@ -117,7 +124,7 @@ public class CollabThreadController {
 	* status로 Thread를 거르지 않는다 — ARCHIVED로 만드는 코드 경로가 아직 없어, 지금 거르면 아무
 	* 행도 만들지 않는 조건을 미리 박아두는 셈이 된다.
 	*/
-	private List<CollabThreadSummary> joinedCollabThreads(UUID userId) {
+	private List<Thr> joinedThreads(UUID userId) {
 		List<UUID> joinedIds = thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
 				.stream()
 				.map(ThrMbr::getThrId)
@@ -128,8 +135,39 @@ public class CollabThreadController {
 		return thrRepository.findAllById(joinedIds).stream()
 				.filter(thr -> thr.getKind() == ThrKind.COLLAB)
 				.sorted(Comparator.comparing(Thr::getCreatedAt).reversed())
-				.map(CollabThreadSummary::from)
 				.toList();
+	}
+
+	/**
+	* 각 방의 참가자 subject는 threadParticipantService(이미 검증된 조회)로 얻고, 표시 이름은 여기서
+	* 한꺼번에 붙인다 — 같은 사람이 여러 방에 있으면 Keycloak Admin API를 그만큼 중복 호출하게 되므로
+	* 스레드 목록 전체에서 subject를 한 번만 모아 조회한다(이슈 #128).
+	*/
+	private Mono<List<CollabThreadSummary>> summariesFor(List<Thr> threads, UUID userId) {
+		return Flux.fromIterable(threads)
+				.flatMapSequential(thr -> threadParticipantService.list(thr.getId(), userId)
+						.map(participants -> new ThreadWithSubjects(thr,
+								participants.stream().map(ThreadParticipant::subject).toList())))
+				.collectList()
+				.flatMap(this::withDisplayNames);
+	}
+
+	private Mono<List<CollabThreadSummary>> withDisplayNames(List<ThreadWithSubjects> threads) {
+		Set<String> subjects = threads.stream()
+				.flatMap(thread -> thread.subjects().stream())
+				.collect(Collectors.toSet());
+		return Flux.fromIterable(subjects)
+				.flatMap(subject -> keycloakAdminClient.displayName(subject)
+						.map(displayName -> Map.entry(subject, displayName.orElse(subject))))
+				.collectMap(Map.Entry::getKey, Map.Entry::getValue)
+				.map(displayNamesBySubject -> threads.stream()
+						.map(thread -> CollabThreadSummary.from(thread.thr(),
+								thread.subjects().stream().map(displayNamesBySubject::get).toList()))
+						.toList());
+	}
+
+	/** 참가자 subject까지만 담은 중간 형태 — 표시 이름은 방 여러 개를 다 모은 뒤에 한 번에 붙인다. */
+	private record ThreadWithSubjects(Thr thr, List<String> subjects) {
 	}
 
 	/**
