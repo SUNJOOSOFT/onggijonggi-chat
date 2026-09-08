@@ -1,7 +1,6 @@
 package com.onggijonggi.api.auth.keycloak;
 
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
@@ -31,7 +30,7 @@ class KeycloakAdminClientTest {
 
 	private static final String CLIENT_SECRET = "test-secret";
 
-	private static final UUID SUBJECT = UUID.randomUUID();
+	private static final String SUBJECT = "b3f2a6b0-3f0e-4a9a-9e0a-2f6c3d1e9a11";
 
 	private final AtomicInteger tokenRequests = new AtomicInteger();
 
@@ -93,7 +92,7 @@ class KeycloakAdminClientTest {
 		KeycloakAdminClient client = clientReturning("sujin", 3600);
 
 		client.displayName(SUBJECT).block();
-		client.displayName(UUID.randomUUID()).block();
+		client.displayName("other-subject").block();
 
 		assertThat(tokenRequests.get()).isEqualTo(1);
 	}
@@ -104,7 +103,7 @@ class KeycloakAdminClientTest {
 		KeycloakAdminClient client = clientReturning("sujin", 10);
 
 		client.displayName(SUBJECT).block();
-		client.displayName(UUID.randomUUID()).block();
+		client.displayName("other-subject").block();
 
 		assertThat(tokenRequests.get()).isEqualTo(2);
 	}

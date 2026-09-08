@@ -4,7 +4,6 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -45,14 +44,15 @@ public class KeycloakAdminClient {
 	}
 
 	/**
-	 * subject(app_user가 들고 있는 keycloak_subj, Keycloak 내부 사용자 id와 같은 값)로 표시 이름을
-	 * 조회한다. 탈퇴 등으로 못 찾으면 빈 Optional — 대체 문구는 호출부가 정한다.
+	 * subject(AppUser.keycloakSubj, JWT sub 클레임과 같은 값)로 표시 이름을 조회한다. app_user.id(내부
+	 * UUID)와는 다른 값이라 호출부가 미리 keycloakSubj로 바꿔서 넘겨야 한다. 탈퇴 등으로 못 찾으면 빈
+	 * Optional — 대체 문구는 호출부가 정한다.
 	 */
-	public Mono<Optional<String>> displayName(UUID subject) {
+	public Mono<Optional<String>> displayName(String subject) {
 		return adminToken().flatMap(token -> lookupUser(subject, token));
 	}
 
-	private Mono<Optional<String>> lookupUser(UUID subject, String token) {
+	private Mono<Optional<String>> lookupUser(String subject, String token) {
 		return webClient.get()
 				.uri("/admin/realms/{realm}/users/{id}", realm, subject)
 				.headers(headers -> headers.setBearerAuth(token))
