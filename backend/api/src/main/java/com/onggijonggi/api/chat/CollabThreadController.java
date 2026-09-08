@@ -51,18 +51,21 @@ public class CollabThreadController {
 	private final MsgRepository msgRepository;
 	private final ThreadMembershipService threadMembershipService;
 	private final ThreadParticipantService threadParticipantService;
+	private final ThreadLifecycleService threadLifecycleService;
 	private final KeycloakAdminClient keycloakAdminClient;
 
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
 			ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
 			ThreadMembershipService threadMembershipService,
-			ThreadParticipantService threadParticipantService, KeycloakAdminClient keycloakAdminClient) {
+			ThreadParticipantService threadParticipantService, ThreadLifecycleService threadLifecycleService,
+			KeycloakAdminClient keycloakAdminClient) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.threadMembershipService = threadMembershipService;
 		this.threadParticipantService = threadParticipantService;
+		this.threadLifecycleService = threadLifecycleService;
 		this.keycloakAdminClient = keycloakAdminClient;
 	}
 
@@ -111,6 +114,20 @@ public class CollabThreadController {
 			@Valid @RequestBody ParticipantSubjectRequest request) {
 		return actorUserId()
 				.flatMap(userId -> threadParticipantService.transferOwner(threadId, userId, request.subject()));
+	}
+
+	/** OWNER만 잠글 수 있다. LOCKED는 되돌릴 수 있는 상태 — 새 메시지·초대 등 쓰기만 막는다(#131). */
+	@PutMapping("/api/collab/threads/{threadId}/lock")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public Mono<Void> lockThread(@PathVariable UUID threadId) {
+		return actorUserId().flatMap(userId -> threadLifecycleService.lock(threadId, userId));
+	}
+
+	/** OWNER만 보관할 수 있다. ARCHIVED는 최종 상태다(#131). */
+	@PutMapping("/api/collab/threads/{threadId}/archive")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public Mono<Void> archiveThread(@PathVariable UUID threadId) {
+		return actorUserId().flatMap(userId -> threadLifecycleService.archive(threadId, userId));
 	}
 
 	private Mono<UUID> actorUserId() {

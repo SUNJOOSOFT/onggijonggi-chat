@@ -125,4 +125,21 @@ public class Thr {
 		return archivedAt;
 	}
 
+	/** ACTIVE에서만 호출한다(상태 검증은 서비스 몫) — locked_at만 채우고 archived_at은 그대로 둔다. */
+	public void lock() {
+		this.status = ThrStatus.LOCKED;
+		this.lockedAt = Instant.now();
+		this.updatedAt = Instant.now();
+	}
+
+	/**
+	* ACTIVE·LOCKED 둘 다에서 호출할 수 있다(상태 검증은 서비스 몫). LOCKED를 거쳐 온 경우 locked_at은
+	* 지우지 않는다 — 언제 잠겼었는지를 잃지 않기 위해서다(V8__thread.sql thr_archived_has_archived_at).
+	*/
+	public void archive() {
+		this.status = ThrStatus.ARCHIVED;
+		this.archivedAt = Instant.now();
+		this.updatedAt = Instant.now();
+	}
+
 }
