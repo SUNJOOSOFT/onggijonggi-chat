@@ -13,6 +13,9 @@ spring.datasource.password=여기에_실제_비밀번호_입력
 # frontend/.env.local과 동일 값 재사용 가능
 spring.ai.openai.api-key=여기에_실제_LiteLLM_키_입력
 
+# infra/.env의 KEYCLOAK_CLIENT_SECRET과 동일 — 참여자 표시 이름을 Keycloak Admin API로 조회할 때 쓴다
+app.keycloak.admin.client-secret=여기에_실제_시크릿_입력
+
 # --- 공용 호스트 오버라이드: DB·LLM (주소값 — 비밀 아님) ---
 # application.properties의 기본값은 전부 localhost다. Postgres·LiteLLM까지 내 PC에 직접 도커로
 # 띄운다면 아래 2줄을 지우거나 주석 처리한다. 주소는 실제 호스트에 맞게 바꾼다.
