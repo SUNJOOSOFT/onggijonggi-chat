@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.inOrder;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.common.chat.domain.Msg;
@@ -78,6 +79,14 @@ class MsgPersistenceServiceTest {
 		List<Msg> context = service.recentCompleteContextBlocking(thrId, 20);
 
 		assertThat(context).extracting(Msg::getContent).containsExactly("oldest", "newest");
+	}
+
+	@Test
+	void returnsEmptyContextWithoutQueryingWhenLimitIsZero() {
+		List<Msg> context = service.recentCompleteContextBlocking(thrId, 0);
+
+		assertThat(context).isEmpty();
+		verifyNoInteractions(msgRepository);
 	}
 
 	@Test

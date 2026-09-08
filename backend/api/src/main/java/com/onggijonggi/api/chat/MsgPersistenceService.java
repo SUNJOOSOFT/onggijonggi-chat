@@ -66,9 +66,16 @@ public class MsgPersistenceService {
 		return priorContext;
 	}
 
-	/** 오래된 것부터(시간순) 반환한다 — LLM 프롬프트에 그대로 이어 붙일 수 있게. */
+	/**
+	* 오래된 것부터(시간순) 반환한다 — LLM 프롬프트에 그대로 이어 붙일 수 있게. contextLimit이
+	* 0이면(문맥 끄기) 쿼리 없이 빈 리스트를 바로 반환한다 — PageRequest는 pageSize 1 이상을
+	* 요구해 0을 그대로 넘기면 예외가 난다.
+	*/
 	@Transactional
 	public List<Msg> recentCompleteContextBlocking(UUID thrId, int contextLimit) {
+		if (contextLimit == 0) {
+			return List.of();
+		}
 		List<Msg> recent = new ArrayList<>(msgRepository.findByThrIdAndStatusOrderBySeqDesc(thrId,
 				MsgStatus.COMPLETE, PageRequest.of(0, contextLimit)));
 		Collections.reverse(recent);
