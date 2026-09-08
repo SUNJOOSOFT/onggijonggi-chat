@@ -109,6 +109,10 @@ describe('applyFrame - presence.leave', () => {
     // 스냅샷을 못 받아 존재를 모르던 사람의 퇴장이 도착할 수 있다(#26 코멘트).
     const state = fold([join('sujin'), leave('minho')]);
     expect(state.participants).toEqual(['sujin']);
+    // 흐름에도 남기지 않는다 — 목록에서 지울 사람이 없으면 알릴 사건도 없다.
+    expect(state.messages).toEqual([
+      { id: 'm1', event: 'join', userId: 'sujin' },
+    ]);
   });
 
   it('나갔다 다시 들어오면 맨 뒤에 붙는다', () => {

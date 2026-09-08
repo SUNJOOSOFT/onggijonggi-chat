@@ -220,6 +220,9 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       return { ...state, participants: [...new Set(frame.participants)] };
 
     case 'presence.leave': {
+      // join과 대칭이다. 모르는 사람의 퇴장은 목록도 흐름도 건드리지 않는다 — 본 적 없는
+      // 사람이 나갔다는 줄만 남으면 읽는 쪽은 놓친 입장이 있다고 오해한다.
+      if (!state.participants.includes(frame.userId)) return state;
       const left = {
         ...state,
         participants: state.participants.filter(
