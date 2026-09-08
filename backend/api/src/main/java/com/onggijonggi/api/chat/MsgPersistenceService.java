@@ -7,8 +7,12 @@ import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
+import org.springframework.data.domain.PageRequest;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -47,6 +51,28 @@ public class MsgPersistenceService {
 		}
 		long seq = thrRepository.allocateNextSeq(thrId);
 		return Optional.of(msgRepository.save(Msg.human(thrId, seq, member.get().getId(), content)));
+	}
+
+	/**
+	* @AI 멘션에 쓸 LLM 문맥을 이번에 보낸 메시지 저장 전에 먼저 읽어, 방금 보낸 메시지가 문맥에
+	* 중복으로 끼는 걸 막는다(이슈 #100). 한 트랜잭션으로 묶어 "조회 후 저장" 순서를 보장한다 —
+	* 별개의 두 호출로 나누면 그 사이에 순서가 뒤집힐 수 있다.
+	*/
+	@Transactional
+	public List<Msg> persistHumanMessageAndFetchContextBlocking(UUID thrId, UUID userId, String content,
+			int contextLimit) {
+		List<Msg> priorContext = recentCompleteContextBlocking(thrId, contextLimit);
+		persistHumanMessageBlocking(thrId, userId, content);
+		return priorContext;
+	}
+
+	/** 오래된 것부터(시간순) 반환한다 — LLM 프롬프트에 그대로 이어 붙일 수 있게. */
+	@Transactional
+	public List<Msg> recentCompleteContextBlocking(UUID thrId, int contextLimit) {
+		List<Msg> recent = new ArrayList<>(msgRepository.findByThrIdAndStatusOrderBySeqDesc(thrId,
+				MsgStatus.COMPLETE, PageRequest.of(0, contextLimit)));
+		Collections.reverse(recent);
+		return recent;
 	}
 
 	@Transactional

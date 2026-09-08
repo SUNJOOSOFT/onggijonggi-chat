@@ -1,11 +1,13 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.AthKind;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.openai.errors.OpenAIServiceException;
 import jakarta.annotation.PreDestroy;
 import java.time.Duration;
 import java.util.ArrayDeque;
+import java.util.ArrayList;
 import java.util.Deque;
 import java.util.List;
 import java.util.Optional;
@@ -46,6 +48,8 @@ public class CollabMessageDispatcher {
 
 	private final int maxPendingPerRoom;
 
+	private final int maxContextMessages;
+
 	private final Scheduler deadlineScheduler;
 
 	private final ConcurrentMap<RoomKey, RoomAiState> states = new ConcurrentHashMap<>();
@@ -56,14 +60,15 @@ public class CollabMessageDispatcher {
 			MsgPersistenceService msgPersistenceService,
 			@Value("${app.collab.ai.model:${spring.ai.openai.chat.options.model}}") String modelId,
 			@Value("${app.collab.ai.turn-timeout:120s}") Duration turnTimeout,
-			@Value("${app.collab.ai.max-pending-per-room:20}") int maxPendingPerRoom) {
+			@Value("${app.collab.ai.max-pending-per-room:20}") int maxPendingPerRoom,
+			@Value("${app.collab.ai.max-context-messages:20}") int maxContextMessages) {
 		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, modelId, turnTimeout,
-				maxPendingPerRoom, Schedulers.parallel());
+				maxPendingPerRoom, maxContextMessages, Schedulers.parallel());
 	}
 
 	CollabMessageDispatcher(RoomSessionRegistry roomSessionRegistry, LlmChatStreamService llmChatStreamService,
 			MsgPersistenceService msgPersistenceService, String modelId, Duration turnTimeout,
-			int maxPendingPerRoom, Scheduler deadlineScheduler) {
+			int maxPendingPerRoom, int maxContextMessages, Scheduler deadlineScheduler) {
 		if (modelId == null || modelId.isBlank()) {
 			throw new IllegalArgumentException("app.collab.ai.model must not be blank");
 		}
@@ -73,12 +78,16 @@ public class CollabMessageDispatcher {
 		if (maxPendingPerRoom < 0) {
 			throw new IllegalArgumentException("app.collab.ai.max-pending-per-room must not be negative");
 		}
+		if (maxContextMessages < 0) {
+			throw new IllegalArgumentException("app.collab.ai.max-context-messages must not be negative");
+		}
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.llmChatStreamService = llmChatStreamService;
 		this.msgPersistenceService = msgPersistenceService;
 		this.modelId = modelId;
 		this.turnTimeout = turnTimeout;
 		this.maxPendingPerRoom = maxPendingPerRoom;
+		this.maxContextMessages = maxContextMessages;
 		this.deadlineScheduler = deadlineScheduler;
 	}
 
@@ -109,19 +118,19 @@ public class CollabMessageDispatcher {
 					return Optional.of(messageDeliveryFailed(command));
 				}
 
-				persistHumanMessageAsync(command);
-
 				AiMentionParser.MentionResult mention = AiMentionParser.parse(command.content());
 				if (!mention.mentioned()) {
+					persistHumanMessageAsync(command);
 					return Optional.empty();
 				}
 				if (mention.prompt().isBlank()) {
+					persistHumanMessageAsync(command);
 					return Optional.of(new ErrorFrame(command.threadId(), "MALFORMED_REQUEST",
 							"@AI 뒤에 요청 내용을 입력해 주세요.", command.traceId()));
 				}
 
 				PendingTurn pendingTurn = new PendingTurn(command.threadId(), roomGeneration, mention.prompt(),
-						command.traceId());
+						command.traceId(), persistHumanMessageAndFetchContextAsync(command));
 				if (state.active != null) {
 					if (state.pending.size() >= maxPendingPerRoom) {
 						return Optional.of(new ErrorFrame(command.threadId(), "RATE_LIMITED",
@@ -165,6 +174,8 @@ public class CollabMessageDispatcher {
 	/**
 	* PENDING msg 생성은 LLM 스트림 시작을 지연시키지 않도록 별도로 fire-and-forget 구독한다
 	* (activeTurn.pendingMsgId에 캐시된 Mono로 보관 — 완료/실패 저장 시점에 그 결과를 기다린다).
+	* 문맥(turn.context())은 반대로 LLM 호출 자체의 입력이라 결과를 기다려야 한다 — 조회가 끝나야
+	* 무엇을 보낼지 정해지므로, 여기서만 스트림 시작이 그만큼 지연된다(이슈 #100).
 	* 델타는 개별 저장하지 않고 buffer에 누적해 턴이 끝났을 때 한 번에 완료 처리한다
 	* (PersistingChatStreamService와 동일한 결).
 	*/
@@ -172,9 +183,10 @@ public class CollabMessageDispatcher {
 		StringBuilder buffer = new StringBuilder();
 		activeTurn.pendingMsgId.subscribe();
 
-		Disposable subscription = withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
-				new ChatStreamRequest(activeTurn.turn.threadId(), modelId,
-						List.of(new ChatMessage("user", activeTurn.turn.prompt()))))))
+		Disposable subscription = activeTurn.turn.context()
+				.flatMapMany(context -> withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
+						new ChatStreamRequest(activeTurn.turn.threadId(), modelId,
+								buildPromptMessages(context, activeTurn.turn.prompt()))))))
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
 					buffer.append(delta);
@@ -194,6 +206,18 @@ public class CollabMessageDispatcher {
 				subscription.dispose();
 			}
 		}
+	}
+
+	/** 저장된 이력의 HUMAN/AGENT를 user/assistant로 매핑하고, 이번 멘션의 발화를 마지막에 붙인다. */
+	private static List<ChatMessage> buildPromptMessages(List<Msg> context, String prompt) {
+		List<ChatMessage> messages = new ArrayList<>(context.size() + 1);
+		for (Msg msg : context) {
+			String role = msg.getAthKind() == AthKind.HUMAN ? "user"
+					: msg.getAthKind() == AthKind.SYSTEM ? "system" : "assistant";
+			messages.add(new ChatMessage(role, msg.getContent()));
+		}
+		messages.add(new ChatMessage("user", prompt));
+		return messages;
 	}
 
 	private Flux<String> withTotalDeadline(Flux<String> source) {
@@ -356,6 +380,27 @@ public class CollabMessageDispatcher {
 	}
 
 	/**
+	* {@code @AI} 멘션 발화는 문맥 조회 결과가 LLM 호출의 입력이 되므로, 결과를 캐시해 startTurn()이
+	* 기다렸다가 쓸 수 있게 한다(persistHumanMessageAsync와 달리 fire-and-forget이 아니다). 조회+저장
+	* 순서는 MsgPersistenceService 쪽에서 한 트랜잭션으로 보장한다 — 이 발화 자신이 문맥에 중복으로
+	* 끼지 않도록.
+	*/
+	private Mono<List<Msg>> persistHumanMessageAndFetchContextAsync(ChatMessageCommand command) {
+		Mono<List<Msg>> context = Mono
+				.fromCallable(() -> msgPersistenceService.persistHumanMessageAndFetchContextBlocking(
+						command.threadId(), command.from(), command.content(), maxContextMessages))
+				.subscribeOn(Schedulers.boundedElastic())
+				.onErrorResume(e -> {
+					log.error("문맥 조회 및 HUMAN 메시지 저장 실패 threadId={} traceId={}", command.threadId(),
+							command.traceId(), e);
+					return Mono.just(List.<Msg>of());
+				})
+				.cache();
+		context.subscribe();
+		return context;
+	}
+
+	/**
 	* PENDING 생성이 실패해 pendingMsgId가 비어있으면(empty) 완료 저장도 조용히 건너뛴다.
 	* terminalPersisted CAS로 같은 턴에 대해 완료/실패 저장이 두 번 이상 시도되는 것을 막는다 —
 	* completed_at·status 전이는 한 번만 유효하고, DB 트리거도 두 번째 UPDATE를 거부한다.
@@ -387,7 +432,8 @@ public class CollabMessageDispatcher {
 	private record RoomKey(UUID threadId, UUID roomGeneration) {
 	}
 
-	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId) {
+	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId,
+			Mono<List<Msg>> context) {
 	}
 
 	private final class ActiveTurn {
