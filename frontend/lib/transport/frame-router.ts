@@ -13,6 +13,7 @@ import type {
   PresenceJoinFrame,
   PresenceLeaveFrame,
   PresenceSnapshotFrame,
+  SystemNoticeFrame,
   WsErrorFrame,
   WsFrame,
 } from './frames';
@@ -23,6 +24,7 @@ export interface FrameHandlers {
   onPresenceJoin?: (frame: PresenceJoinFrame) => void;
   onPresenceLeave?: (frame: PresenceLeaveFrame) => void;
   onPresenceSnapshot?: (frame: PresenceSnapshotFrame) => void;
+  onSystemNotice?: (frame: SystemNoticeFrame) => void;
   onError?: (frame: WsErrorFrame) => void;
 }
 
@@ -42,6 +44,9 @@ export function routeFrame(frame: WsFrame, handlers: FrameHandlers): void {
       return;
     case 'presence.snapshot':
       handlers.onPresenceSnapshot?.(frame);
+      return;
+    case 'system.notice':
+      handlers.onSystemNotice?.(frame);
       return;
     case 'error':
       handlers.onError?.(frame);

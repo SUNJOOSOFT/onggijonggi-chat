@@ -252,3 +252,86 @@ describe('parseFrameFromText', () => {
     expect(parseFrameFromText('{"hello":"world"}')).toBeNull();
   });
 });
+
+describe('parseFrame — system.notice(#29)', () => {
+  it('warning 알림을 파싱한다', () => {
+    expect(
+      parseFrame({
+        type: 'system.notice',
+        sessionId: 's1',
+        severity: 'warning',
+        code: 'RISKY_CONTENT',
+        message: '검토가 필요한 내용이 감지되었습니다.',
+        traceId: 't1',
+      }),
+    ).toEqual({
+      type: 'system.notice',
+      sessionId: 's1',
+      severity: 'warning',
+      code: 'RISKY_CONTENT',
+      message: '검토가 필요한 내용이 감지되었습니다.',
+      traceId: 't1',
+    });
+  });
+
+  it('info 알림을 파싱한다', () => {
+    const frame = parseFrame({
+      type: 'system.notice',
+      sessionId: 's1',
+      severity: 'info',
+      code: 'TOKEN_BUDGET_LOW',
+      message: '한도에 가까워지고 있습니다.',
+      traceId: 't1',
+    });
+    expect(frame?.type === 'system.notice' && frame.severity).toBe('info');
+  });
+
+  // 서버가 나중에 severity를 늘려도 프론트 배포 전까지 알림이 사라지면 안 된다 — 위험 알림은
+  // 덜 정확하게 보이는 것보다 안 보이는 쪽이 나쁘다(#29 확정).
+  it('모르는 severity는 버리지 않고 warning으로 받는다', () => {
+    const frame = parseFrame({
+      type: 'system.notice',
+      sessionId: 's1',
+      severity: 'critical',
+      code: 'RISKY_CONTENT',
+      message: '알림',
+      traceId: 't1',
+    });
+    expect(frame?.type === 'system.notice' && frame.severity).toBe('warning');
+  });
+
+  it('severity 필드가 아예 없어도 warning으로 받는다', () => {
+    const frame = parseFrame({
+      type: 'system.notice',
+      sessionId: 's1',
+      code: 'RISKY_CONTENT',
+      message: '알림',
+      traceId: 't1',
+    });
+    expect(frame?.type === 'system.notice' && frame.severity).toBe('warning');
+  });
+
+  it('방에 속하지 않는 알림은 sessionId가 null일 수 있다', () => {
+    const frame = parseFrame({
+      type: 'system.notice',
+      sessionId: null,
+      severity: 'info',
+      code: 'TOKEN_BUDGET_LOW',
+      message: '알림',
+      traceId: 't1',
+    });
+    expect(frame?.type === 'system.notice' && frame.sessionId).toBeNull();
+  });
+
+  it('code가 없으면 파싱하지 않는다', () => {
+    expect(
+      parseFrame({
+        type: 'system.notice',
+        sessionId: 's1',
+        severity: 'warning',
+        message: '알림',
+        traceId: 't1',
+      }),
+    ).toBeNull();
+  });
+});

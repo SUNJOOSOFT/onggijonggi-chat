@@ -53,6 +53,22 @@ const presenceSnapshotFrameSchema = z.object({
   participants: z.array(z.string()),
 });
 
+/**
+ * 알림 프레임(#29). severity만 union으로 좁히지 않고 무엇이 와도 받아 warning으로 접는다 —
+ * 좁히면 서버가 새 severity를 추가한 순간 프론트를 배포하기 전까지 알림이 통째로 사라지는데,
+ * 위험 알림에서는 그쪽이 더 위험하다(이슈 #29 확정). 필드가 아예 없는 경우도 같게 다룬다.
+ */
+const systemNoticeFrameSchema = z.object({
+  type: z.literal('system.notice'),
+  sessionId: z.string().nullable(),
+  severity: z
+    .unknown()
+    .transform((value) => (value === 'info' ? 'info' : 'warning')),
+  code: z.string(),
+  message: z.string(),
+  traceId: z.string(),
+});
+
 /** 연결 수립 자체가 실패하는 경우처럼 특정 세션에 속하지 않는 오류는 sessionId가 null일 수
  * 있다(ErrorFrame.java 주석과 동일 계약). */
 const wsErrorFrameSchema = z.object({
@@ -63,7 +79,7 @@ const wsErrorFrameSchema = z.object({
   traceId: z.string(),
 });
 
-/** type 필드로 판별하는 유니온. 알려진 6개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
+/** type 필드로 판별하는 유니온. 알려진 7개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
  * 포함) 파싱이 실패한다 — parseFrame이 그 실패를 null로 흡수한다. */
 const wsFrameSchema = z.discriminatedUnion('type', [
   chatAnswerFrameSchema,
@@ -71,6 +87,7 @@ const wsFrameSchema = z.discriminatedUnion('type', [
   presenceJoinFrameSchema,
   presenceLeaveFrameSchema,
   presenceSnapshotFrameSchema,
+  systemNoticeFrameSchema,
   wsErrorFrameSchema,
 ]);
 

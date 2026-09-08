@@ -87,6 +87,48 @@ async function streamAiAnswer(job: MockAiJob): Promise<void> {
   }
 }
 
+/**
+ * 위험 질문 사후 검증 배치(#28)를 흉내 낸다. 실서버는 30초마다 최근 대화를 스캔하지만 목업은
+ * 화면 검증이 목적이라, 트리거 낱말이 섞인 메시지에 대해서만 잠깐 뒤에 알림을 방송한다 —
+ * "말한 직후가 아니라 조금 지나서 도착한다"는 사후 검증의 성질만 남긴 것이다.
+ *
+ * `위험`이 들어가면 배너(warning), `@notice`가 들어가면 토스트(info)를 확인할 수 있다.
+ */
+const NOTICE_DELAY_MS = 1_500;
+
+function scheduleMockNotice(
+  threadId: string,
+  generation: string,
+  content: string,
+): void {
+  let frame: WsFrame | null = null;
+  if (content.includes('위험')) {
+    frame = {
+      type: 'system.notice',
+      sessionId: threadId,
+      severity: 'warning',
+      code: 'RISKY_CONTENT',
+      message: '이 방의 최근 질문 중 검토가 필요한 내용이 감지되었습니다.',
+      traceId: `mock-notice-${++turnSequence}`,
+    };
+  } else if (content.includes('@notice')) {
+    frame = {
+      type: 'system.notice',
+      sessionId: threadId,
+      severity: 'info',
+      code: 'TOKEN_BUDGET_LOW',
+      message: '이번 달 토큰 사용량이 한도에 가까워지고 있습니다.',
+      traceId: `mock-notice-${++turnSequence}`,
+    };
+  }
+  if (frame === null) return;
+  const notice = frame;
+  setTimeout(
+    () => registry.broadcastIfCurrent(threadId, generation, notice),
+    NOTICE_DELAY_MS,
+  );
+}
+
 const aiQueue = new MockAiQueue(streamAiAnswer);
 
 const server = Bun.serve<SocketData>({
@@ -216,6 +258,8 @@ const server = Bun.serve<SocketData>({
         from: userId,
         content: parsed.message.content,
       });
+
+      scheduleMockNotice(threadId, generation, parsed.message.content);
 
       const prompt = aiPrompt(parsed.message.content);
       if (prompt === null) return;

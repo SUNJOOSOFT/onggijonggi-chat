@@ -6,6 +6,7 @@ import type {
   PresenceJoinFrame,
   PresenceLeaveFrame,
   PresenceSnapshotFrame,
+  SystemNoticeFrame,
   WsErrorFrame,
 } from './frames';
 
@@ -111,6 +112,24 @@ describe('routeFrame', () => {
     routeFrame(frame, { onChatAnswer, onChatMessage, onError });
     expect(onChatAnswer).toHaveBeenCalledOnce();
     expect(onChatMessage).not.toHaveBeenCalled();
+    expect(onError).not.toHaveBeenCalled();
+  });
+});
+
+describe('routeFrame — system.notice(#29)', () => {
+  it('system.notice는 onSystemNotice에게만 원본 payload로 전달된다', () => {
+    const frame: SystemNoticeFrame = {
+      type: 'system.notice',
+      sessionId: 's1',
+      severity: 'warning',
+      code: 'RISKY_CONTENT',
+      message: '검토가 필요한 내용이 감지되었습니다.',
+      traceId: 't1',
+    };
+    const onSystemNotice = vi.fn();
+    const onError = vi.fn();
+    routeFrame(frame, { onSystemNotice, onError });
+    expect(onSystemNotice).toHaveBeenCalledExactlyOnceWith(frame);
     expect(onError).not.toHaveBeenCalled();
   });
 });

@@ -18,7 +18,7 @@
 
 import type { Citation } from '@/lib/api/chat';
 import { friendlyMessageForCode } from '@/lib/api/errors';
-import type { WsFrame } from '@/lib/transport/frames';
+import type { SystemNoticeFrame, WsFrame } from '@/lib/transport/frames';
 
 /** 방에 접근할 수 없다는 뜻의 에러 코드(백엔드 ErrorFrame이 02·EDGE에서 쓰는 값). */
 const FORBIDDEN_CODE = 'FORBIDDEN';
@@ -67,6 +67,29 @@ export function isPresenceNotice(
   return 'event' in entry;
 }
 
+/**
+ * 방 위에 얹어두는 시스템 알림(이슈 #29). severity가 warning인 것만 여기 남는다 — info는
+ * 지나가도 되는 안내라 토스트로 띄우고 상태에 남기지 않는다(use-collab-room.ts).
+ *
+ * 같은 code는 최신 1건만 남긴다. 위험 질문 배치가 30초마다 도는 계약(#27)이라 같은 사유가
+ * 되풀이해서 오는데, 그때마다 배너가 쌓이면 방을 덮는다. 자리를 옮기지 않고 그 자리의 내용만
+ * 갈아끼우는 것은 읽던 배너가 튀지 않게 하려는 것이다.
+ */
+export interface SystemNotice {
+  code: string;
+  message: string;
+  traceId: string;
+}
+
+/** 서버가 message를 비워 보냈을 때 대신 쓸 문구. 계약상 오지 않아야 하지만, 빈 배너는 아무것도
+ * 알리지 못하면서 자리만 차지한다 — 알림이 왔다는 사실 자체는 남긴다. */
+const GENERIC_NOTICE_MESSAGE = '확인이 필요한 알림이 도착했습니다.';
+
+/** 알림 문구. 배너(상태)와 토스트(훅) 두 경로가 같은 폴백을 쓰도록 여기 한 곳에 둔다. */
+export function noticeMessage(message: string): string {
+  return message === '' ? GENERIC_NOTICE_MESSAGE : message;
+}
+
 /** 서버가 보낸 오류. code가 FORBIDDEN이면 방을 그릴 수 없고, 그 외에는 방 위에 얹어 알린다. */
 export interface RoomError {
   code: string;
@@ -78,6 +101,8 @@ export interface RoomState {
   /** 입장 순서대로의 참여자. 같은 사람의 join이 두 번 도착해도(재연결·스냅샷 재생) 한 번만 센다. */
   participants: string[];
   messages: CollabEntry[];
+  /** 닫기 전까지 방 위에 남아 있는 알림. 도착 순서대로다. */
+  notices: SystemNotice[];
   error: RoomError | null;
   /** 다음 메시지에 붙일 번호. 순수 함수로 두려고 상태에 담았다 — 시계나 난수에 기대지 않는다. */
   nextMessageId: number;
@@ -86,6 +111,7 @@ export interface RoomState {
 export const initialRoomState: RoomState = {
   participants: [],
   messages: [],
+  notices: [],
   error: null,
   nextMessageId: 1,
 };
@@ -97,6 +123,32 @@ export function isForbidden(error: RoomError | null): boolean {
 
 export function clearRoomError(state: RoomState): RoomState {
   return state.error === null ? state : { ...state, error: null };
+}
+
+/** 알림 하나를 닫는다. 같은 code는 어차피 한 건뿐이라 code로 지운다. */
+export function dismissNotice(state: RoomState, code: string): RoomState {
+  const notices = state.notices.filter((notice) => notice.code !== code);
+  return notices.length === state.notices.length
+    ? state
+    : { ...state, notices };
+}
+
+/** 같은 code가 이미 있으면 그 자리에서 갈아끼우고, 없으면 뒤에 붙인다. */
+function upsertNotice(state: RoomState, frame: SystemNoticeFrame): RoomState {
+  const notice: SystemNotice = {
+    code: frame.code,
+    message: noticeMessage(frame.message),
+    traceId: frame.traceId,
+  };
+  const index = state.notices.findIndex(
+    (current) => current.code === notice.code,
+  );
+  if (index === -1) {
+    return { ...state, notices: [...state.notices, notice] };
+  }
+  const notices = [...state.notices];
+  notices[index] = notice;
+  return { ...state, notices };
 }
 
 /** 메시지 하나를 덧붙인다. */
@@ -200,7 +252,7 @@ function extendAnswer(
 
 /**
  * 프레임 하나를 상태에 접는다. 알 수 없는 프레임은 parse-frame.ts가 이미 걸러내므로
- * 여기 도착하는 것은 계약 안의 여섯 가지뿐이고, switch는 그 여섯을 모두 다룬다.
+ * 여기 도착하는 것은 계약 안의 일곱 가지뿐이고, switch는 그 일곱을 모두 다룬다.
  */
 export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
   switch (frame.type) {
@@ -267,6 +319,11 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         frame.restrictedResultsOmitted,
       );
     }
+
+    // info 알림은 상태로 남기지 않는다 — 지나가도 되는 안내라 훅이 그 자리에서 토스트로
+    // 띄운다(use-collab-room.ts). 여기서 걸러야 배너가 info로 채워지지 않는다.
+    case 'system.notice':
+      return frame.severity === 'info' ? state : upsertNotice(state, frame);
 
     case 'error': {
       const index = streamingAnswerIndex(state);

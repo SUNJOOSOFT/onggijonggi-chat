@@ -6,6 +6,7 @@ import {
   type RoomState,
   applyFrame,
   clearRoomError,
+  dismissNotice,
   initialRoomState,
   isForbidden,
   isPresenceNotice,
@@ -27,6 +28,21 @@ function snapshot(...participants: string[]): WsFrame {
 
 function say(from: string, content: string): WsFrame {
   return { type: 'chat.message', sessionId: THREAD, from, content };
+}
+
+function notice(
+  severity: 'warning' | 'info',
+  code: string,
+  message: string,
+): WsFrame {
+  return {
+    type: 'system.notice',
+    sessionId: THREAD,
+    severity,
+    code,
+    message,
+    traceId: `trace-${code}`,
+  };
 }
 
 function answer(
@@ -369,5 +385,71 @@ describe('applyFrame', () => {
     const snapshot = structuredClone(before);
     applyFrame(before, say('sujin', '안녕하세요'));
     expect(before).toEqual(snapshot);
+  });
+});
+
+describe('system.notice(#29)', () => {
+  it('warning 알림은 방 위에 남는다', () => {
+    const state = fold([
+      notice('warning', 'RISKY_CONTENT', '검토가 필요합니다.'),
+    ]);
+    expect(state.notices).toEqual([
+      {
+        code: 'RISKY_CONTENT',
+        message: '검토가 필요합니다.',
+        traceId: 'trace-RISKY_CONTENT',
+      },
+    ]);
+  });
+
+  // 배치가 30초마다 도는 계약(#27)이라 같은 사유가 되풀이해 온다 — 쌓이면 방을 덮는다.
+  it('같은 code가 또 오면 쌓이지 않고 그 자리에서 갈아끼운다', () => {
+    const state = fold([
+      notice('warning', 'RISKY_CONTENT', '첫 번째'),
+      notice('warning', 'OTHER', '다른 사유'),
+      notice('warning', 'RISKY_CONTENT', '두 번째'),
+    ]);
+    expect(state.notices.map((item) => item.message)).toEqual([
+      '두 번째',
+      '다른 사유',
+    ]);
+  });
+
+  // 토스트로 지나가는 안내라 훅이 띄운다 — 배너 자리를 차지하면 안 된다.
+  it('info 알림은 상태에 남지 않는다', () => {
+    const state = fold([
+      notice('info', 'TOKEN_BUDGET_LOW', '한도가 가깝습니다.'),
+    ]);
+    expect(state.notices).toEqual([]);
+  });
+
+  it('알림을 닫으면 그 code만 사라진다', () => {
+    const state = fold([
+      notice('warning', 'RISKY_CONTENT', '검토가 필요합니다.'),
+      notice('warning', 'OTHER', '다른 사유'),
+    ]);
+    expect(dismissNotice(state, 'RISKY_CONTENT').notices).toEqual([
+      { code: 'OTHER', message: '다른 사유', traceId: 'trace-OTHER' },
+    ]);
+  });
+
+  it('없는 code를 닫으면 상태를 그대로 둔다', () => {
+    const state = fold([
+      notice('warning', 'RISKY_CONTENT', '검토가 필요합니다.'),
+    ]);
+    expect(dismissNotice(state, 'NONE')).toBe(state);
+  });
+
+  it('문구가 비어 오면 빈 배너 대신 대체 문구를 남긴다', () => {
+    const state = fold([notice('warning', 'RISKY_CONTENT', '')]);
+    expect(state.notices[0].message).toBe('확인이 필요한 알림이 도착했습니다.');
+  });
+
+  it('알림은 메시지 흐름을 건드리지 않는다', () => {
+    const state = fold([
+      say('sujin', '안녕하세요'),
+      notice('warning', 'RISKY_CONTENT', '검토가 필요합니다.'),
+    ]);
+    expect(state.messages).toHaveLength(1);
   });
 });

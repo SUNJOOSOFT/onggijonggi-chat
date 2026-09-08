@@ -92,6 +92,34 @@ export interface WsErrorFrame {
   traceId: string;
 }
 
+/**
+ * 시스템 알림(이슈 #29). 위험 질문 사후 검증 배치(#28)가 감지한 것이나 토큰 소진 안내처럼
+ * "실패"가 아니라 "통보"로 도착하는 것들이다.
+ *
+ * error에 얹지 않고 타입을 나눈 이유는 error가 이미 "이 턴이나 연결이 실패했다"는 재시도
+ * 신호로 쓰이고 있어서다 — 실패가 아닌 통보를 섞으면 그 판단 기준이 흐려진다.
+ *
+ * severity가 표시 방식을 정한다(warning=배너, info=토스트). code로 가르지 않는 이유는 서버가
+ * code를 하나 추가할 때마다 프론트가 그 목록을 따라 배포돼야 하기 때문이다. 모르는 severity는
+ * 버리지 않고 warning으로 받는다(parse-frame.ts) — 위험 알림에서는 "안 보이는 것"이 "덜
+ * 정확하게 보이는 것"보다 나쁘다.
+ *
+ * code/message/traceId는 error 프레임과 같은 결이다. 문구가 바뀌어도 분기할 키는 code다.
+ * 다만 error처럼 코드→문구 표(errors.ts)로 바꾸지 않고 서버가 실은 message를 그대로 쓴다 —
+ * 알림 문구는 배치가 감지한 내용에 따라 서버가 정하는 계약이다.
+ *
+ * 감지된 메시지를 지목하는 필드(msgId)는 이번 범위에 없다 — chat.message에 서버 메시지 id가
+ * 실리지 않아 어느 말풍선인지 특정할 수 없고, 그 변경은 별도 이슈로 분리했다(#29 코멘트).
+ */
+export interface SystemNoticeFrame {
+  type: 'system.notice';
+  sessionId: string | null;
+  severity: 'warning' | 'info';
+  code: string;
+  message: string;
+  traceId: string;
+}
+
 /** 서버 WsFrame과 대응하는 전체 유니온. 새 타입이 추가되면 여기 한 곳만 넓히면 되고,
  * frame-router.ts의 exhaustive switch가 미처리 케이스를 컴파일 타임에 잡아준다. */
 export type WsFrame =
@@ -100,6 +128,7 @@ export type WsFrame =
   | PresenceJoinFrame
   | PresenceLeaveFrame
   | PresenceSnapshotFrame
+  | SystemNoticeFrame
   | WsErrorFrame;
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */

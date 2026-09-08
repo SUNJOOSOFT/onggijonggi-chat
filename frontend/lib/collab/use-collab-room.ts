@@ -11,14 +11,17 @@
  *********************************************************/
 
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'sonner';
 import { type WsConnection, openWsConnection } from '@/lib/api/ws-connection';
 import { parseFrameFromText } from '@/lib/transport/parse-frame';
 import {
   type RoomState,
   applyFrame,
   clearRoomError,
+  dismissNotice as dismissNoticeIn,
   initialRoomState,
   isForbidden,
+  noticeMessage,
 } from './room-state';
 
 /** 첫 연결이 이만큼 지나도 열리지 않으면 화면이 "붙지 못하고 있다"고 말한다. #4의 백오프가
@@ -42,6 +45,8 @@ export interface CollabRoom {
   send: (content: string) => boolean;
   /** 방을 막지 않는 최신 오류 알림을 닫는다. */
   dismissError: () => void;
+  /** 방 위에 얹힌 시스템 알림(#29) 하나를 닫는다. */
+  dismissNotice: (code: string) => void;
 }
 
 export function useCollabRoom(threadId: string): CollabRoom {
@@ -57,6 +62,11 @@ export function useCollabRoom(threadId: string): CollabRoom {
         if (frame !== null) {
           if (frame.type === 'error') {
             console.error(`[collab] WS error traceId=${frame.traceId}`);
+          }
+          // info 알림(#29)은 지나가도 되는 안내라 토스트로만 띄운다 — 상태에 남기지 않아
+          // applyFrame이 그대로 흘려보낸다. warning은 반대로 배너로 남는다.
+          if (frame.type === 'system.notice' && frame.severity === 'info') {
+            toast.info(noticeMessage(frame.message));
           }
           setState((current) => applyFrame(current, frame));
         }
@@ -96,5 +106,10 @@ export function useCollabRoom(threadId: string): CollabRoom {
     [],
   );
 
-  return { state, connection, send, dismissError };
+  const dismissNotice = useCallback(
+    (code: string) => setState((current) => dismissNoticeIn(current, code)),
+    [],
+  );
+
+  return { state, connection, send, dismissError, dismissNotice };
 }

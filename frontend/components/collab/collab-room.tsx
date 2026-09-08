@@ -16,6 +16,10 @@
  메시지 시각과 AI 라벨(@FIN 같은 에이전트 구분)은 기획 시안에 있으나 그리지 않는다 — 프레임
  계약(#8)에 그 필드가 없어 서버가 보내주지 않는다. 계약이 넓어지면 여기에 붙일 자리다.
 
+ 시스템 알림(#29)은 오류 배너와 자리는 같지만 성격이 다르다 — 오류는 방금 한 일이 실패했다는
+ 신호라 닫으면 끝이고, 알림은 배치가 사후에 알려주는 것이라 닫기 전까지 남는다. 색을 나눠 둔
+ 것도 그래서다. info 알림은 여기 오지 않는다(토스트, use-collab-room.ts).
+
  방 접근 거부는 두 갈래로 도착한다. 서버가 error 프레임(FORBIDDEN)으로 알려주면 사유가 분명해
  그대로 보여주고, 핸드셰이크에서 거부하면 브라우저가 이유를 넘겨주지 않아(#4) 서버 장애와
  구분되지 않는다 — 뒤쪽은 단정하지 않는 문구로 안내한다. 어느 방식이 될지는 #22에 미결이다.
@@ -31,6 +35,7 @@ import { fetchCollabThreads } from '@/lib/api/collab';
 import type {
   CollabMessage,
   CollabPresenceNotice,
+  SystemNotice,
 } from '@/lib/collab/room-state';
 import { isForbidden, isPresenceNotice } from '@/lib/collab/room-state';
 import {
@@ -101,6 +106,33 @@ function MessageRow({ message }: { message: CollabMessage }) {
   );
 }
 
+/** 방 위에 얹히는 시스템 알림(#29). 닫기 전까지 남는다 — 사후에 오는 알림이라 지나가면
+ * 놓치기 때문이다. traceId는 문의할 때 쓰라고 title로만 남긴다. */
+function NoticeBanner({
+  notice,
+  onDismiss,
+}: {
+  notice: SystemNotice;
+  onDismiss: () => void;
+}) {
+  return (
+    <div
+      role="alert"
+      title={notice.traceId}
+      className="flex items-center gap-3 border-b border-destructive/40 bg-destructive/10 px-4 py-2 text-xs text-destructive"
+    >
+      <span className="flex-1">{notice.message}</span>
+      <button
+        type="button"
+        className="shrink-0 underline underline-offset-2"
+        onClick={onDismiss}
+      >
+        닫기
+      </button>
+    </div>
+  );
+}
+
 /** 방을 그릴 수 없을 때 화면 전체를 대신한다. */
 function RoomBlocked({ title, detail }: { title: string; detail: string }) {
   return (
@@ -136,7 +168,8 @@ function useThreadTitle(threadId: string): string {
 }
 
 export function CollabRoom({ threadId }: { threadId: string }) {
-  const { state, connection, send, dismissError } = useCollabRoom(threadId);
+  const { state, connection, send, dismissError, dismissNotice } =
+    useCollabRoom(threadId);
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
   const title = useThreadTitle(threadId);
 
@@ -188,6 +221,15 @@ export function CollabRoom({ threadId }: { threadId: string }) {
               </button>
             </div>
           )}
+
+          {/* 같은 code는 한 건뿐이라(room-state.ts) key가 겹치지 않는다. */}
+          {state.notices.map((notice) => (
+            <NoticeBanner
+              key={notice.code}
+              notice={notice}
+              onDismiss={() => dismissNotice(notice.code)}
+            />
+          ))}
 
           <div
             ref={containerRef}
