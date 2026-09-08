@@ -163,6 +163,11 @@ services:
       # iss 클레임은 APP_SECURITY_PUBLIC_ISSUER(브라우저가 보는 공개 주소)와 별도로 비교한다.
       SPRING_SECURITY_OAUTH2_RESOURCESERVER_JWT_JWK_SET_URI: http://keycloak:8080/realms/${KEYCLOAK_REALM:-app-realm}/protocol/openid-connect/certs
       APP_SECURITY_PUBLIC_ISSUER: ${PUBLIC_KEYCLOAK_URL:-http://localhost:8081}/realms/${KEYCLOAK_REALM:-app-realm}
+      # 협업 스레드의 다른 참가자 표시 이름을 Keycloak Admin API로 조회하는 데 쓴다(이슈 #128) — 로그인에
+      # 쓰는 것과 같은 ogjg-client 서비스 계정이고, realm-app.json이 view-users 권한을 부여해둔다.
+      APP_KEYCLOAK_INTERNAL_URL: http://keycloak:8080
+      APP_KEYCLOAK_REALM: ${KEYCLOAK_REALM:-app-realm}
+      APP_KEYCLOAK_ADMIN_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
       SPRING_AI_OPENAI_BASE_URL:            http://litellm:4000
       SPRING_AI_OPENAI_API_KEY:             ${LITELLM_MASTER_KEY}
       SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL:  ${LLM_MODEL:-gemini-3.6-flash}

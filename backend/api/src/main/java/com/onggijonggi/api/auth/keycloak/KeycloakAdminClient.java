@@ -1,0 +1,102 @@
+package com.onggijonggi.api.auth.keycloak;
+
+import com.fasterxml.jackson.annotation.JsonProperty;
+import java.time.Duration;
+import java.time.Instant;
+import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicReference;
+import org.springframework.beans.factory.annotation.Value;
+import org.springframework.stereotype.Component;
+import org.springframework.util.LinkedMultiValueMap;
+import org.springframework.util.MultiValueMap;
+import org.springframework.web.reactive.function.BodyInserters;
+import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Mono;
+
+/**
+ * Class Name : KeycloakAdminClient.java
+ * Description : 다른 사용자의 표시 이름을 Keycloak Admin API로 조회한다(이슈 #128). 요청의 JWT는
+ *               호출자 본인의 claim만 담고 있어, 협업 스레드의 다른 참가자 이름은 이 경로로만 얻을 수
+ *               있다. 로그인에 쓰는 것과 같은 클라이언트의 서비스 계정(client_credentials)으로 admin
+ *               토큰을 받고, 만료 30초 전까지는 재사용한다.
+ */
+@Component
+public class KeycloakAdminClient {
+
+	private static final Duration EXPIRY_SAFETY_MARGIN = Duration.ofSeconds(30);
+
+	private final WebClient webClient;
+	private final String realm;
+	private final String clientId;
+	private final String clientSecret;
+	private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
+
+	public KeycloakAdminClient(WebClient.Builder webClientBuilder,
+			@Value("${app.keycloak.internal-url}") String internalUrl,
+			@Value("${app.keycloak.realm}") String realm,
+			@Value("${app.keycloak.admin.client-id}") String clientId,
+			@Value("${app.keycloak.admin.client-secret}") String clientSecret) {
+		this.webClient = webClientBuilder.baseUrl(internalUrl).build();
+		this.realm = realm;
+		this.clientId = clientId;
+		this.clientSecret = clientSecret;
+	}
+
+	/**
+	 * subject(app_user가 들고 있는 keycloak_subj, Keycloak 내부 사용자 id와 같은 값)로 표시 이름을
+	 * 조회한다. 탈퇴 등으로 못 찾으면 빈 Optional — 대체 문구는 호출부가 정한다.
+	 */
+	public Mono<Optional<String>> displayName(UUID subject) {
+		return adminToken().flatMap(token -> lookupUser(subject, token));
+	}
+
+	private Mono<Optional<String>> lookupUser(UUID subject, String token) {
+		return webClient.get()
+				.uri("/admin/realms/{realm}/users/{id}", realm, subject)
+				.headers(headers -> headers.setBearerAuth(token))
+				.retrieve()
+				.bodyToMono(UserRepresentation.class)
+				.map(user -> Optional.ofNullable(user.username()))
+				.onErrorResume(WebClientResponseException.NotFound.class, ignored -> Mono.just(Optional.empty()));
+	}
+
+	private Mono<String> adminToken() {
+		CachedToken cached = cachedToken.get();
+		if (cached != null && cached.isValidAt(Instant.now())) {
+			return Mono.just(cached.value());
+		}
+		return fetchToken().doOnNext(cachedToken::set).map(CachedToken::value);
+	}
+
+	private Mono<CachedToken> fetchToken() {
+		MultiValueMap<String, String> form = new LinkedMultiValueMap<>();
+		form.add("grant_type", "client_credentials");
+		form.add("client_id", clientId);
+		form.add("client_secret", clientSecret);
+		return webClient.post()
+				.uri("/realms/{realm}/protocol/openid-connect/token", realm)
+				.body(BodyInserters.fromFormData(form))
+				.retrieve()
+				.bodyToMono(TokenResponse.class)
+				.map(response -> new CachedToken(response.accessToken(),
+						Instant.now().plusSeconds(response.expiresIn()).minus(EXPIRY_SAFETY_MARGIN)));
+	}
+
+	private record CachedToken(String value, Instant expiresAt) {
+		boolean isValidAt(Instant now) {
+			return now.isBefore(expiresAt);
+		}
+	}
+
+	/** 응답 중 access_token·expires_in만 쓴다(나머지는 무시한다). */
+	private record TokenResponse(@JsonProperty("access_token") String accessToken,
+			@JsonProperty("expires_in") long expiresIn) {
+	}
+
+	/** username을 표시 이름으로 쓴다 — OIDC의 preferred_username과 같은 값이다. */
+	private record UserRepresentation(String username) {
+	}
+
+}

@@ -25,6 +25,14 @@
         }
       ],
       "realmRoles": ["USER"]
+    },
+    {
+      "username": "service-account-${KEYCLOAK_CLIENT_ID}",
+      "enabled": true,
+      "serviceAccountClientId": "${KEYCLOAK_CLIENT_ID}",
+      "clientRoles": {
+        "realm-management": ["view-users"]
+      }
     }
   ],
   "clients": [
@@ -33,6 +41,7 @@
       "enabled": true,
       "publicClient": false,
       "standardFlowEnabled": true,
+      "serviceAccountsEnabled": true,
       "secret": "${KEYCLOAK_CLIENT_SECRET}",
       "redirectUris": ["${PUBLIC_FRONTEND_URL}/api/auth/callback/keycloak"],
       "webOrigins": ["${PUBLIC_FRONTEND_URL}"],
