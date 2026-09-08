@@ -2,16 +2,16 @@
 
 /********************************************************
  파일명 : collab-room.tsx (components/collab)
- 설 명 : 협업방 화면(이슈 #19) — 메시지 목록·입력창, 그리고 방에 들어가지 못했을 때의 처리.
+ 설 명 : 협업방 화면(이슈 #19) — 참여자·메시지 목록·입력창, 그리고 방에 들어가지 못했을 때의 처리.
 
  메시지 목록을 1:1 채팅의 messages.tsx로 그리지 않은 이유는 그쪽이 AI SDK Message(role만 있고
  보낸 사람이 없다)를 전제하기 때문이다. 협업방은 여러 사람의 메시지를 이름과 함께 보여줘야 한다.
  스크롤 붙임(use-scroll-to-bottom)과 마크다운 렌더는 그대로 재사용한다.
 
- 참여자 목록 사이드바는 없다. presence.join으로 room-state.ts가 접속자 UUID는 이미 쌓고
- 있지만, 그 값을 사람이 읽을 이름으로 바꿀 방법이 아직 없다(#128) — app_user에 표시 이름이
- 없고, 있다 해도 이 프레임의 식별자 체계가 REST 쪽(subject)과 다르다(#130). 그 둘이 풀리기
- 전까지 UUID 나열만 보여주는 패널은 만들지 않는다. 상태는 그대로 쌓아 재사용에 대비한다.
+ 참여자 목록 사이드바는 접속자를 userId 앞자리로만 보여준다(#26). 표시 이름을 얻는 길은
+ 열렸지만(#128 — Keycloak에서 subject로 조회한다) 프레임이 싣는 식별자는 여전히 서버의
+ app_user.id라, REST가 쓰는 subject와 맞지 않아 그 조회에 넣을 키가 없다. 식별자를 맞추는
+ 것은 #130이고, 그때 shortUserId 한 곳만 이름 조회로 바꾸면 된다.
 
  메시지 시각과 AI 라벨(@FIN 같은 에이전트 구분)은 기획 시안에 있으나 그리지 않는다 — 프레임
  계약(#8)에 그 필드가 없어 서버가 보내주지 않는다. 계약이 넓어지면 여기에 붙일 자리다.
@@ -48,7 +48,7 @@ const CONNECTION_LABEL: Record<RoomConnection, string> = {
 
 /**
  * 사람을 가리키는 표시. 지금 손에 있는 것이 userId(UUID)뿐이라 앞부분만 잘라 쓴다 —
- * 사람이 읽을 이름을 어디서 얻을지는 #128이 정하고, 그때 이 함수 하나만 바꾸면 된다.
+ * 프레임이 subject를 싣게 되면(#130) 이 함수 하나만 이름 조회로 바꾸면 된다.
  */
 function shortUserId(userId: string): string {
   return userId.slice(0, 8);
@@ -170,7 +170,6 @@ export function CollabRoom({ threadId }: { threadId: string }) {
         </span>
       </header>
 
-      {/* 참여자 사이드바 없음 — 파일 상단 설명 참고(#128·#130 전까지 UUID만 있다). */}
       <div className="flex min-h-0 flex-1">
         <main className="flex min-h-0 flex-1 flex-col">
           {/* 접근 거부가 아닌 오류는 방을 닫을 이유가 아니라 위에 얹어 알린다. */}
@@ -217,7 +216,7 @@ export function CollabRoom({ threadId }: { threadId: string }) {
         {/* 접속자 목록(#26) — "지금 방에 붙어 있는 사람"이다. 방에 들어올 자격이 있는
             참여자 명단(#23)과는 다른 목록이라 같은 자리에 겹쳐 그리지 않는다.
             보여줄 수 있는 것이 userId(UUID)뿐이라 잘라서 그리고 전체는 title로 남긴다 —
-            사람이 읽을 이름을 어디서 얻을지는 #111·#128이 정한다. */}
+            사람이 읽을 이름으로 바꾸는 것은 #130이다(파일 상단 설명 참고). */}
         <aside className="hidden w-56 shrink-0 flex-col gap-2 border-l p-4 sm:flex">
           <h2 className="text-xs font-medium text-muted-foreground">
             참여자 {state.participants.length}
