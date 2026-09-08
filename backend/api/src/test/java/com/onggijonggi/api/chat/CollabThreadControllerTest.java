@@ -86,6 +86,56 @@ class CollabThreadControllerTest {
 		assertThat(body).contains("\"participants\":[\"threads-participants-owner\",\"threads-participants-member\"]");
 	}
 
+	/** ARCHIVED는 삭제가 아니라 목록에서 빠지는 것뿐이라, 별도 보관함 엔드포인트로 계속 찾을 수 있다(#131). */
+	@Test
+	void excludesArchivedThreadsFromTheDefaultListButKeepsThemInTheArchive() {
+		UUID thrId = rooms.openRoom("archive-owner", "archive-member");
+		rooms.archiveRoom(thrId);
+
+		assertThat(listThreadsAs("archive-member")).doesNotContain(thrId.toString());
+
+		String archivedBody = restTestClient.get()
+				.uri("/api/collab/threads/archived")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt("archive-member", List.of("USER")))
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(String.class)
+				.returnResult()
+				.getResponseBody();
+		assertThat(archivedBody).contains(thrId.toString());
+	}
+
+	@Test
+	void ownerCanLockAndThenArchiveAThread() {
+		UUID thrId = rooms.openRoom("lifecycle-owner", "lifecycle-member");
+
+		restTestClient.put()
+				.uri("/api/collab/threads/{threadId}/lock", thrId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt("lifecycle-owner", List.of("USER")))
+				.exchange()
+				.expectStatus().isNoContent();
+
+		restTestClient.put()
+				.uri("/api/collab/threads/{threadId}/archive", thrId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt("lifecycle-owner", List.of("USER")))
+				.exchange()
+				.expectStatus().isNoContent();
+
+		assertThat(listThreadsAs("lifecycle-member")).doesNotContain(thrId.toString());
+	}
+
+	@Test
+	void nonOwnerCannotLockAThread() {
+		UUID thrId = rooms.openRoom("lifecycle-owner-2", "lifecycle-member-2");
+
+		restTestClient.put()
+				.uri("/api/collab/threads/{threadId}/lock", thrId)
+				.header(HttpHeaders.AUTHORIZATION,
+						"Bearer " + TestJwtSupport.signedJwt("lifecycle-member-2", List.of("USER")))
+				.exchange()
+				.expectStatus().isForbidden();
+	}
+
 	@Test
 	void returnsSavedMessagesInSeqOrderForAParticipant() {
 		UUID thrId = rooms.openRoom("messages-owner", "messages-member");

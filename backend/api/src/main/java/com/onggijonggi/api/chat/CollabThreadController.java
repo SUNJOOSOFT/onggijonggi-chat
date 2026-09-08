@@ -7,6 +7,7 @@ import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.domain.ThrStatus;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
@@ -16,6 +17,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.function.Predicate;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -69,11 +71,29 @@ public class CollabThreadController {
 		this.keycloakAdminClient = keycloakAdminClient;
 	}
 
-	/** 어떤 방을 내려줄지 고르는 것은 서버 몫이라, 호출자가 참가자인 방만 나간다. */
+	/**
+	* 어떤 방을 내려줄지 고르는 것은 서버 몫이라, 호출자가 참가자인 방만 나간다. ARCHIVED는 빠진다 —
+	* 그 방을 다시 보려면 아래 보관함 엔드포인트를 쓴다(#131).
+	*/
 	@GetMapping("/api/collab/threads")
 	public Flux<CollabThreadSummary> listThreads() {
 		return actorUserId()
-				.flatMap(userId -> Mono.fromCallable(() -> joinedThreads(userId))
+				.flatMap(userId -> Mono
+						.fromCallable(() -> joinedThreads(userId, thr -> thr.getStatus() != ThrStatus.ARCHIVED))
+						.subscribeOn(Schedulers.boundedElastic())
+						.flatMap(threads -> summariesFor(threads, userId)))
+				.flatMapMany(Flux::fromIterable);
+	}
+
+	/**
+	* ARCHIVED로 넘어간 방은 삭제된 게 아니라 목록에서 빠질 뿐이라, 메시지를 계속 읽을 수 있어야
+	* 한다(#131) — 그 방을 다시 찾는 별도 조회 경로.
+	*/
+	@GetMapping("/api/collab/threads/archived")
+	public Flux<CollabThreadSummary> listArchivedThreads() {
+		return actorUserId()
+				.flatMap(userId -> Mono
+						.fromCallable(() -> joinedThreads(userId, thr -> thr.getStatus() == ThrStatus.ARCHIVED))
 						.subscribeOn(Schedulers.boundedElastic())
 						.flatMap(threads -> summariesFor(threads, userId)))
 				.flatMapMany(Flux::fromIterable);
@@ -137,11 +157,9 @@ public class CollabThreadController {
 	/**
 	* 참가 행을 먼저 읽고 그 id로 Thread를 가져온다. thr_mbr에 연관관계를 매핑하지 않아(ChatSess와
 	* 같은 이유) 조인 대신 두 번 조회하지만, 두 번째는 findAllById 한 번이라 건수만큼 늘지 않는다.
-	*
-	* status로 Thread를 거르지 않는다 — ARCHIVED로 만드는 코드 경로가 아직 없어, 지금 거르면 아무
-	* 행도 만들지 않는 조건을 미리 박아두는 셈이 된다.
+	* statusFilter로 일반 목록(ACTIVE·LOCKED)과 보관함(ARCHIVED)을 같은 조회 로직으로 가른다(#131).
 	*/
-	private List<Thr> joinedThreads(UUID userId) {
+	private List<Thr> joinedThreads(UUID userId, Predicate<Thr> statusFilter) {
 		List<UUID> joinedIds = thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
 				.stream()
 				.map(ThrMbr::getThrId)
@@ -151,6 +169,7 @@ public class CollabThreadController {
 		}
 		return thrRepository.findAllById(joinedIds).stream()
 				.filter(thr -> thr.getKind() == ThrKind.COLLAB)
+				.filter(statusFilter)
 				.sorted(Comparator.comparing(Thr::getCreatedAt).reversed())
 				.toList();
 	}
