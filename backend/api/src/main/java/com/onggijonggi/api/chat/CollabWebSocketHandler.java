@@ -175,7 +175,7 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		ChatMessageCommand command = new ChatMessageCommand(threadId, userId, inbound.content(), traceId);
 		return threadMembershipService.isActiveParticipant(threadId, userId)
 				.flatMap(participant -> participant
-						? dispatch(command, roomGeneration, traceId)
+						? rejectIfLocked(command, roomGeneration, traceId)
 						: Mono.just(new ErrorFrame(threadId, "FORBIDDEN",
 								"이 방에 메시지를 보낼 권한이 없습니다.", traceId)))
 				.onErrorResume(error -> {
@@ -188,10 +188,20 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 
 	/**
 	* 입장 인가는 연결할 때 한 번뿐이라, 그 뒤에 참가자에서 빠진 사람이 같은 연결로 계속 말할 수
-	* 있다. 그래서 메시지마다 다시 확인한다. 연결은 닫지 않는다 — 형식이 틀린 프레임을 에러
-	* 프레임만 돌려주고 넘어가는 것과 같은 처리다. 이미 열린 연결로 방송이 계속 가는 것(받기)은
-	* 이슈 #135가 다룬다.
-	*
+	* 있다. 그래서 메시지마다 다시 확인한다. LOCKED·ARCHIVED로 바뀐 방도 같은 이유로 여기서
+	* 재확인한다(#131) — 잠긴 뒤에도 기존 대화는 계속 읽히지만 새 메시지는 막는다. 연결은 닫지
+	* 않는다 — 형식이 틀린 프레임을 에러 프레임만 돌려주고 넘어가는 것과 같은 처리다. 이미 열린
+	* 연결로 방송이 계속 가는 것(받기)은 이슈 #135가 다룬다.
+	*/
+	private Mono<WsFrame> rejectIfLocked(ChatMessageCommand command, UUID roomGeneration, String traceId) {
+		return threadMembershipService.isOpenForWriting(command.threadId())
+				.flatMap(open -> open
+						? dispatch(command, roomGeneration, traceId)
+						: Mono.just(new ErrorFrame(command.threadId(), "THREAD_LOCKED",
+								"잠기거나 보관된 방에는 메시지를 보낼 수 없습니다.", traceId)));
+	}
+
+	/**
 	* 재확인 자체가 실패할 수도 있다(DB 장애 등) — 연결 시점 검사(admitOrReject)가 같은 조회를
 	* onErrorMap/onErrorResume으로 감싸는 것과 같은 이유로, 여기서도 에러를 그대로 흘려보내지
 	* 않는다. 흘려보내면 이 Mono가 합쳐지는 outbound Flux 전체가 에러로 끝나 연결이 비정상

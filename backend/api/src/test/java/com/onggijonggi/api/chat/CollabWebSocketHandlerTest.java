@@ -78,6 +78,22 @@ class CollabWebSocketHandlerTest {
 		assertThat(received).doesNotContain("connected:", "presence.join");
 	}
 
+	/** LOCKED로 바뀐 방은 새 메시지를 받지 않는다(#131) — 연결은 유지된 채 프레임만 거부된다. */
+	@Test
+	void rejectsMessagesToALockedThread() throws Exception {
+		UUID threadId = rooms.openRoom("locked-ws-user");
+		rooms.lockRoom(threadId);
+
+		String received = exchange("locked-ws-user", threadId,
+				List.of("""
+						{"type":"chat.message","content":"should not send"}
+						"""), 1).get(0);
+
+		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received, WsFrame.class);
+		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.code()).isEqualTo("THREAD_LOCKED");
+	}
+
 	@Test
 	void keepsConnectionAfterMalformedFrameAndUsesDistinctTraceIds() throws Exception {
 		UUID threadId = rooms.openRoom("malformed-user");

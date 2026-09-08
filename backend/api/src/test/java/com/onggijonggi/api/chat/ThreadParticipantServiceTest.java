@@ -9,7 +9,9 @@ import static org.mockito.Mockito.when;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.domain.ThrStatus;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
+import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Optional;
@@ -36,13 +38,16 @@ class ThreadParticipantServiceTest {
 	private ThrMbrRepository thrMbrRepository;
 
 	@Mock
+	private ThrRepository thrRepository;
+
+	@Mock
 	private AppUserRepository appUserRepository;
 
 	private ThreadParticipantService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new ThreadParticipantService(thrMbrRepository, appUserRepository);
+		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository);
 	}
 
 	/**
@@ -92,6 +97,24 @@ class ThreadParticipantServiceTest {
 						.isInstanceOf(ResponseStatusException.class)
 						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
 						.isEqualTo(HttpStatus.FORBIDDEN));
+		verify(appUserRepository, never()).findByKeycloakSubj(any());
+	}
+
+	/** LOCKED·ARCHIVED로 바뀐 방은 새 참가자를 들이지 않는다(#131) — 대상 조회보다 먼저 막는다. */
+	@Test
+	void inviteFailsWithConflictWhenTheThreadIsNotWritable() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(false);
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "invitee-sub"))
+				.verifyErrorSatisfies(error -> assertThat(error)
+						.isInstanceOf(ResponseStatusException.class)
+						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
+						.isEqualTo(HttpStatus.CONFLICT));
 		verify(appUserRepository, never()).findByKeycloakSubj(any());
 	}
 

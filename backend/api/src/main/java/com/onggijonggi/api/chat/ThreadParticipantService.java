@@ -3,7 +3,9 @@ package com.onggijonggi.api.chat;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.domain.ThrStatus;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
+import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Comparator;
@@ -38,10 +40,13 @@ public class ThreadParticipantService {
 	private static final String OWNER_REVOKED = "OWNER_REVOKED";
 
 	private final ThrMbrRepository thrMbrRepository;
+	private final ThrRepository thrRepository;
 	private final AppUserRepository appUserRepository;
 
-	public ThreadParticipantService(ThrMbrRepository thrMbrRepository, AppUserRepository appUserRepository) {
+	public ThreadParticipantService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository,
+			AppUserRepository appUserRepository) {
 		this.thrMbrRepository = thrMbrRepository;
+		this.thrRepository = thrRepository;
 		this.appUserRepository = appUserRepository;
 	}
 
@@ -62,6 +67,7 @@ public class ThreadParticipantService {
 	public Mono<Void> invite(UUID threadId, UUID actorUserId, String inviteeSubject) {
 		return Mono.<Void>fromCallable(() -> {
 					requireOwnerRole(requireActiveParticipant(threadId, actorUserId));
+					requireWritableThread(threadId);
 					UUID inviteeUserId = resolveUserId(inviteeSubject);
 					if (thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId,
 							ThrMbrStatus.ACTIVE)) {
@@ -169,6 +175,13 @@ public class ThreadParticipantService {
 	private void requireOwnerRole(ThrMbr actor) {
 		if (actor.getRole() != ThrMbrRole.OWNER) {
 			throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+		}
+	}
+
+	/** LOCKED·ARCHIVED로 바뀐 방은 새 참가자를 들이지 않는다(#131). */
+	private void requireWritableThread(UUID threadId) {
+		if (!thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)) {
+			throw stateConflict();
 		}
 	}
 

@@ -1,6 +1,7 @@
 package com.onggijonggi.common.chat.persistence;
 
 import com.onggijonggi.common.chat.domain.Thr;
+import com.onggijonggi.common.chat.domain.ThrStatus;
 import java.util.UUID;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Query;
@@ -11,6 +12,9 @@ import org.springframework.data.repository.query.Param;
  * Description : thr JPA 레포지토리.
  */
 public interface ThrRepository extends JpaRepository<Thr, UUID> {
+
+	/** LOCKED·ARCHIVED로 바뀐 방에서 새 메시지·초대 같은 쓰기 작업을 막는 판정에 쓴다(#131). */
+	boolean existsByIdAndStatus(UUID id, ThrStatus status);
 
 	/**
 	* Message 순서 채번(V8__thread.sql). next_seq를 원자적으로 올리고, 이번 메시지가 쓸 값(증가

@@ -74,6 +74,13 @@ public class CollabRoomFixture {
 			thrRepository.save(thr);
 		}
 
+		/** #131 쓰기 차단 테스트가 LOCKED 방을 미리 만들어 두는 데 쓴다. */
+		public void lockRoom(UUID threadId) {
+			Thr thr = thrRepository.findById(threadId).orElseThrow();
+			thr.lock();
+			thrRepository.save(thr);
+		}
+
 		public ThrMbrRole roleOf(UUID threadId, String subject) {
 			return activeMember(threadId, subject).getRole();
 		}
