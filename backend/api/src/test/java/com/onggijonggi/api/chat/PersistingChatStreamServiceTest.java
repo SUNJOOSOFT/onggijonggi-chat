@@ -56,7 +56,7 @@ class PersistingChatStreamServiceTest {
 		UUID userId = UUID.randomUUID();
 		ChatStreamRequest request = new ChatStreamRequest(sessionId, "gemma", List.of(new ChatMessage("user", "안녕")));
 
-		when(currentActorProvider.currentActor()).thenReturn(Mono.just(new CurrentActor(userId, "sub-1")));
+		when(currentActorProvider.currentActor()).thenReturn(Mono.just(new CurrentActor(userId, "sub-1", "sub-1")));
 		when(chatSessRepository.findById(sessionId)).thenReturn(Optional.empty());
 		when(delegate.streamChat(request)).thenReturn(Flux.just("hi", " there"));
 
@@ -76,7 +76,7 @@ class PersistingChatStreamServiceTest {
 		UUID userId = UUID.randomUUID();
 		ChatStreamRequest request = new ChatStreamRequest(sessionId, "gemma", List.of(new ChatMessage("user", "또 물어봄")));
 
-		when(currentActorProvider.currentActor()).thenReturn(Mono.just(new CurrentActor(userId, "sub-1")));
+		when(currentActorProvider.currentActor()).thenReturn(Mono.just(new CurrentActor(userId, "sub-1", "sub-1")));
 		when(chatSessRepository.findById(sessionId)).thenReturn(Optional.of(new ChatSess(sessionId, userId, "또 물어봄")));
 		when(delegate.streamChat(request)).thenReturn(Flux.just("ok"));
 
@@ -94,7 +94,7 @@ class PersistingChatStreamServiceTest {
 		UUID otherUserId = UUID.randomUUID();
 		ChatStreamRequest request = new ChatStreamRequest(sessionId, "gemma", List.of(new ChatMessage("user", "남의 세션에 끼어들기")));
 
-		when(currentActorProvider.currentActor()).thenReturn(Mono.just(new CurrentActor(userId, "sub-1")));
+		when(currentActorProvider.currentActor()).thenReturn(Mono.just(new CurrentActor(userId, "sub-1", "sub-1")));
 		when(chatSessRepository.findById(sessionId)).thenReturn(Optional.of(new ChatSess(sessionId, otherUserId, "원래 제목")));
 		when(delegate.streamChat(request)).thenReturn(Flux.just("ok"));
 
