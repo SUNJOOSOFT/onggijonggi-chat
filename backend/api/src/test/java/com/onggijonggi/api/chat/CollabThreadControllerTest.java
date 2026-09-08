@@ -8,6 +8,7 @@ import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
+import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -41,6 +42,9 @@ class CollabThreadControllerTest {
 
 	@Autowired
 	private ThrMbrRepository thrMbrRepository;
+
+	@Autowired
+	private ThrRepository thrRepository;
 
 	@Autowired
 	private UserIdentityService userIdentityService;
@@ -132,6 +136,37 @@ class CollabThreadControllerTest {
 				.uri("/api/collab/threads/{threadId}/lock", thrId)
 				.header(HttpHeaders.AUTHORIZATION,
 						"Bearer " + TestJwtSupport.signedJwt("lifecycle-member-2", List.of("USER")))
+				.exchange()
+				.expectStatus().isForbidden();
+	}
+
+	/**
+	* thr_mbr·msg의 FK on delete cascade는 실제 Postgres 스키마(Flyway)에만 있다 — 이 테스트는
+	* Flyway를 끄고 Hibernate가 엔티티 매핑만으로 즉석 스키마를 만들어(application-test.properties),
+	* Thr·ThrMbr·Msg 사이에 연관관계 매핑이 없는 이 코드베이스 관례상 FK 자체가 안 생긴다. 그래서
+	* cascade 여부가 아니라 삭제 자체의 동작(OWNER 확인·204·thr 행 제거)만 여기서 확인한다.
+	*/
+	@Test
+	void ownerCanDeleteAThread() {
+		UUID thrId = rooms.openRoom("delete-owner", "delete-member");
+
+		restTestClient.delete()
+				.uri("/api/collab/threads/{threadId}", thrId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt("delete-owner", List.of("USER")))
+				.exchange()
+				.expectStatus().isNoContent();
+
+		assertThat(thrRepository.findById(thrId)).isEmpty();
+	}
+
+	@Test
+	void nonOwnerCannotDeleteAThread() {
+		UUID thrId = rooms.openRoom("delete-owner-2", "delete-member-2");
+
+		restTestClient.delete()
+				.uri("/api/collab/threads/{threadId}", thrId)
+				.header(HttpHeaders.AUTHORIZATION,
+						"Bearer " + TestJwtSupport.signedJwt("delete-member-2", List.of("USER")))
 				.exchange()
 				.expectStatus().isForbidden();
 	}

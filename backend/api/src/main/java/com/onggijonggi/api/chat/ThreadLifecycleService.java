@@ -15,7 +15,7 @@ import reactor.core.scheduler.Schedulers;
 
 /**
  * Class Name : ThreadLifecycleService.java
- * Description : 협업 Thread의 잠금·보관(#131). OWNER만 할 수 있고, ThreadParticipantService와
+ * Description : 협업 Thread의 잠금·보관·삭제(#131). OWNER만 할 수 있고, ThreadParticipantService와
  *               같은 상태 코드 관례를 따른다 — 참가자가 아니면 404, 참가자인데 OWNER가 아니면 403,
  *               지금 상태로는 할 수 없는 전이(이미 ARCHIVED인 방을 다시 잠그는 등)는 409.
  *
@@ -59,6 +59,19 @@ public class ThreadLifecycleService {
 					}
 					thr.archive();
 					thrRepository.save(thr);
+					return null;
+				})
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	* 상태와 무관하게 지울 수 있다. thr_mbr·msg는 FK on delete cascade(V10__thread_participant.sql,
+	* V11__message.sql)로 함께 지워진다 — 1:1 채팅의 chat_sess 삭제와 같은 정책이다.
+	*/
+	public Mono<Void> delete(UUID threadId, UUID actorUserId) {
+		return Mono.<Void>fromCallable(() -> {
+					Thr thr = requireOwnerActor(threadId, actorUserId);
+					thrRepository.delete(thr);
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());

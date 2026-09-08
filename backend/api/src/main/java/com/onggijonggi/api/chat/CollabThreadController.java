@@ -150,6 +150,13 @@ public class CollabThreadController {
 		return actorUserId().flatMap(userId -> threadLifecycleService.archive(threadId, userId));
 	}
 
+	/** OWNER만 지울 수 있다. 참여·메시지는 cascade로 함께 지워진다(#131). */
+	@DeleteMapping("/api/collab/threads/{threadId}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public Mono<Void> deleteThread(@PathVariable UUID threadId) {
+		return actorUserId().flatMap(userId -> threadLifecycleService.delete(threadId, userId));
+	}
+
 	private Mono<UUID> actorUserId() {
 		return currentActorProvider.currentActor().map(CurrentActor::userId);
 	}

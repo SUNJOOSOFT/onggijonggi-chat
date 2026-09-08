@@ -170,4 +170,36 @@ class ThreadLifecycleServiceTest {
 		verify(thrRepository, never()).save(any());
 	}
 
+	@Test
+	void deleteRemovesTheThreadRegardlessOfItsStatus() {
+		UUID actorUserId = UUID.randomUUID();
+		Thr thr = Thr.collab(actorUserId, "room");
+		thr.archive();
+		UUID threadId = thr.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.findById(threadId)).thenReturn(Optional.of(thr));
+
+		StepVerifier.create(service.delete(threadId, actorUserId)).verifyComplete();
+
+		verify(thrRepository).delete(thr);
+	}
+
+	@Test
+	void deleteFailsWithForbiddenWhenActorIsNotOwner() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.MEMBER, actorUserId)));
+
+		StepVerifier.create(service.delete(threadId, actorUserId))
+				.verifyErrorSatisfies(error -> assertThat(error)
+						.isInstanceOf(ResponseStatusException.class)
+						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
+						.isEqualTo(HttpStatus.FORBIDDEN));
+		verify(thrRepository, never()).delete(any());
+	}
+
 }
