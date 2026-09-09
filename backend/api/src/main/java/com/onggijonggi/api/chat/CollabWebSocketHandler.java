@@ -1,11 +1,13 @@
 package com.onggijonggi.api.chat;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.onggijonggi.api.auth.FixedWindowRateLimiter;
 import com.onggijonggi.api.auth.JwtDisplayNames;
 import com.onggijonggi.api.auth.WsSubProtocolBearerTokenConverter;
 import com.onggijonggi.api.auth.UserIdentityService;
 import java.security.Principal;
 import java.time.Duration;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.List;
 import java.util.Set;
@@ -13,6 +15,7 @@ import java.util.UUID;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.WebSocketHandler;
@@ -54,14 +57,27 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 
 	private final ThreadMembershipService threadMembershipService;
 
+	/**
+	 * 이 핸들러만 쓰는 버킷이다(이슈 #74). 핸드셰이크 한도(WsSecurityConfig)와 나누는 이유는
+	 * 성격이 달라서다 — 핸드셰이크는 끊길 때마다 한 번이고 메시지는 대화 중 연속 발화다.
+	 * 세는 단위는 연결이 아니라 sub다. 연결 단위로 세면 소켓을 끊었다 붙이는 것만으로 카운터가
+	 * 초기화되는데, 클라이언트가 백오프로 자동 재연결하므로(ws-connection.ts) 도배를 막지 못하면서
+	 * 핸드셰이크 부하만 늘린다.
+	 */
+	private final FixedWindowRateLimiter messageRateLimiter;
+
 	public CollabWebSocketHandler(ObjectMapper objectMapper, RoomSessionRegistry roomSessionRegistry,
 			CollabMessageDispatcher collabMessageDispatcher, UserIdentityService userIdentityService,
-			ThreadMembershipService threadMembershipService) {
+			ThreadMembershipService threadMembershipService, Clock rateLimitClock,
+			@Value("${app.ratelimit.window-seconds:60}") long rateLimitWindowSeconds,
+			@Value("${app.ratelimit.ws-message-per-minute:60}") int wsMessagePerMinute) {
 		this.objectMapper = objectMapper;
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.collabMessageDispatcher = collabMessageDispatcher;
 		this.userIdentityService = userIdentityService;
 		this.threadMembershipService = threadMembershipService;
+		this.messageRateLimiter =
+				new FixedWindowRateLimiter(rateLimitClock, rateLimitWindowSeconds, wsMessagePerMinute);
 	}
 
 	@Override
@@ -176,6 +192,15 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		}
 		if (!"chat.message".equals(inbound.type()) || inbound.content() == null || inbound.content().isBlank()) {
 			return Mono.just(malformed(threadId, traceId));
+		}
+
+		// 한도를 넘으면 이 프레임만 버리고 연결은 유지한다(이슈 #74). 끊으면 클라이언트가 백오프로
+		// 다시 붙어 핸드셰이크 쪽 부하로 옮겨갈 뿐이다. 멤버십 조회(DB)보다 앞에 두어 값싼 검사가
+		// 먼저 걸리게 한다.
+		if (!messageRateLimiter.tryAcquire(actor.subject())) {
+			log.debug("WebSocket message rate limited threadId={} traceId={}", threadId, traceId);
+			return Mono.just(new ErrorFrame(threadId, "RATE_LIMITED",
+					"메시지를 너무 빠르게 보내고 있습니다. 잠시 후 다시 시도해 주세요.", traceId));
 		}
 
 		ChatMessageCommand command = new ChatMessageCommand(threadId, userId, actor.subject(),

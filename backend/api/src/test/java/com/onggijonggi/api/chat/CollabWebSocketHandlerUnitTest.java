@@ -2,8 +2,11 @@ package com.onggijonggi.api.chat;
 
 import java.net.URI;
 import java.security.Principal;
+import java.time.Clock;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
@@ -41,6 +44,11 @@ import static org.mockito.Mockito.when;
  *               느린 소비자의 outbound 버퍼가 넘칠 때 1011로 닫는지를 실제 소켓 없이 확인한다.
  */
 class CollabWebSocketHandlerUnitTest {
+
+	private static final long WINDOW_SECONDS = 60;
+
+	/** 다른 테스트가 한도에 걸려 엉뚱하게 실패하지 않도록 넉넉히 둔다. */
+	private static final int MESSAGES_PER_WINDOW = 1000;
 
 	@Test
 	void subscribesToReceiveAndSendExactlyOnce() {
@@ -211,15 +219,63 @@ class CollabWebSocketHandlerUnitTest {
 		return membership;
 	}
 
+	@Test
+	void answersRateLimitedAndKeepsTheConnectionWhenMessagesComeTooFast() {
+		UUID threadId = UUID.randomUUID();
+		UUID userId = UUID.randomUUID();
+		RoomSessionRegistry registry = new RoomSessionRegistry();
+		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
+		WebSocketSession session = mock(WebSocketSession.class);
+		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
+		Principal principal = () -> "chatty-user";
+		List<String> sent = new CopyOnWriteArrayList<>();
+
+		when(handshakeInfo.getUri()).thenReturn(URI.create("ws://localhost/api/ws/" + threadId));
+		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just(principal));
+		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
+		when(provisioning.resolveOrProvision("chatty-user")).thenReturn(Mono.just(userId));
+		when(session.textMessage(anyString())).thenAnswer(invocation -> new WebSocketMessage(
+				WebSocketMessage.Type.TEXT, DefaultDataBufferFactory.sharedInstance.wrap(
+						invocation.<String>getArgument(0).getBytes(java.nio.charset.StandardCharsets.UTF_8))));
+		// 한도가 1이라 두 번째 발화부터 걸린다.
+		when(session.receive()).thenReturn(Flux.just(inboundText("첫 발화"), inboundText("둘째 발화")));
+		when(session.send(any())).thenAnswer(invocation -> Flux.from(
+				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
+				.doOnNext(message -> sent.add(message.getPayloadAsText())).then());
+		when(session.close(any(CloseStatus.class))).thenReturn(Mono.empty());
+
+		handler(registry, provisioning, 1).handle(session).block();
+
+		// 초과한 발화에는 RATE_LIMITED가 돌아간다.
+		assertThat(sent).anyMatch(text -> text.contains("\"code\":\"RATE_LIMITED\""));
+		// 연결은 정상 종료다 — 한도를 넘겼다고 끊지 않는다(이슈 #74). 끊으면 클라이언트가
+		// 백오프로 다시 붙어 핸드셰이크 부하로 옮겨갈 뿐이다.
+		verify(session, times(1)).close(CloseStatus.NORMAL);
+	}
+
+	/** 클라이언트가 올려보내는 chat.message 한 장. */
+	private static WebSocketMessage inboundText(String content) {
+		String json = "{\"type\":\"chat.message\",\"content\":\"" + content + "\"}";
+		return new WebSocketMessage(WebSocketMessage.Type.TEXT,
+				DefaultDataBufferFactory.sharedInstance.wrap(
+						json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+	}
+
 	private static CollabWebSocketHandler handler(RoomSessionRegistry registry,
 			com.onggijonggi.api.auth.UserIdentityService provisioning) {
+		return handler(registry, provisioning, MESSAGES_PER_WINDOW);
+	}
+
+	/** 레이트리밋(#74)이 관심사인 테스트만 한도를 좁혀 준다. */
+	private static CollabWebSocketHandler handler(RoomSessionRegistry registry,
+			com.onggijonggi.api.auth.UserIdentityService provisioning, int messagesPerWindow) {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		CollabMessageDispatcher dispatcher = new CollabMessageDispatcher(registry, llm,
 				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
 				Schedulers.parallel());
 		return new CollabWebSocketHandler(new JsonMapper(), registry, dispatcher, provisioning,
-				admittingMembership());
+				admittingMembership(), Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
 	}
 
 }

@@ -2,8 +2,6 @@ package com.onggijonggi.api.auth;
 
 import java.time.Clock;
 import java.util.Optional;
-import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
@@ -23,9 +21,9 @@ import tools.jackson.databind.ObjectMapper;
  *               addFilterAfter(AUTHORIZATION)로 자기 체인 내부에만 직접 끼워 넣는다 — 인가 이후에
  *               붙어야 JWT sub를 읽을 수 있고, 전역 WebFilter로도 등록되면 요청마다 두 번 카운트된다.
  *               지금 이걸 꽂는 곳은 둘이다: SecurityConfig(HTTP)와 WsSecurityConfig(WS 핸드셰이크, 이슈 #6).
- *               카운터가 인스턴스 필드라 인스턴스가 다르면 버킷도 갈린다 — 두 체인이 한도를 나눠
- *               갖는 것은 그 성질에 기댄 의도된 설계이니, 카운터를 static이나 공용 빈으로 끌어올리면
- *               두 정책이 조용히 한 통이 된다.
+ *               세는 일은 FixedWindowRateLimiter가 맡고 이 필터는 자기 인스턴스를 하나 소유한다 —
+ *               인스턴스가 다르면 버킷도 갈리므로 두 체인이 한도를 나눠 갖는다. 그 리미터를 static이나
+ *               공용 빈으로 끌어올리면 두 정책이 조용히 한 통이 된다(WS 메시지 한도(#74)도 자기 것을 쓴다).
  *               레이트리밋 자체는 인증도 인가도 아니지만, SecurityConfig·WsSecurityConfig가 직접
  *               만들어 자기 체인에 꽂는 구현 세부사항이므로 api/auth에 둔다 — 배선하는 설정과
  *               떼어놓으면 이 의도가 보이지 않는다(이슈 #106).
@@ -37,20 +35,12 @@ import tools.jackson.databind.ObjectMapper;
  */
 final class RateLimitWebFilter implements WebFilter {
 
-	private record Window(long windowIndex, AtomicInteger count) {
-	}
-
-	private final ConcurrentHashMap<String, Window> counters = new ConcurrentHashMap<>();
+	private final FixedWindowRateLimiter limiter;
 	private final ObjectMapper objectMapper;
-	private final Clock clock;
-	private final long windowSeconds;
-	private final int limit;
 
 	RateLimitWebFilter(ObjectMapper objectMapper, Clock clock, long windowSeconds, int limit) {
 		this.objectMapper = objectMapper;
-		this.clock = clock;
-		this.windowSeconds = windowSeconds;
-		this.limit = limit;
+		this.limiter = new FixedWindowRateLimiter(clock, windowSeconds, limit);
 	}
 
 	/** 인증된 요청만 sub 기준으로 카운트하고, 그 외(permitAll 경로 등)는 그대로 통과시킨다. */
@@ -73,23 +63,13 @@ final class RateLimitWebFilter implements WebFilter {
 	}
 
 	private Mono<Void> applyLimit(ServerWebExchange exchange, WebFilterChain chain, String sub) {
-		long now = clock.instant().getEpochSecond();
-		long windowIndex = now / windowSeconds;
-		Window window = counters.compute(sub, (key, existing) -> {
-			if (existing == null || existing.windowIndex() != windowIndex) {
-				return new Window(windowIndex, new AtomicInteger(1));
-			}
-			existing.count().incrementAndGet();
-			return existing;
-		});
-
-		if (window.count().get() > limit) {
-			long retryAfterSeconds = windowSeconds - (now % windowSeconds);
-			exchange.getResponse().getHeaders().add(HttpHeaders.RETRY_AFTER, String.valueOf(retryAfterSeconds));
-			return EdgeErrorResponseWriter.write(exchange, HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED",
-					"요청이 너무 많습니다. 잠시 후 다시 시도해주세요.", objectMapper);
+		if (limiter.tryAcquire(sub)) {
+			return chain.filter(exchange);
 		}
-		return chain.filter(exchange);
+		exchange.getResponse().getHeaders()
+				.add(HttpHeaders.RETRY_AFTER, String.valueOf(limiter.secondsUntilWindowResets()));
+		return EdgeErrorResponseWriter.write(exchange, HttpStatus.TOO_MANY_REQUESTS, "RATE_LIMITED",
+				"요청이 너무 많습니다. 잠시 후 다시 시도해주세요.", objectMapper);
 	}
 
 }
