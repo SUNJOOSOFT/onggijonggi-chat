@@ -51,6 +51,7 @@
 | `file` | 파일 |
 | `inactive` | 비활성 |
 | `indexed` | 색인됨 |
+| `invitation` | 초대 |
 | `indexing` | 색인 실행 |
 | `json` | JSON |
 | `key` | 키 |

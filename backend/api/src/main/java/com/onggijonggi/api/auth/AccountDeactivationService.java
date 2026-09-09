@@ -1,10 +1,13 @@
 package com.onggijonggi.api.auth;
 
 import com.onggijonggi.common.chat.domain.Thr;
+import com.onggijonggi.common.chat.domain.ThrInv;
+import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
@@ -21,7 +24,8 @@ import reactor.core.scheduler.Schedulers;
  * Class Name : AccountDeactivationService.java
  * Description : 계정 비활성화·재활성화(#132). V9__app_user_status.sql이 미뤄둔 "소유 대화 정리·참여
  *               회수 순서"를 여기서 다룬다. 참여 정리는 #20의 end_rsn 관례를 따르되 새 토큰
- *               (ACCOUNT_INACTIVE)을 쓴다 — SELF_LEAVE·OWNER_REVOKED 어느 쪽도 실제 사유와 맞지
+ *               (ACCOUNT_INACTIVE)을 쓴다. 그 사람이 보낸 대기 초대도 같은 사유로 거둔다(#127) —
+ *               초대는 아직 참가가 아니라 참여 정리에 걸리지 않기 때문이다. — SELF_LEAVE·OWNER_REVOKED 어느 쪽도 실제 사유와 맞지
  *               않기 때문이다.
  *
  *               OWNER인 방은 #20의 "위임 전엔 나갈 수 없다" 규칙을 그대로 따른다 — 다른 ACTIVE
@@ -42,11 +46,14 @@ public class AccountDeactivationService {
 
 	private final ThrRepository thrRepository;
 
+	private final ThrInvRepository thrInvRepository;
+
 	public AccountDeactivationService(AppUserRepository appUserRepository, ThrMbrRepository thrMbrRepository,
-			ThrRepository thrRepository) {
+			ThrRepository thrRepository, ThrInvRepository thrInvRepository) {
 		this.appUserRepository = appUserRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
+		this.thrInvRepository = thrInvRepository;
 	}
 
 	/** ACTIVE 계정만 비활성화할 수 있다. 이미 INACTIVE면 409. */
@@ -55,6 +62,7 @@ public class AccountDeactivationService {
 					AppUser user = requireActiveUser(userId);
 					thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
 							.forEach(this::endParticipation);
+					revokeSentInvitations(userId);
 					user.deactivate();
 					appUserRepository.save(user);
 					return null;
@@ -75,6 +83,21 @@ public class AccountDeactivationService {
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	 * 이 사람이 보낸 대기 초대를 거둔다(이슈 #127). 참여 정리와 같은 자리·같은 사유 토큰을 쓴다.
+	 *
+	 * 초대는 아직 참가가 아니라 위 참여 정리에 걸리지 않는다 — 따로 거두지 않으면 초대자가 떠난
+	 * 뒤에도 대상이 로그인하는 순간 방에 들어온다. 행은 지우지 않고 REVOKED로 남겨,
+	 * 누가 누구를 초대했었는지가 사후에 확인된다.
+	 */
+	private void revokeSentInvitations(UUID userId) {
+		thrInvRepository.findByCreatedByUserIdAndStatus(userId, ThrInvStatus.PENDING)
+				.forEach(invitation -> {
+					invitation.end(ThrInvStatus.REVOKED, ACCOUNT_INACTIVE);
+					thrInvRepository.save(invitation);
+				});
 	}
 
 	private void endParticipation(ThrMbr membership) {

@@ -1,9 +1,13 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import com.onggijonggi.common.chat.domain.ThrInv;
+import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
@@ -42,12 +46,17 @@ public class ThreadParticipantService {
 	private final ThrMbrRepository thrMbrRepository;
 	private final ThrRepository thrRepository;
 	private final AppUserRepository appUserRepository;
+	private final ThrInvRepository thrInvRepository;
+	private final KeycloakAdminClient keycloakAdminClient;
 
 	public ThreadParticipantService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository,
-			AppUserRepository appUserRepository) {
+			AppUserRepository appUserRepository, ThrInvRepository thrInvRepository,
+			KeycloakAdminClient keycloakAdminClient) {
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
 		this.appUserRepository = appUserRepository;
+		this.thrInvRepository = thrInvRepository;
+		this.keycloakAdminClient = keycloakAdminClient;
 	}
 
 	/** 참가자면 누구나 볼 수 있다 — 자기 방 구성원을 읽는 것뿐이라 OWNER로 좁히지 않는다. */
@@ -65,15 +74,51 @@ public class ThreadParticipantService {
 	* @param inviteeSubject 초대 대상의 Keycloak subject. 조회만 하고 새 계정을 만들지 않는다
 	*/
 	public Mono<Void> invite(UUID threadId, UUID actorUserId, String inviteeSubject) {
-		return Mono.<Void>fromCallable(() -> {
+		return Mono.fromCallable(() -> {
 					requireOwnerRole(requireActiveParticipant(threadId, actorUserId));
 					requireWritableThread(threadId);
-					UUID inviteeUserId = resolveUserId(inviteeSubject);
+					return appUserRepository.findByKeycloakSubj(inviteeSubject).map(AppUser::getId);
+				})
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(invitee -> invitee
+						.map(userId -> joinNow(threadId, actorUserId, userId))
+						.orElseGet(() -> inviteForFirstLogin(threadId, actorUserId, inviteeSubject)));
+	}
+
+	/** 이미 로그인한 적 있는 사람은 지금처럼 곧바로 참가시킨다 — 기존 동작 그대로다(이슈 #127 결정). */
+	private Mono<Void> joinNow(UUID threadId, UUID actorUserId, UUID inviteeUserId) {
+		return Mono.<Void>fromCallable(() -> {
 					if (thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId,
 							ThrMbrStatus.ACTIVE)) {
 						return null;
 					}
 					saveIgnoringDuplicate(new ThrMbr(threadId, inviteeUserId, ThrMbrRole.MEMBER, actorUserId));
+					return null;
+				})
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	* 아직 로그인한 적 없는 사람은 대기 초대로 남겨, 그 사람의 첫 로그인 때 참가로 전환한다(이슈 #127).
+	*
+	* Keycloak에 실재하는 계정인지 먼저 확인한다. 확인 없이 받아주면 오타 하나가 영원히 발동하지 않는
+	* 초대로 남는다. exists()는 404만 "없음"으로 보고 나머지 오류는 전파하므로, Admin API 장애가
+	* 정상 초대를 조용히 거부하는 일은 없다.
+	*/
+	private Mono<Void> inviteForFirstLogin(UUID threadId, UUID actorUserId, String inviteeSubject) {
+		return keycloakAdminClient.exists(inviteeSubject)
+				.flatMap(exists -> exists
+						? savePendingInvitation(threadId, actorUserId, inviteeSubject)
+						: Mono.error(notParticipant()));
+	}
+
+	private Mono<Void> savePendingInvitation(UUID threadId, UUID actorUserId, String inviteeSubject) {
+		return Mono.<Void>fromCallable(() -> {
+					if (thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject,
+							ThrInvStatus.PENDING).isPresent()) {
+						return null;
+					}
+					saveIgnoringDuplicate(new ThrInv(threadId, inviteeSubject, actorUserId));
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());
@@ -169,6 +214,15 @@ public class ThreadParticipantService {
 			thrMbrRepository.save(member);
 		} catch (DataIntegrityViolationException raced) {
 			// 이긴 쪽이 만든 활성 참가 행이 이미 있으므로 그대로 성공으로 둔다.
+		}
+	}
+
+	/** 대기 중 초대 부분 유니크 위반도 같은 이유로 성공으로 둔다(ux_thr_inv_pending). */
+	private void saveIgnoringDuplicate(ThrInv invitation) {
+		try {
+			thrInvRepository.save(invitation);
+		} catch (DataIntegrityViolationException raced) {
+			// 이긴 쪽이 만든 대기 초대가 이미 있다.
 		}
 	}
 

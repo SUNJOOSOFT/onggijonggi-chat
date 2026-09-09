@@ -10,6 +10,8 @@ import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
+import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
@@ -43,11 +45,18 @@ class ThreadParticipantServiceTest {
 	@Mock
 	private AppUserRepository appUserRepository;
 
+	@Mock
+	private ThrInvRepository thrInvRepository;
+
+	@Mock
+	private KeycloakAdminClient keycloakAdminClient;
+
 	private ThreadParticipantService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository);
+		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository,
+				thrInvRepository, keycloakAdminClient);
 	}
 
 	/**

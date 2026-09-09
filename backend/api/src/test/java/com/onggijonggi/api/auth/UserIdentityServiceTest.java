@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.chat.InvitationAcceptanceService;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Optional;
@@ -27,11 +28,14 @@ class UserIdentityServiceTest {
 	@Mock
 	private AppUserRepository appUserRepository;
 
+	@Mock
+	private InvitationAcceptanceService invitationAcceptanceService;
+
 	@Test
 	void returnsExistingUserIdWithoutCreatingNewRow() {
 		AppUser existing = new AppUser("sub-1");
 		when(appUserRepository.findByKeycloakSubj("sub-1")).thenReturn(Optional.of(existing));
-		UserIdentityService service = new UserIdentityService(appUserRepository);
+		UserIdentityService service = new UserIdentityService(appUserRepository, invitationAcceptanceService);
 
 		StepVerifier.create(service.resolveOrProvision("sub-1"))
 				.expectNext(existing.getId())
@@ -44,7 +48,7 @@ class UserIdentityServiceTest {
 	void createsNewUserWhenNotFound() {
 		when(appUserRepository.findByKeycloakSubj("sub-2")).thenReturn(Optional.empty());
 		when(appUserRepository.save(any(AppUser.class))).thenAnswer(invocation -> invocation.getArgument(0));
-		UserIdentityService service = new UserIdentityService(appUserRepository);
+		UserIdentityService service = new UserIdentityService(appUserRepository, invitationAcceptanceService);
 
 		StepVerifier.create(service.resolveOrProvision("sub-2"))
 				.assertNext(id -> assertThat(id).isNotNull())
@@ -66,7 +70,7 @@ class UserIdentityServiceTest {
 				.thenReturn(Optional.of(winner));
 		when(appUserRepository.save(any(AppUser.class)))
 				.thenThrow(new DataIntegrityViolationException("keycloak_subj unique 제약 위반"));
-		UserIdentityService service = new UserIdentityService(appUserRepository);
+		UserIdentityService service = new UserIdentityService(appUserRepository, invitationAcceptanceService);
 
 		StepVerifier.create(service.resolveOrProvision("sub-3"))
 				.expectNext(winner.getId())
