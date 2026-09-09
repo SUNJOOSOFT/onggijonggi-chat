@@ -78,36 +78,43 @@ public class AccountDeactivationService {
 	}
 
 	private void endParticipation(ThrMbr membership) {
-		if (membership.getRole() == ThrMbrRole.OWNER) {
-			handleOwnedThread(membership);
-		}
-		membership.end(ThrMbrStatus.REVOKED, ACCOUNT_INACTIVE);
-		thrMbrRepository.save(membership);
+		ThrMbr toEnd = membership.getRole() == ThrMbrRole.OWNER ? handleOwnedThread(membership) : membership;
+		toEnd.end(ThrMbrStatus.REVOKED, ACCOUNT_INACTIVE);
+		thrMbrRepository.save(toEnd);
 	}
 
 	/**
 	* 위임 대상이 있으면 넘기고, 없으면(OWNER 혼자 남은 방) 방을 보관한다 — 이미 보관된 방이면
 	* 다시 archive()를 부르지 않는다(archived_at을 불필요하게 갱신하지 않기 위해서).
+	*
+	* transferOwnership()은 원자적 UPDATE라 호출 후 ownerMembership은 role이 실제로 바뀐 상태를
+	* 반영하지 못한다(detached 상태로 role=OWNER를 그대로 들고 있다). 그 객체에 그대로 end()해
+	* 저장하면 merge가 role을 OWNER로 되돌려 버려서, 위임 뒤 다시 조회해 종료할 대상을 새로
+	* 받아온다 — 안 그러면 종료된 참가 기록의 role이 위임 사실과 어긋나게 남는다.
 	*/
-	private void handleOwnedThread(ThrMbr ownerMembership) {
+	private ThrMbr handleOwnedThread(ThrMbr ownerMembership) {
 		UUID threadId = ownerMembership.getThrId();
-		thrMbrRepository.findFirstByThrIdAndRoleAndStatus(threadId, ThrMbrRole.MEMBER, ThrMbrStatus.ACTIVE)
-				.ifPresentOrElse(
-						successor -> {
-							int updated = thrMbrRepository.transferOwnership(threadId, ownerMembership.getUserId(),
-									successor.getUserId());
-							if (updated != 2) {
-								throw stateConflict();
-							}
-						},
-						() -> {
-							Thr thr = thrRepository.findById(threadId)
-									.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
-							if (thr.getStatus() != ThrStatus.ARCHIVED) {
-								thr.archive();
-								thrRepository.save(thr);
-							}
-						});
+		return thrMbrRepository.findFirstByThrIdAndRoleAndStatus(threadId, ThrMbrRole.MEMBER, ThrMbrStatus.ACTIVE)
+				.map(successor -> {
+					int updated = thrMbrRepository.transferOwnership(threadId, ownerMembership.getUserId(),
+							successor.getUserId());
+					if (updated != 2) {
+						throw stateConflict();
+					}
+					return thrMbrRepository
+							.findByThrIdAndUserIdAndStatus(threadId, ownerMembership.getUserId(),
+									ThrMbrStatus.ACTIVE)
+							.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+				})
+				.orElseGet(() -> {
+					Thr thr = thrRepository.findById(threadId)
+							.orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND));
+					if (thr.getStatus() != ThrStatus.ARCHIVED) {
+						thr.archive();
+						thrRepository.save(thr);
+					}
+					return ownerMembership;
+				});
 	}
 
 	private AppUser requireActiveUser(UUID userId) {

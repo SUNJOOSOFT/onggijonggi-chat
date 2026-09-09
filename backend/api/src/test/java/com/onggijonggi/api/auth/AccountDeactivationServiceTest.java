@@ -69,6 +69,11 @@ class AccountDeactivationServiceTest {
 		verify(appUserRepository).save(user);
 	}
 
+	/**
+	* transferOwnership()은 원자적 UPDATE라, 호출 전에 들고 있던 ownerMembership 객체는 role이
+	* 실제로 바뀐 상태를 반영하지 못한다(#132 리뷰 발견). 그 객체를 그대로 end()해 저장하면 merge가
+	* role을 OWNER로 되돌리므로, 서비스가 위임 뒤 재조회한 새 엔티티에 end()하는지를 검증한다.
+	*/
 	@Test
 	void deactivateTransfersOwnershipWhenASuccessorExists() {
 		AppUser owner = new AppUser("owner-sub");
@@ -76,6 +81,7 @@ class AccountDeactivationServiceTest {
 		UUID successorId = UUID.randomUUID();
 		ThrMbr ownerMembership = new ThrMbr(threadId, owner.getId(), ThrMbrRole.OWNER, owner.getId());
 		ThrMbr successor = new ThrMbr(threadId, successorId, ThrMbrRole.MEMBER, owner.getId());
+		ThrMbr ownerMembershipAfterTransfer = new ThrMbr(threadId, owner.getId(), ThrMbrRole.MEMBER, owner.getId());
 
 		when(appUserRepository.findById(owner.getId())).thenReturn(Optional.of(owner));
 		when(thrMbrRepository.findByUserIdAndStatus(owner.getId(), ThrMbrStatus.ACTIVE))
@@ -83,11 +89,16 @@ class AccountDeactivationServiceTest {
 		when(thrMbrRepository.findFirstByThrIdAndRoleAndStatus(threadId, ThrMbrRole.MEMBER, ThrMbrStatus.ACTIVE))
 				.thenReturn(Optional.of(successor));
 		when(thrMbrRepository.transferOwnership(threadId, owner.getId(), successorId)).thenReturn(2);
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, owner.getId(), ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(ownerMembershipAfterTransfer));
 
 		StepVerifier.create(service.deactivate(owner.getId())).verifyComplete();
 
 		verify(thrMbrRepository).transferOwnership(threadId, owner.getId(), successorId);
-		assertThat(ownerMembership.getEndRsn()).isEqualTo("ACCOUNT_INACTIVE");
+		assertThat(ownerMembershipAfterTransfer.getEndRsn()).isEqualTo("ACCOUNT_INACTIVE");
+		assertThat(ownerMembershipAfterTransfer.getRole()).isEqualTo(ThrMbrRole.MEMBER);
+		verify(thrMbrRepository).save(ownerMembershipAfterTransfer);
+		verify(thrMbrRepository, never()).save(ownerMembership);
 		verify(thrRepository, never()).save(any());
 	}
 
