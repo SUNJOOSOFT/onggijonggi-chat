@@ -25,6 +25,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `cnt` | `count` | 개수 | 알고리즘 | - |
 | `created` | `created` | 생성됨 | 예외 | 관용 — `created_at`은 범용 관례라 원형 유지 |
 | `cur` | `current` | - | 예외 | 관용어 — 알고리즘 결과 `crr`이 부자연스러움 |
+| `crs` | `cursor` | 커서 | 알고리즘 | - |
 | `deleted` | `deleted` | - | 예외 | 관용 유지 — `deleted_at`/`deleted_by` 대칭, 기존 `created`/`updated`/`indexed`/`uploaded`와 동일 패턴 |
 | `dnd` | `denied` | 거부됨 | 알고리즘 | - |
 | `dept` | `department` | - | 예외 | 관용어 — 알고리즘 결과 `dpr`이 불명확 |
@@ -65,6 +66,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `rsn` | `reason` | 사유 | 알고리즘 | - |
 | `rpl` | `reply` | 답글 | 알고리즘 | - |
 | `req` | `requester` | 요청자 | 예외 | 관용어 — 알고리즘은 `rqs` |
+| `risk` | `risk` | 위험 | 알고리즘 | - |
 | `role` | `role` | 역할 | 알고리즘 | - |
 | `run` | `run` | 실행 | 알고리즘 | - |
 | `seq` | `sequence` | - | 예외 | 관용어 — 알고리즘 결과 `sqn`이 불명확, 업계 통용 축약 |

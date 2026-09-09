@@ -36,6 +36,7 @@
 | `chunking` | 조각화 |
 | `content` | 본문 |
 | `count` | 개수 |
+| `cursor` | 커서 |
 | `cancelled` | 취소됨 |
 | `completed` | 완료됨 |
 | `created` | 생성됨 |
@@ -73,6 +74,7 @@
 | `reason` | 사유 |
 | `reply` | 답글 |
 | `requester` | 요청자 |
+| `risk` | 위험 |
 | `role` | 역할 |
 | `run` | 실행 |
 | `session` | 세션 |

@@ -1,5 +1,6 @@
 package com.onggijonggi.common.chat.persistence;
 
+import com.onggijonggi.common.chat.domain.AthKind;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import java.util.List;
@@ -22,5 +23,8 @@ public interface MsgRepository extends JpaRepository<Msg, UUID> {
 	* 제외한다 — 내용이 비어있거나 신뢰할 수 없다.
 	*/
 	List<Msg> findByThrIdAndStatusOrderBySeqDesc(UUID thrId, MsgStatus status, Pageable pageable);
+
+	/** 위험 발화 사후 검증 배치가 커서 이후의 사람 발화만 스캔한다(#28) — AGENT·SYSTEM은 대상이 아니다. */
+	List<Msg> findByThrIdAndAthKindAndSeqGreaterThanOrderBySeqAsc(UUID thrId, AthKind athKind, long seq);
 
 }
