@@ -9,7 +9,8 @@ import type { WsFrame } from '@/lib/transport/frames';
 import {
   PROTOCOL_NAME,
   bearerFromSubProtocol,
-  userIdFromToken,
+  displayNameFromToken,
+  subjectFromToken,
 } from './handshake';
 import {
   aiPrompt,
@@ -41,7 +42,8 @@ let turnSequence = 0;
 interface SocketData {
   connectionId: string;
   threadId: string;
-  userId: string;
+  subject: string;
+  displayName: string;
   invalidThread: boolean;
   /** true면 open 직후 error 프레임을 보내고 닫는다(방 접근 거부의 "프레임" 방식). */
   denyOnOpen: boolean;
@@ -54,6 +56,22 @@ function broadcast(job: MockAiJob, frame: WsFrame): boolean {
   return registry.broadcastIfCurrent(job.threadId, job.generation, frame);
 }
 
+/** 같은 사람의 탭이 여럿이어도 명단에는 한 번만 — 실서버 RoomState.participants와 같은 규칙. */
+function distinctParticipants(
+  members: RoomMember[],
+): { subject: string; displayName: string }[] {
+  const bySubject = new Map<string, { subject: string; displayName: string }>();
+  for (const member of members) {
+    if (!bySubject.has(member.subject)) {
+      bySubject.set(member.subject, {
+        subject: member.subject,
+        displayName: member.displayName,
+      });
+    }
+  }
+  return [...bySubject.values()];
+}
+
 /**
  * presence 프레임을 정해진 상대에게만 보낸다. registry.broadcastIfCurrent를 쓰지 않는 이유는
  * 그쪽이 방 전원에게 보내기 때문이다 — 실서버는 입퇴장을 당사자에게 보내지 않는다
@@ -63,9 +81,15 @@ function sendPresence(
   targets: RoomMember[],
   type: 'presence.join' | 'presence.leave',
   threadId: string,
-  userId: string,
+  subject: string,
+  displayName: string,
 ): void {
-  const text = JSON.stringify({ type, sessionId: threadId, userId });
+  const text = JSON.stringify({
+    type,
+    sessionId: threadId,
+    subject,
+    displayName,
+  });
   for (const target of targets) target.send(text);
 }
 
@@ -154,10 +178,14 @@ const server = Bun.serve<SocketData>({
     const data: SocketData = {
       connectionId: `c${connectionSequence}`,
       threadId: path.threadId,
-      userId:
+      subject:
         url.searchParams.get('user') ??
-        userIdFromToken(token) ??
+        subjectFromToken(token) ??
         `user-${connectionSequence}`,
+      displayName:
+        url.searchParams.get('name') ??
+        displayNameFromToken(token) ??
+        `사용자 ${connectionSequence}`,
       invalidThread: path.kind === 'invalid-thread',
       denyOnOpen: access === 'deny-frame',
       generation: null,
@@ -174,8 +202,14 @@ const server = Bun.serve<SocketData>({
 
   websocket: {
     open(ws) {
-      const { connectionId, threadId, userId, invalidThread, denyOnOpen } =
-        ws.data;
+      const {
+        connectionId,
+        threadId,
+        subject,
+        displayName,
+        invalidThread,
+        denyOnOpen,
+      } = ws.data;
       if (invalidThread) {
         ws.send(
           JSON.stringify(
@@ -209,7 +243,8 @@ const server = Bun.serve<SocketData>({
 
       const member: RoomMember = {
         id: connectionId,
-        userId,
+        subject,
+        displayName,
         send: (text) => ws.send(text),
       };
       // 입장을 알릴 상대는 "들어가기 전에 이미 있던 사람"이라 join 전에 찍어둔다.
@@ -220,20 +255,18 @@ const server = Bun.serve<SocketData>({
         JSON.stringify({
           type: 'presence.snapshot',
           sessionId: threadId,
-          participants: [
-            ...new Set(registry.membersOf(threadId).map((m) => m.userId)),
-          ],
+          participants: distinctParticipants(registry.membersOf(threadId)),
         }),
       );
       // 그 사용자의 첫 연결일 때만 입장이다 — 탭을 더 여는 것은 입장이 아니다.
-      if (!others.some((other) => other.userId === userId)) {
-        sendPresence(others, 'presence.join', threadId, userId);
+      if (!others.some((other) => other.subject === subject)) {
+        sendPresence(others, 'presence.join', threadId, subject, displayName);
       }
-      console.log(`[mock-ws] join ${userId} → ${threadId}`);
+      console.log(`[mock-ws] join ${subject} → ${threadId}`);
     },
 
     message(ws, raw) {
-      const { threadId, userId, generation } = ws.data;
+      const { threadId, subject, displayName, generation } = ws.data;
       if (generation === null) return;
 
       const parsed = parseInboundMessage(String(raw));
@@ -255,7 +288,8 @@ const server = Bun.serve<SocketData>({
       registry.broadcastIfCurrent(threadId, generation, {
         type: 'chat.message',
         sessionId: threadId,
-        from: userId,
+        from: subject,
+        fromDisplayName: displayName,
         content: parsed.message.content,
       });
 
@@ -293,17 +327,24 @@ const server = Bun.serve<SocketData>({
     },
 
     close(ws) {
-      const { connectionId, threadId, userId, generation } = ws.data;
+      const { connectionId, threadId, subject, displayName, generation } =
+        ws.data;
       if (generation === null) return;
       if (registry.leave(threadId, connectionId, generation)) {
         aiQueue.closeRoom(threadId, generation);
       }
       // 방이 비었으면 remaining이 빈 배열이라 아무 데도 나가지 않는다 — 실서버도 그렇다.
       const remaining = registry.membersOf(threadId);
-      if (!remaining.some((other) => other.userId === userId)) {
-        sendPresence(remaining, 'presence.leave', threadId, userId);
+      if (!remaining.some((other) => other.subject === subject)) {
+        sendPresence(
+          remaining,
+          'presence.leave',
+          threadId,
+          subject,
+          displayName,
+        );
       }
-      console.log(`[mock-ws] leave ${userId} ← ${threadId}`);
+      console.log(`[mock-ws] leave ${subject} ← ${threadId}`);
     },
   },
 });

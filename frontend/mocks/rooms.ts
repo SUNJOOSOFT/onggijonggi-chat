@@ -213,7 +213,8 @@ export function aiTurnFrames(
 /** 방에 붙어 있는 커넥션 하나. 같은 사용자의 탭 두 개도 서로 다른 연결이다. */
 export interface RoomMember {
   id: string;
-  userId: string;
+  subject: string;
+  displayName: string;
   send: (data: string) => void;
 }
 

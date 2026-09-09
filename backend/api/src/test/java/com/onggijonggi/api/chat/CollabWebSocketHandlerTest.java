@@ -249,7 +249,7 @@ class CollabWebSocketHandlerTest {
 
 			assertThat(left.sessionId()).isEqualTo(threadId);
 			// 방금 말하고 나간 그 사람이다.
-			assertThat(left.userId()).isEqualTo(message.from());
+			assertThat(left.subject()).isEqualTo(message.from());
 		} finally {
 			stayingOutbound.tryEmitComplete();
 			leavingOutbound.tryEmitComplete();

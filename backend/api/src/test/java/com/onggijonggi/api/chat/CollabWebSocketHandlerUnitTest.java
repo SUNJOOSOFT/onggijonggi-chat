@@ -181,8 +181,9 @@ class CollabWebSocketHandlerUnitTest {
 		});
 
 		UUID observerId = UUID.randomUUID();
-		UUID observerUserId = UUID.randomUUID();
-		RoomSessionRegistry.RoomMembership observer = registry.join(threadId, observerId, observerUserId);
+		PresenceParticipant observerParticipant =
+				new PresenceParticipant("observer", "지켜보는 사람");
+		RoomSessionRegistry.RoomMembership observer = registry.join(threadId, observerId, observerParticipant);
 		var observerSubscription = observer.frames().subscribe();
 		CollabWebSocketHandler handler = handler(registry, provisioning);
 		var handlerSubscription = handler.handle(session).subscribe();
@@ -190,7 +191,7 @@ class CollabWebSocketHandlerUnitTest {
 			assertThat(sendSubscribed.await(1, TimeUnit.SECONDS)).isTrue();
 			for (int i = 0; i <= 512 && closed.getCount() > 0; i++) {
 				registry.broadcastIfCurrent(threadId, observer.generation(),
-						new ChatMessageFrame(threadId, userId, "message-" + i));
+						new ChatMessageFrame(threadId, "slow-user", "느린 소비자", "message-" + i));
 			}
 
 			assertThat(closed.await(1, TimeUnit.SECONDS)).isTrue();
@@ -199,7 +200,7 @@ class CollabWebSocketHandlerUnitTest {
 		} finally {
 			handlerSubscription.dispose();
 			observerSubscription.dispose();
-			registry.leave(threadId, observerId, observerUserId);
+			registry.leave(threadId, observerId, observerParticipant);
 		}
 	}
 

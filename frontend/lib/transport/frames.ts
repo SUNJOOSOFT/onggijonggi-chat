@@ -39,15 +39,28 @@ export interface ChatAnswerFrame {
 export interface ChatMessageFrame {
   type: 'chat.message';
   sessionId: string;
+  /** 작성자의 Keycloak subject. 참여자 관리 API가 쓰는 값과 같다(이슈 #130). */
   from: string;
+  /** 작성자의 표시 이름. 서버가 발신 시점의 JWT claim에서 읽어 실어 보낸다. */
+  fromDisplayName: string;
   content: string;
+}
+
+/**
+ * presence 프레임이 사람 한 명을 가리키는 방식(이슈 #130). 식별은 subject로, 화면 표시는
+ * displayName으로 한다 — 내부 app_user.id는 더 이상 클라이언트로 내려오지 않는다.
+ */
+export interface PresenceParticipant {
+  subject: string;
+  displayName: string;
 }
 
 /** 참여자 입장 이벤트. */
 export interface PresenceJoinFrame {
   type: 'presence.join';
   sessionId: string;
-  userId: string;
+  subject: string;
+  displayName: string;
 }
 
 /**
@@ -61,7 +74,8 @@ export interface PresenceJoinFrame {
 export interface PresenceLeaveFrame {
   type: 'presence.leave';
   sessionId: string;
-  userId: string;
+  subject: string;
+  displayName: string;
 }
 
 /**
@@ -69,7 +83,7 @@ export interface PresenceLeaveFrame {
  * 이쪽은 "지금 상태"다.
  *
  * 본인이 들어 있다. 자기 입장은 자기가 받지 않는 설계라 본인을 빼면 스스로를 목록에 넣을 방법이
- * 없다 — 프레임이 싣는 userId는 서버의 app_user.id인데 그 값은 브라우저 세션에 없다.
+ * 없다.
  *
  * 입장 이벤트를 되풀이하는 방식 대신 타입을 나눈 이유는 #111(입퇴장 시스템 메시지)이 같은
  * presence.join을 읽기 때문이다. 명단 재생과 실제 입장이 같은 타입이면 방에 들어갈 때마다
@@ -78,7 +92,7 @@ export interface PresenceLeaveFrame {
 export interface PresenceSnapshotFrame {
   type: 'presence.snapshot';
   sessionId: string;
-  participants: string[];
+  participants: PresenceParticipant[];
 }
 
 /** 스트림 중 발생한 오류. HTTP 쪽 BffErrorEnvelope(lib/api/errors.ts)와 code/message/traceId를

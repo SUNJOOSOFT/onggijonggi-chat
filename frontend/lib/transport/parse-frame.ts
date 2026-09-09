@@ -32,25 +32,30 @@ const chatMessageFrameSchema = z.object({
   type: z.literal('chat.message'),
   sessionId: z.string(),
   from: z.string(),
+  fromDisplayName: z.string(),
   content: z.string(),
 });
 
-const presenceJoinFrameSchema = z.object({
-  type: z.literal('presence.join'),
-  sessionId: z.string(),
-  userId: z.string(),
+/** 사람 하나를 가리키는 값(이슈 #130). presence 계열이 공유한다. */
+const presenceParticipantSchema = z.object({
+  subject: z.string(),
+  displayName: z.string(),
 });
 
-const presenceLeaveFrameSchema = z.object({
+const presenceJoinFrameSchema = presenceParticipantSchema.extend({
+  type: z.literal('presence.join'),
+  sessionId: z.string(),
+});
+
+const presenceLeaveFrameSchema = presenceParticipantSchema.extend({
   type: z.literal('presence.leave'),
   sessionId: z.string(),
-  userId: z.string(),
 });
 
 const presenceSnapshotFrameSchema = z.object({
   type: z.literal('presence.snapshot'),
   sessionId: z.string(),
-  participants: z.array(z.string()),
+  participants: z.array(presenceParticipantSchema),
 });
 
 /**

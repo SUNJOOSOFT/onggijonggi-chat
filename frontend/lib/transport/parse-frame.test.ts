@@ -102,12 +102,14 @@ describe('parseFrame', () => {
       type: 'chat.message',
       sessionId: 's1',
       from: 'u1',
+      fromDisplayName: '주성민',
       content: '안녕하세요',
     });
     expect(frame).toEqual({
       type: 'chat.message',
       sessionId: 's1',
       from: 'u1',
+      fromDisplayName: '주성민',
       content: '안녕하세요',
     });
   });
@@ -116,12 +118,14 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'presence.join',
       sessionId: 's1',
-      userId: 'u1',
+      subject: 'u1',
+      displayName: '주성민',
     });
     expect(frame).toEqual({
       type: 'presence.join',
       sessionId: 's1',
-      userId: 'u1',
+      subject: 'u1',
+      displayName: '주성민',
     });
   });
 
@@ -129,12 +133,14 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'presence.leave',
       sessionId: 's1',
-      userId: 'u1',
+      subject: 'u1',
+      displayName: '주성민',
     });
     expect(frame).toEqual({
       type: 'presence.leave',
       sessionId: 's1',
-      userId: 'u1',
+      subject: 'u1',
+      displayName: '주성민',
     });
   });
 
@@ -142,12 +148,18 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'presence.snapshot',
       sessionId: 's1',
-      participants: ['u1', 'u2'],
+      participants: [
+        { subject: 'u1', displayName: '주성민' },
+        { subject: 'u2', displayName: '이한결' },
+      ],
     });
     expect(frame).toEqual({
       type: 'presence.snapshot',
       sessionId: 's1',
-      participants: ['u1', 'u2'],
+      participants: [
+        { subject: 'u1', displayName: '주성민' },
+        { subject: 'u2', displayName: '이한결' },
+      ],
     });
   });
 

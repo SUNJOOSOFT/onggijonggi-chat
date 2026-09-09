@@ -109,7 +109,8 @@ public class CollabMessageDispatcher {
 				}
 				try {
 					if (!roomSessionRegistry.broadcastIfCurrent(command.threadId(), roomGeneration,
-							new ChatMessageFrame(command.threadId(), command.from(), command.content()))) {
+							new ChatMessageFrame(command.threadId(), command.fromSubject(),
+									command.fromDisplayName(), command.content()))) {
 						closeGeneration(key, state);
 						return Optional.empty();
 					}

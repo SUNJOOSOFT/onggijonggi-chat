@@ -56,51 +56,52 @@ class WsFrameTest {
 	@Test
 	void deserializesByTypeTagIntoCorrectSubtype() throws Exception {
 		UUID sessionId = UUID.randomUUID();
-		UUID userId = UUID.randomUUID();
-		String json = "{\"type\":\"presence.join\",\"sessionId\":\"%s\",\"userId\":\"%s\"}"
-				.formatted(sessionId, userId);
+		String json = """
+				{"type":"presence.join","sessionId":"%s","subject":"kc-1","displayName":"주성민"}"""
+				.formatted(sessionId);
 
 		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
 
-		assertThat(frame).isEqualTo(new PresenceJoinFrame(sessionId, userId));
+		assertThat(frame).isEqualTo(new PresenceJoinFrame(sessionId, "kc-1", "주성민"));
 	}
 
 	@Test
 	void deserializesPresenceLeaveByTypeTag() throws Exception {
 		UUID sessionId = UUID.randomUUID();
-		UUID userId = UUID.randomUUID();
-		String json = "{\"type\":\"presence.leave\",\"sessionId\":\"%s\",\"userId\":\"%s\"}"
-				.formatted(sessionId, userId);
+		String json = """
+				{"type":"presence.leave","sessionId":"%s","subject":"kc-1","displayName":"주성민"}"""
+				.formatted(sessionId);
 
 		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
 
-		assertThat(frame).isEqualTo(new PresenceLeaveFrame(sessionId, userId));
+		assertThat(frame).isEqualTo(new PresenceLeaveFrame(sessionId, "kc-1", "주성민"));
 	}
 
 	@Test
 	void deserializesPresenceSnapshotByTypeTag() throws Exception {
 		UUID sessionId = UUID.randomUUID();
-		UUID first = UUID.randomUUID();
-		UUID second = UUID.randomUUID();
-		String json = "{\"type\":\"presence.snapshot\",\"sessionId\":\"%s\",\"participants\":[\"%s\",\"%s\"]}"
-				.formatted(sessionId, first, second);
+		String json = """
+				{"type":"presence.snapshot","sessionId":"%s","participants":[				{"subject":"kc-1","displayName":"주성민"},{"subject":"kc-2","displayName":"이한결"}]}"""
+				.formatted(sessionId);
 
 		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
 
-		assertThat(frame).isEqualTo(new PresenceSnapshotFrame(sessionId, List.of(first, second)));
+		assertThat(frame).isEqualTo(new PresenceSnapshotFrame(sessionId,
+				List.of(new PresenceParticipant("kc-1", "주성민"),
+						new PresenceParticipant("kc-2", "이한결"))));
 	}
 
 	@Test
 	void allFrameTypesRoundTripThroughJson() throws Exception {
 		UUID sessionId = UUID.randomUUID();
-		UUID userId = UUID.randomUUID();
+		PresenceParticipant participant = new PresenceParticipant("kc-1", "주성민");
 		List<WsFrame> frames = List.of(
 				new ChatAnswerFrame(sessionId, "delta",
 						List.of(new Citation("doc-001", "제목", "발췌", 0.91)), false, ChatAnswerStatus.DONE),
-				new PresenceJoinFrame(sessionId, userId),
-				new PresenceLeaveFrame(sessionId, userId),
-				new PresenceSnapshotFrame(sessionId, List.of(userId)),
-				new ChatMessageFrame(sessionId, userId, "content"),
+				new PresenceJoinFrame(sessionId, participant.subject(), participant.displayName()),
+				new PresenceLeaveFrame(sessionId, participant.subject(), participant.displayName()),
+				new PresenceSnapshotFrame(sessionId, List.of(participant)),
+				new ChatMessageFrame(sessionId, participant.subject(), participant.displayName(), "content"),
 				new SystemNoticeFrame(sessionId, "warning", "RISKY_CONTENT", "위험 감지", "trace-2"),
 				new ErrorFrame(sessionId, "FORBIDDEN", "권한이 없습니다.", "trace-1"));
 
