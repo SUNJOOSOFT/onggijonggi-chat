@@ -8,13 +8,18 @@ import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
+import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import com.onggijonggi.common.user.AppUser;
+import com.onggijonggi.common.user.AppUserRepository;
 import jakarta.validation.Valid;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
@@ -56,12 +61,14 @@ public class CollabThreadController {
 	private final ThreadLifecycleService threadLifecycleService;
 	private final KeycloakAdminClient keycloakAdminClient;
 	private final CollabThreadCreationService collabThreadCreationService;
+	private final AppUserRepository appUserRepository;
 
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
 			ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
 			ThreadMembershipService threadMembershipService,
 			ThreadParticipantService threadParticipantService, ThreadLifecycleService threadLifecycleService,
-			KeycloakAdminClient keycloakAdminClient, CollabThreadCreationService collabThreadCreationService) {
+			KeycloakAdminClient keycloakAdminClient, CollabThreadCreationService collabThreadCreationService,
+			AppUserRepository appUserRepository) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
@@ -71,6 +78,7 @@ public class CollabThreadController {
 		this.threadLifecycleService = threadLifecycleService;
 		this.keycloakAdminClient = keycloakAdminClient;
 		this.collabThreadCreationService = collabThreadCreationService;
+		this.appUserRepository = appUserRepository;
 	}
 
 	/**
@@ -240,8 +248,57 @@ public class CollabThreadController {
 						: Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND)))
 				.then(Mono.fromCallable(() -> msgRepository.findByThrIdOrderBySeqAsc(threadId))
 						.subscribeOn(Schedulers.boundedElastic()))
-				.flatMapMany(Flux::fromIterable)
-				.map(MsgItem::from);
+				.flatMap(this::withAuthorDisplayNames)
+				.flatMapMany(Flux::fromIterable);
+	}
+
+	/**
+	* HUMAN 메시지의 thrMbrId → userId → keycloakSubj를 한 번에 모아 조회하고, subject도 중복
+	* 없이 조회한다(#128의 summariesFor와 같은 이유) — 같은 사람이 여러 메시지를 썼다고 Keycloak
+	* Admin API를 그만큼 부르면 안 된다. AGENT·SYSTEM은 thrMbrId가 없어 표시 이름도 null이다.
+	*/
+	private Mono<List<MsgItem>> withAuthorDisplayNames(List<Msg> messages) {
+		return Mono.fromCallable(() -> resolveThrMbrIdToSubject(messages))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(subjectByThrMbrId -> {
+					Set<String> subjects = Set.copyOf(subjectByThrMbrId.values());
+					return Flux.fromIterable(subjects)
+							.flatMap(subject -> keycloakAdminClient.displayName(subject)
+									.map(displayName -> Map.entry(subject, displayName.orElse(subject))))
+							.collectMap(Map.Entry::getKey, Map.Entry::getValue)
+							.map(displayNameBySubject -> messages.stream()
+									.map(msg -> MsgItem.from(msg, displayNameFor(msg, subjectByThrMbrId, displayNameBySubject)))
+									.toList());
+				});
+	}
+
+	/** thrMbrId가 없는(AGENT·SYSTEM) 메시지는 subject도 없어 여기서 null로 끝난다. */
+	private String displayNameFor(Msg msg, Map<UUID, String> subjectByThrMbrId, Map<String, String> displayNameBySubject) {
+		String subject = subjectByThrMbrId.get(msg.getThrMbrId());
+		return subject == null ? null : displayNameBySubject.get(subject);
+	}
+
+	/** thrMbrId → 그 참가자의 Keycloak subject. thr_mbr을 거쳐 app_user까지 두 번 조회한다. */
+	private Map<UUID, String> resolveThrMbrIdToSubject(List<Msg> messages) {
+		List<UUID> thrMbrIds = messages.stream().map(Msg::getThrMbrId).filter(Objects::nonNull).distinct()
+				.toList();
+		if (thrMbrIds.isEmpty()) {
+			return Map.of();
+		}
+		List<ThrMbr> thrMbrs = thrMbrRepository.findAllById(thrMbrIds);
+		Map<UUID, UUID> userIdByThrMbrId = thrMbrs.stream()
+				.collect(Collectors.toMap(ThrMbr::getId, ThrMbr::getUserId));
+		List<UUID> userIds = List.copyOf(Set.copyOf(userIdByThrMbrId.values()));
+		Map<UUID, String> subjectByUserId = appUserRepository.findAllById(userIds).stream()
+				.collect(Collectors.toMap(AppUser::getId, AppUser::getKeycloakSubj));
+		Map<UUID, String> subjectByThrMbrId = new HashMap<>();
+		userIdByThrMbrId.forEach((thrMbrId, userId) -> {
+			String subject = subjectByUserId.get(userId);
+			if (subject != null) {
+				subjectByThrMbrId.put(thrMbrId, subject);
+			}
+		});
+		return subjectByThrMbrId;
 	}
 
 }

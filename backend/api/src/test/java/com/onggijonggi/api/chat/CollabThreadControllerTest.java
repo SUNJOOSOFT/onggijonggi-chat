@@ -249,6 +249,35 @@ class CollabThreadControllerTest {
 		assertThat(body.indexOf("안녕 AI야")).isLessThan(body.indexOf("안녕하세요! 무엇을 도와드릴까요?"));
 	}
 
+	/**
+	* FakeKeycloakAdminConfig가 subject를 그대로 표시 이름으로 돌려주므로(이슈 #128과 같은 방식),
+	* HUMAN 메시지는 작성자의 subject가 표시 이름 자리에 그대로 보인다. AGENT는 thrMbrId가 없어
+	* 표시 이름도 null이다(이슈 #147).
+	*/
+	@Test
+	void includesAuthorDisplayNameForHumanMessagesButNotForAgentMessages() {
+		UUID thrId = rooms.openRoom("author-owner", "author-member");
+		UUID memberId = userIdentityService.resolveOrProvision("author-member").block();
+		ThrMbr memberMembership = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, memberId, ThrMbrStatus.ACTIVE)
+				.orElseThrow();
+		msgRepository.save(Msg.human(thrId, 0, memberMembership.getId(), "질문 있어요"));
+		Msg agentMsg = Msg.pendingAgent(thrId, 1);
+		agentMsg.complete("답변입니다");
+		msgRepository.save(agentMsg);
+
+		String body = restTestClient.get()
+				.uri("/api/collab/threads/{threadId}/messages", thrId)
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt("author-owner", List.of("USER")))
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(String.class)
+				.returnResult()
+				.getResponseBody();
+
+		assertThat(body).contains("\"authorDisplayName\":\"author-member\"");
+		assertThat(body).contains("\"authorDisplayName\":null");
+	}
+
 	@Test
 	void rejectsMessageHistoryForNonParticipants() {
 		UUID thrId = rooms.openRoom("messages-private-owner");
