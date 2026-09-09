@@ -47,11 +47,15 @@ class RiskCheckBatchServiceTest {
 	@Mock
 	private RiskClassifier riskClassifier;
 
+	@Mock
+	private RoomSessionRegistry roomSessionRegistry;
+
 	private RiskCheckBatchService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new RiskCheckBatchService(thrRepository, msgRepository, thrRiskCursorRepository, riskClassifier);
+		service = new RiskCheckBatchService(thrRepository, msgRepository, thrRiskCursorRepository, riskClassifier,
+				roomSessionRegistry);
 	}
 
 	@Test
@@ -75,6 +79,11 @@ class RiskCheckBatchServiceTest {
 		ArgumentCaptor<ThrRiskCursor> savedCursor = ArgumentCaptor.forClass(ThrRiskCursor.class);
 		verify(thrRiskCursorRepository).save(savedCursor.capture());
 		assertThat(savedCursor.getValue().getLastSeq()).isEqualTo(1L);
+
+		ArgumentCaptor<SystemNoticeFrame> notice = ArgumentCaptor.forClass(SystemNoticeFrame.class);
+		verify(roomSessionRegistry).notifyIfListening(eq(thr.getId()), notice.capture());
+		assertThat(notice.getValue().severity()).isEqualTo("warning");
+		assertThat(notice.getValue().code()).isEqualTo("RISKY_CONTENT");
 	}
 
 	@Test
@@ -91,6 +100,7 @@ class RiskCheckBatchServiceTest {
 
 		verify(msgRepository, never()).save(any());
 		verify(thrRiskCursorRepository).save(any());
+		verify(roomSessionRegistry, never()).notifyIfListening(any(), any());
 	}
 
 	/** 이미 스캔한 메시지를 다시 검사하지 않는다 — 커서 이후 것만 조회한다. */

@@ -61,6 +61,28 @@ class RoomSessionRegistryTest {
 		otherSubscription.dispose();
 	}
 
+	/** notifyIfListening은 room generation을 몰라도 지금 붙어 있는 구독자 전원에게 전달된다(#28). */
+	@Test
+	void notifyIfListeningDeliversToEveryoneCurrentlyInTheRoom() {
+		UUID roomId = UUID.randomUUID();
+		List<WsFrame> received = new CopyOnWriteArrayList<>();
+		Disposable subscription = registry.join(roomId, UUID.randomUUID(), UUID.randomUUID())
+				.frames().subscribe(received::add);
+
+		SystemNoticeFrame notice = new SystemNoticeFrame(roomId, "warning", "RISKY_CONTENT", "위험 감지", "trace-1");
+		registry.notifyIfListening(roomId, notice);
+
+		assertThat(received).containsExactly(notice);
+		subscription.dispose();
+	}
+
+	/** 방이 없거나(아무도 접속한 적 없거나 이미 비어 사라진 경우) 조용히 버려진다 — 예외를 던지지 않는다. */
+	@Test
+	void notifyIfListeningIsANoOpWhenTheRoomDoesNotExist() {
+		registry.notifyIfListening(UUID.randomUUID(),
+				new SystemNoticeFrame(UUID.randomUUID(), "warning", "RISKY_CONTENT", "위험 감지", "trace-2"));
+	}
+
 	@Test
 	void concurrentBroadcastsHaveTheSameOrderForEverySubscriber() throws Exception {
 		UUID roomId = UUID.randomUUID();

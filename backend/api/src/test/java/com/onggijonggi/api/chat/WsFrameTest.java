@@ -101,6 +101,7 @@ class WsFrameTest {
 				new PresenceLeaveFrame(sessionId, userId),
 				new PresenceSnapshotFrame(sessionId, List.of(userId)),
 				new ChatMessageFrame(sessionId, userId, "content"),
+				new SystemNoticeFrame(sessionId, "warning", "RISKY_CONTENT", "위험 감지", "trace-2"),
 				new ErrorFrame(sessionId, "FORBIDDEN", "권한이 없습니다.", "trace-1"));
 
 		for (WsFrame frame : frames) {

@@ -67,6 +67,19 @@ public class RoomSessionRegistry {
 	}
 
 	/**
+	 * 지금 그 방에 붙어 있는 사람에게만 의미가 있는 통지를 보낸다 — 아무도 듣고 있지 않으면
+	 * 조용히 버린다(위 emitPresence와 같은 결). broadcastIfCurrent와 달리 room generation을
+	 * 요구하지 않는다 — 배치(RiskCheckBatchService, 이슈 #28)처럼 특정 연결의 턴에 묶이지 않은
+	 * 호출자는 그 값을 모른다.
+	 */
+	public void notifyIfListening(UUID threadId, WsFrame frame) {
+		RoomState room = rooms.get(threadId);
+		if (room != null) {
+			room.emitPresence(frame);
+		}
+	}
+
+	/**
 	 * 연결을 방에서 빼고, 그 사용자의 마지막 연결이었다면 남은 참여자에게 퇴장을 알린다. 같은
 	 * 사용자의 다른 연결이 남아 있으면 그 사람은 아직 방에 있으므로 알리지 않는다. 방의 마지막
 	 * 연결이었다면 방이 사라지므로 역시 알리지 않는다 — 받을 사람도 없고, 사라진 방에
