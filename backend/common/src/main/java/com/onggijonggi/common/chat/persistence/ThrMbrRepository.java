@@ -64,4 +64,7 @@ public interface ThrMbrRepository extends JpaRepository<ThrMbr, UUID> {
 	Optional<ThrMbr> findByThrIdAndUserIdAndRoleAndStatus(UUID thrId, UUID userId, ThrMbrRole role,
 			ThrMbrStatus status);
 
+	/** 계정 비활성화로 OWNER 자리가 비게 될 때, 위임할 ACTIVE MEMBER가 있는지 찾는다(#132). */
+	Optional<ThrMbr> findFirstByThrIdAndRoleAndStatus(UUID thrId, ThrMbrRole role, ThrMbrStatus status);
+
 }

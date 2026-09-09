@@ -13,9 +13,9 @@ import java.util.UUID;
  * Class Name : AppUser.java
  * Description : Keycloak 인증 사용자에 대응하는 로컬 참조 레코드(V1__app_user_and_doc.sql `app_user`,
  *               V9__app_user_status.sql `status`/`inactive_at`). 역할은 저장하지 않는다 — Keycloak이
- *               부여하고 요청 시점에 태그로 변환한다(04·DATA). 계정 비활성화 도메인 연산(소유 대화
- *               정리·참여 회수 순서, 재활성화 절차)을 다루는 메서드는 아직 넣지 않는다 — 그걸 호출할
- *               쪽이 없다(투기적 코드 방지).
+ *               부여하고 요청 시점에 태그로 변환한다(04·DATA). 소유 대화 정리·참여 회수 순서는
+ *               AccountDeactivationService(#132) 몫이고, 여기 상태 전이 메서드는 계정 자체의 필드만
+ *               바꾼다.
  */
 @Entity
 @Table(name = "app_user")
@@ -71,6 +71,18 @@ public class AppUser {
 
 	public Instant getCreatedAt() {
 		return createdAt;
+	}
+
+	/** ACTIVE에서만 호출한다(상태 검증은 서비스 몫) — app_user_inactive_at_matches_status CHECK를 만족시킨다. */
+	public void deactivate() {
+		this.status = AppUserStatus.INACTIVE;
+		this.inactiveAt = Instant.now();
+	}
+
+	/** INACTIVE에서만 호출한다(상태 검증은 서비스 몫). 참여(thr_mbr)는 복구하지 않는다 — 재초대로 다시 들어온다. */
+	public void reactivate() {
+		this.status = AppUserStatus.ACTIVE;
+		this.inactiveAt = null;
 	}
 
 }
