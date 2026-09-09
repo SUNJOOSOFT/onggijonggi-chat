@@ -10,12 +10,11 @@ import java.util.UUID;
  *               나른다면 이 프레임은 "지금 상태"를 나른다.
  *
  *               본인을 포함한다. 자기 입장은 자기가 받지 않는 설계라 본인을 빼면 클라이언트가
- *               스스로를 목록에 넣을 방법이 없다 — 프레임이 싣는 userId는 app_user.id인데 그 값은
- *               브라우저 세션에 없다(프론트 types/next-auth.d.ts).
+ *               스스로를 목록에 넣을 방법이 없다.
  *
  *               입장 이벤트를 되풀이하는 방식 대신 타입을 따로 둔 이유는 #111이 입퇴장을 대화
  *               흐름의 시스템 메시지로 그리기 때문이다. 명단 재생과 실제 입장이 같은 타입이면
  *               방에 들어갈 때마다 이미 있던 사람들이 방금 들어온 것처럼 보인다.
  */
-public record PresenceSnapshotFrame(UUID sessionId, List<UUID> participants) implements WsFrame {
+public record PresenceSnapshotFrame(UUID sessionId, List<PresenceParticipant> participants) implements WsFrame {
 }

@@ -2,7 +2,6 @@ package com.onggijonggi.api.auth;
 
 import org.springframework.security.core.context.ReactiveSecurityContextHolder;
 import org.springframework.security.core.context.SecurityContext;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.stereotype.Component;
 import reactor.core.publisher.Mono;
@@ -32,21 +31,7 @@ public class CurrentActorProvider {
 				.cast(JwtAuthenticationToken.class)
 				.map(JwtAuthenticationToken::getToken)
 				.flatMap(token -> userIdentityService.resolveOrProvision(token.getSubject())
-						.map(userId -> new CurrentActor(userId, token.getSubject(), displayName(token))));
-	}
-
-	/**
-	* 표시명은 DB 컬럼이 아니라 요청마다 JWT에서 새로 읽는다(이슈 #128). preferred_username이 없는
-	* 토큰(예: 매퍼 설정을 안 한 다른 클라이언트)에 대비해 name, 그마저 없으면 subject로 물러난다 —
-	* 화면에 빈 이름이 뜨는 것보다 subject라도 보이는 쪽이 낫다.
-	*/
-	private String displayName(Jwt token) {
-		String preferredUsername = token.getClaimAsString("preferred_username");
-		if (preferredUsername != null) {
-			return preferredUsername;
-		}
-		String name = token.getClaimAsString("name");
-		return name != null ? name : token.getSubject();
+						.map(userId -> new CurrentActor(userId, token.getSubject(), JwtDisplayNames.of(token))));
 	}
 
 }

@@ -39,12 +39,13 @@ public class RoomSessionRegistry {
 	 * 바꾼 잠금 안에서 뜬다 — 밖에서 뜨면 그 사이에 들어온 사람이 명단에도 없고 입장 통보도
 	 * 못 받는 연결이 생긴다.
 	 */
-	public RoomMembership join(UUID threadId, UUID connectionId, UUID userId) {
-		List<UUID> participants = new ArrayList<>();
+	public RoomMembership join(UUID threadId, UUID connectionId, PresenceParticipant participant) {
+		List<PresenceParticipant> participants = new ArrayList<>();
 		RoomState room = rooms.compute(threadId, (ignored, current) -> {
 			RoomState joined = current == null ? new RoomState() : current;
-			if (joined.add(connectionId, userId)) {
-				joined.emitPresence(new PresenceJoinFrame(threadId, userId));
+			if (joined.add(connectionId, participant)) {
+				joined.emitPresence(
+						new PresenceJoinFrame(threadId, participant.subject(), participant.displayName()));
 			}
 			participants.addAll(joined.participants());
 			return joined;
@@ -74,7 +75,7 @@ public class RoomSessionRegistry {
 	 *
 	 * @return 마지막 연결이 퇴장해 방이 완전히 비면 그 방 세대를, 아니면 빈 Optional을 반환한다.
 	 */
-	public Optional<UUID> leave(UUID threadId, UUID connectionId, UUID userId) {
+	public Optional<UUID> leave(UUID threadId, UUID connectionId, PresenceParticipant participant) {
 		UUID[] emptiedGeneration = new UUID[1];
 		rooms.computeIfPresent(threadId, (ignored, current) -> {
 			Departure departure = current.remove(connectionId);
@@ -83,7 +84,8 @@ public class RoomSessionRegistry {
 				return null;
 			}
 			if (departure == Departure.USER_GONE) {
-				current.emitPresence(new PresenceLeaveFrame(threadId, userId));
+				current.emitPresence(
+						new PresenceLeaveFrame(threadId, participant.subject(), participant.displayName()));
 			}
 			return current;
 		});
@@ -99,7 +101,7 @@ public class RoomSessionRegistry {
 
 	/**
 	 * 연결 하나가 빠진 뒤 방이 어떤 상태가 됐는지. 퇴장 통보를 낼지가 여기서 갈린다. 방송이
-	 * 나르는 값은 connectionId가 아니라 userId라, 연결 단위로만 세면 탭을 하나 더 열었다 닫은
+	 * 나르는 값은 connectionId가 아니라 사람이라, 연결 단위로만 세면 탭을 하나 더 열었다 닫은
 	 * 사람이 나간 것으로 보인다(이슈 #25 리뷰).
 	 */
 	private enum Departure {
@@ -117,9 +119,12 @@ public class RoomSessionRegistry {
 
 	private static final class RoomState {
 
-		/** connectionId에서 그 연결을 연 userId로. 한 사용자가 탭·재연결로 여러 연결을 가질 수 있다.
-		 * 스냅샷이 입장 순서대로 나가야 해서 순서를 지키는 구현을 쓴다. */
-		private final Map<UUID, UUID> connections = new LinkedHashMap<>();
+		/** connectionId에서 그 연결을 연 사람으로. 한 사용자가 탭·재연결로 여러 연결을 가질 수 있다.
+		 * 스냅샷이 입장 순서대로 나가야 해서 순서를 지키는 구현을 쓴다.
+		 *
+		 * 같은 사람인지는 subject로만 판정한다 — 표시 이름은 Keycloak에서 바뀔 수 있어, 값 전체를
+		 * 비교하면 이름이 바뀐 사이에 연 두 번째 탭이 남남으로 보인다(이슈 #130). */
+		private final Map<UUID, PresenceParticipant> connections = new LinkedHashMap<>();
 
 		private final UUID generation = UUID.randomUUID();
 
@@ -134,10 +139,10 @@ public class RoomSessionRegistry {
 		 * 한다 — 그 사용자의 첫 연결이어야 하고(탭을 더 열거나 재연결한 것은 입장이 아니다),
 		 * 들을 상대가 이미 방에 있어야 한다.
 		 */
-		synchronized boolean add(UUID connectionId, UUID userId) {
+		synchronized boolean add(UUID connectionId, PresenceParticipant participant) {
 			boolean hadOthers = !connections.isEmpty();
-			boolean userIsNew = !connections.containsValue(userId);
-			connections.put(connectionId, userId);
+			boolean userIsNew = !hasSubject(participant.subject());
+			connections.put(connectionId, participant);
 			return hadOthers && userIsNew;
 		}
 
@@ -145,9 +150,19 @@ public class RoomSessionRegistry {
 			return generation;
 		}
 
-		/** 지금 방에 있는 사용자를 입장 순서대로. 같은 사람의 연결이 여럿이어도 한 번만 센다. */
-		synchronized List<UUID> participants() {
-			return connections.values().stream().distinct().toList();
+		/** 지금 방에 있는 사용자를 입장 순서대로. 같은 사람의 연결이 여럿이어도 한 번만 센다 —
+		 * 표시 이름이 달라도 subject가 같으면 한 사람이므로 먼저 들어온 쪽을 남긴다. */
+		synchronized List<PresenceParticipant> participants() {
+			Map<String, PresenceParticipant> bySubject = new LinkedHashMap<>();
+			for (PresenceParticipant participant : connections.values()) {
+				bySubject.putIfAbsent(participant.subject(), participant);
+			}
+			return List.copyOf(bySubject.values());
+		}
+
+		private boolean hasSubject(String subject) {
+			return connections.values().stream()
+					.anyMatch(participant -> participant.subject().equals(subject));
 		}
 
 		/**
@@ -155,13 +170,16 @@ public class RoomSessionRegistry {
 		 * 표시한다 — 곧 버려질 방이고, 그 뒤 남은 세대로 들어오는 방송은 여기서 걸러야 한다.
 		 */
 		synchronized Departure remove(UUID connectionId) {
-			UUID userId = connections.remove(connectionId);
+			PresenceParticipant removed = connections.remove(connectionId);
 			if (connections.isEmpty()) {
 				active = false;
 				frames.tryEmitComplete();
 				return Departure.ROOM_EMPTY;
 			}
-			return connections.containsValue(userId) ? Departure.STILL_CONNECTED : Departure.USER_GONE;
+			if (removed == null) {
+				return Departure.STILL_CONNECTED;
+			}
+			return hasSubject(removed.subject()) ? Departure.STILL_CONNECTED : Departure.USER_GONE;
 		}
 
 		Flux<WsFrame> frames() {

@@ -32,6 +32,7 @@ describe('routeFrame', () => {
       type: 'chat.message',
       sessionId: 's1',
       from: 'u1',
+      fromDisplayName: '보낸 사람',
       content: '안녕하세요',
     };
     const onChatMessage = vi.fn();
@@ -43,7 +44,8 @@ describe('routeFrame', () => {
     const frame: PresenceJoinFrame = {
       type: 'presence.join',
       sessionId: 's1',
-      userId: 'u1',
+      subject: 'u1',
+      displayName: '들어온 사람',
     };
     const onPresenceJoin = vi.fn();
     routeFrame(frame, { onPresenceJoin });
@@ -54,7 +56,8 @@ describe('routeFrame', () => {
     const frame: PresenceLeaveFrame = {
       type: 'presence.leave',
       sessionId: 's1',
-      userId: 'u1',
+      subject: 'u1',
+      displayName: '들어온 사람',
     };
     const onPresenceLeave = vi.fn();
     routeFrame(frame, { onPresenceLeave });
@@ -65,7 +68,7 @@ describe('routeFrame', () => {
     const frame: PresenceSnapshotFrame = {
       type: 'presence.snapshot',
       sessionId: 's1',
-      participants: ['u1'],
+      participants: [{ subject: 'u1', displayName: 'u1 님' }],
     };
     const onPresenceSnapshot = vi.fn();
     routeFrame(frame, { onPresenceSnapshot });

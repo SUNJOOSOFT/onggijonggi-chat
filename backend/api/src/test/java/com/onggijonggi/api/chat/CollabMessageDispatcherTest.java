@@ -46,7 +46,7 @@ class CollabMessageDispatcherTest {
 
 		assertThat(dispatcher.dispatch(command(room, "일반 발화"), room.membership.generation())).isEmpty();
 
-		assertThat(room.frames).containsExactly(new ChatMessageFrame(room.threadId, room.userId, "일반 발화"));
+		assertThat(room.frames).containsExactly(new ChatMessageFrame(room.threadId, room.participant.subject(), room.participant.displayName(), "일반 발화"));
 		verify(llm, times(0)).streamChat(any());
 	}
 
@@ -69,8 +69,8 @@ class CollabMessageDispatcherTest {
 				.containsExactly("one", "two");
 		awaitFrameCount(room.frames, 6);
 		assertThat(room.frames).containsExactly(
-				new ChatMessageFrame(room.threadId, room.userId, "@AI one"),
-				new ChatMessageFrame(room.threadId, room.userId, "@AI two"),
+				new ChatMessageFrame(room.threadId, room.participant.subject(), room.participant.displayName(), "@AI one"),
+				new ChatMessageFrame(room.threadId, room.participant.subject(), room.participant.displayName(), "@AI two"),
 				new ChatAnswerFrame(room.threadId, "first", List.of(), false, ChatAnswerStatus.STREAMING),
 				new ChatAnswerFrame(room.threadId, "", List.of(), false, ChatAnswerStatus.DONE),
 				new ChatAnswerFrame(room.threadId, "second", List.of(), false, ChatAnswerStatus.STREAMING),
@@ -86,7 +86,7 @@ class CollabMessageDispatcherTest {
 		ErrorFrame error = dispatcher.dispatch(command(room, "@AI   "), room.membership.generation()).orElseThrow();
 
 		assertThat(error.code()).isEqualTo("MALFORMED_REQUEST");
-		assertThat(room.frames).containsExactly(new ChatMessageFrame(room.threadId, room.userId, "@AI   "));
+		assertThat(room.frames).containsExactly(new ChatMessageFrame(room.threadId, room.participant.subject(), room.participant.displayName(), "@AI   "));
 		verify(llm, times(0)).streamChat(any());
 	}
 
@@ -116,7 +116,7 @@ class CollabMessageDispatcherTest {
 
 		awaitFrameCount(room.frames, 2);
 		assertThat(room.frames).hasSize(2);
-		assertThat(room.frames.get(0)).isEqualTo(new ChatMessageFrame(room.threadId, room.userId, "@AI hello"));
+		assertThat(room.frames.get(0)).isEqualTo(new ChatMessageFrame(room.threadId, room.participant.subject(), room.participant.displayName(), "@AI hello"));
 		assertThat(room.frames.get(1)).isInstanceOf(ErrorFrame.class);
 		assertThat(((ErrorFrame) room.frames.get(1)).code()).isEqualTo("MODEL_UNAVAILABLE");
 	}
@@ -132,7 +132,7 @@ class CollabMessageDispatcherTest {
 
 		awaitFrameCount(room.frames, 4);
 		assertThat(room.frames).containsExactly(
-				new ChatMessageFrame(room.threadId, room.userId, "@AI hello"),
+				new ChatMessageFrame(room.threadId, room.participant.subject(), room.participant.displayName(), "@AI hello"),
 				new ChatAnswerFrame(room.threadId, " ", List.of(), false, ChatAnswerStatus.STREAMING),
 				new ChatAnswerFrame(room.threadId, "answer", List.of(), false, ChatAnswerStatus.STREAMING),
 				new ChatAnswerFrame(room.threadId, "", List.of(), false, ChatAnswerStatus.DONE));
@@ -198,11 +198,11 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(oldRoom, "@AI first"), oldRoom.membership.generation());
 		verify(llm, timeout(1000)).streamChat(any());
-		oldRoom.registry.leave(oldRoom.threadId, oldRoom.connectionId, oldRoom.userId);
+		oldRoom.registry.leave(oldRoom.threadId, oldRoom.connectionId, oldRoom.participant);
 		oldRoom.subscription.dispose();
 		UUID newConnectionId = UUID.randomUUID();
 		RoomSessionRegistry.RoomMembership newMembership =
-				oldRoom.registry.join(oldRoom.threadId, newConnectionId, UUID.randomUUID());
+				oldRoom.registry.join(oldRoom.threadId, newConnectionId, anonymous());
 		List<WsFrame> newFrames = new CopyOnWriteArrayList<>();
 		Disposable newSubscription = newMembership.frames().subscribe(newFrames::add);
 		try {
@@ -213,7 +213,7 @@ class CollabMessageDispatcherTest {
 			assertThat(newFrames).isEmpty();
 		} finally {
 			newSubscription.dispose();
-			oldRoom.registry.leave(oldRoom.threadId, newConnectionId, UUID.randomUUID());
+			oldRoom.registry.leave(oldRoom.threadId, newConnectionId, anonymous());
 		}
 	}
 
@@ -319,8 +319,8 @@ class CollabMessageDispatcherTest {
 			dispatcher.closeGeneration(room.threadId, staleGeneration);
 			// 상태를 닫는 것과 별개로, 방 자체를 새 세대로 넘긴다 — 재시도 시점에는 staleGeneration이
 			// 더 이상 현재 세대가 아니다.
-			room.registry.leave(room.threadId, room.connectionId, room.userId);
-			room.registry.join(room.threadId, UUID.randomUUID(), UUID.randomUUID());
+			room.registry.leave(room.threadId, room.connectionId, room.participant);
+			room.registry.join(room.threadId, UUID.randomUUID(), anonymous());
 			closeCompleted.countDown();
 
 			assertThat(raced.get(5, TimeUnit.SECONDS)).isEmpty();
@@ -346,7 +346,7 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
 		assertThat(subscribed.await(1, TimeUnit.SECONDS)).isTrue();
-		room.registry.leave(room.threadId, room.connectionId, room.userId)
+		room.registry.leave(room.threadId, room.connectionId, room.participant)
 				.ifPresent(generation -> dispatcher.closeGeneration(room.threadId, generation));
 
 		awaitTrue(cancelled);
@@ -518,7 +518,7 @@ class CollabMessageDispatcherTest {
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
-		room.registry.leave(room.threadId, room.connectionId, room.userId)
+		room.registry.leave(room.threadId, room.connectionId, room.participant)
 				.ifPresent(generation -> dispatcher.closeGeneration(room.threadId, generation));
 
 		verify(msgPersistenceService, timeout(1000)).failBlocking(pending.getId(), MsgStatus.CANCELLED);
@@ -585,7 +585,8 @@ class CollabMessageDispatcherTest {
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
-		return new ChatMessageCommand(room.threadId, room.userId, content, "trace");
+		return new ChatMessageCommand(room.threadId, room.userId, room.participant.subject(),
+				room.participant.displayName(), content, "trace");
 	}
 
 	/**
@@ -617,6 +618,12 @@ class CollabMessageDispatcherTest {
 		}
 	}
 
+	/** 누구인지가 관심사가 아닌 자리에 세우는 익명 참가자(이슈 #130). */
+	private static PresenceParticipant anonymous() {
+		UUID id = UUID.randomUUID();
+		return new PresenceParticipant("subject-" + id, "다른 사람");
+	}
+
 	private static final class TestRoom {
 
 		private final RoomSessionRegistry registry;
@@ -626,6 +633,10 @@ class CollabMessageDispatcherTest {
 		private final UUID connectionId = UUID.randomUUID();
 
 		private final UUID userId = UUID.randomUUID();
+
+		/** 저장은 내부 id(userId)로, 방송 프레임은 subject·표시 이름으로 사람을 가리킨다(이슈 #130). */
+		private final PresenceParticipant participant =
+				new PresenceParticipant("subject-" + userId, "발화자");
 
 		private final RoomSessionRegistry.RoomMembership membership;
 
@@ -639,7 +650,7 @@ class CollabMessageDispatcherTest {
 
 		TestRoom(RoomSessionRegistry registry) {
 			this.registry = registry;
-			this.membership = registry.join(threadId, connectionId, userId);
+			this.membership = registry.join(threadId, connectionId, participant);
 			this.subscription = membership.frames().subscribe(frames::add);
 		}
 	}

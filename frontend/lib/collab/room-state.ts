@@ -18,7 +18,11 @@
 
 import type { Citation } from '@/lib/api/chat';
 import { friendlyMessageForCode } from '@/lib/api/errors';
-import type { SystemNoticeFrame, WsFrame } from '@/lib/transport/frames';
+import type {
+  PresenceParticipant,
+  SystemNoticeFrame,
+  WsFrame,
+} from '@/lib/transport/frames';
 
 /** 방에 접근할 수 없다는 뜻의 에러 코드(백엔드 ErrorFrame이 02·EDGE에서 쓰는 값). */
 const FORBIDDEN_CODE = 'FORBIDDEN';
@@ -30,8 +34,8 @@ const TERMINAL_AI_ERROR_CODES = new Set([
 /** 메시지 하나. 사람과 AI를 role이 아니라 보낸 사람 유무로 가른다 — 협업방에는 보낸 사람이 여럿이다. */
 export interface CollabMessage {
   id: string;
-  /** 사람이 보낸 것이면 그 사람 이름, AI 답변이면 null. */
-  from: string | null;
+  /** 사람이 보낸 것이면 그 사람, AI 답변이면 null. */
+  from: PresenceParticipant | null;
   content: string;
   /** AI 답변이 아직 흐르는 중인지. 사람 메시지는 언제나 false다. */
   streaming: boolean;
@@ -43,8 +47,8 @@ export interface CollabMessage {
  * 입퇴장을 시간 순서에 남기는 줄(이슈 #111). 목록(#26)이 "지금 누가 있나"라면 이쪽은
  * "언제 누가 오갔나"다 — 그래서 상태가 아니라 메시지 흐름에 낀다.
  *
- * 문구를 여기서 만들지 않고 사건만 담는다. 표시할 이름이 아직 userId(UUID)뿐이라
- * (#128이 표시명을 정하면 바뀐다) 어떻게 쓸지는 화면이 정하는 편이 갈아끼우기 쉽다.
+ * 문구를 여기서 만들지 않고 사건과 사람만 담는다 — 어떻게 쓸지는 화면이 정하는 편이
+ * 갈아끼우기 쉽다. 사람은 subject로 식별하고 표시는 displayName으로 한다(이슈 #130).
  *
  * 자기 입퇴장은 서버가 자기에게 보내지 않으므로 "내가 입장했습니다" 줄은 생기지 않는다.
  * 붙는 순간 받는 참여자 명단(presence.snapshot)도 여기에 줄을 만들지 않는다 — 명단은
@@ -53,7 +57,7 @@ export interface CollabMessage {
 export interface CollabPresenceNotice {
   id: string;
   event: 'join' | 'leave';
-  userId: string;
+  participant: PresenceParticipant;
 }
 
 /** 대화 흐름에 놓이는 것. 사람·AI 메시지이거나, 입퇴장 시스템 라인이다. */
@@ -99,7 +103,7 @@ export interface RoomError {
 
 export interface RoomState {
   /** 입장 순서대로의 참여자. 같은 사람의 join이 두 번 도착해도(재연결·스냅샷 재생) 한 번만 센다. */
-  participants: string[];
+  participants: PresenceParticipant[];
   messages: CollabEntry[];
   /** 닫기 전까지 방 위에 남아 있는 알림. 도착 순서대로다. */
   notices: SystemNotice[];
@@ -154,7 +158,7 @@ function upsertNotice(state: RoomState, frame: SystemNoticeFrame): RoomState {
 /** 메시지 하나를 덧붙인다. */
 function appendMessage(
   state: RoomState,
-  from: string | null,
+  from: PresenceParticipant | null,
   content: string,
   streaming: boolean,
 ): RoomState {
@@ -175,18 +179,38 @@ function appendMessage(
   };
 }
 
+/** 명단에 이미 있는 사람인지. 같은 사람인지는 subject로만 가른다 — 표시 이름은 바뀔 수 있다. */
+function hasParticipant(state: RoomState, subject: string): boolean {
+  return state.participants.some(
+    (participant) => participant.subject === subject,
+  );
+}
+
+/** 명단에서 같은 subject가 겹치면 먼저 온 쪽을 남긴다(서버가 보내는 순서가 입장 순서다). */
+function distinctBySubject(
+  participants: PresenceParticipant[],
+): PresenceParticipant[] {
+  const bySubject = new Map<string, PresenceParticipant>();
+  for (const participant of participants) {
+    if (!bySubject.has(participant.subject)) {
+      bySubject.set(participant.subject, participant);
+    }
+  }
+  return [...bySubject.values()];
+}
+
 /** 입퇴장 줄 하나를 덧붙인다. 번호는 메시지와 같은 자리에서 뽑는다 — 한 목록에 섞이므로
  * key가 겹치면 안 된다. */
 function appendNotice(
   state: RoomState,
   event: 'join' | 'leave',
-  userId: string,
+  participant: PresenceParticipant,
 ): RoomState {
   return {
     ...state,
     messages: [
       ...state.messages,
-      { id: `m${state.nextMessageId}`, event, userId },
+      { id: `m${state.nextMessageId}`, event, participant },
     ],
     nextMessageId: state.nextMessageId + 1,
   };
@@ -258,34 +282,46 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
   switch (frame.type) {
     case 'presence.join': {
       // 이미 아는 사람의 join이 또 오면(재연결 등) 목록도 흐름도 건드리지 않는다.
-      if (state.participants.includes(frame.userId)) return state;
+      if (hasParticipant(state, frame.subject)) return state;
+      const participant = {
+        subject: frame.subject,
+        displayName: frame.displayName,
+      };
       const joined = {
         ...state,
-        participants: [...state.participants, frame.userId],
+        participants: [...state.participants, participant],
       };
-      return appendNotice(joined, 'join', frame.userId);
+      return appendNotice(joined, 'join', participant);
     }
 
     // 명단은 서버가 방금 뜬 것이라 지금까지 쌓인 것보다 정확하다 — 덧붙이지 않고 갈아끼운다.
     // 재연결하면 다시 오므로, 끊긴 사이에 오간 입퇴장을 놓쳤어도 여기서 맞춰진다.
     case 'presence.snapshot':
-      return { ...state, participants: [...new Set(frame.participants)] };
+      return { ...state, participants: distinctBySubject(frame.participants) };
 
     case 'presence.leave': {
       // join과 대칭이다. 모르는 사람의 퇴장은 목록도 흐름도 건드리지 않는다 — 본 적 없는
       // 사람이 나갔다는 줄만 남으면 읽는 쪽은 놓친 입장이 있다고 오해한다.
-      if (!state.participants.includes(frame.userId)) return state;
+      if (!hasParticipant(state, frame.subject)) return state;
       const left = {
         ...state,
         participants: state.participants.filter(
-          (participant) => participant !== frame.userId,
+          (participant) => participant.subject !== frame.subject,
         ),
       };
-      return appendNotice(left, 'leave', frame.userId);
+      return appendNotice(left, 'leave', {
+        subject: frame.subject,
+        displayName: frame.displayName,
+      });
     }
 
     case 'chat.message':
-      return appendMessage(state, frame.from, frame.content, false);
+      return appendMessage(
+        state,
+        { subject: frame.from, displayName: frame.fromDisplayName },
+        frame.content,
+        false,
+      );
 
     case 'chat.answer': {
       const done = frame.status === 'done';

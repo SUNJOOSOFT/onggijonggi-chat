@@ -27,9 +27,14 @@ const SAMPLE_CITATION: Citation = {
   score: 1,
 };
 
-function member(id: string, userId = id) {
+function member(id: string, subject = id) {
   const send = vi.fn<(data: string) => void>();
-  return { id, userId, send } satisfies RoomMember;
+  return {
+    id,
+    subject,
+    displayName: `${subject} 님`,
+    send,
+  } satisfies RoomMember;
 }
 
 function say(content: string): ChatMessageFrame {
@@ -37,6 +42,7 @@ function say(content: string): ChatMessageFrame {
     type: 'chat.message',
     sessionId: NORMAL_THREAD_ID,
     from: 'alice',
+    fromDisplayName: '보낸 사람',
     content,
   };
 }

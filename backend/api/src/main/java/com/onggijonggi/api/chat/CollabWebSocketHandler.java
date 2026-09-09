@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import com.onggijonggi.api.auth.JwtDisplayNames;
 import com.onggijonggi.api.auth.WsSubProtocolBearerTokenConverter;
 import com.onggijonggi.api.auth.UserIdentityService;
 import java.security.Principal;
@@ -78,10 +79,12 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 
 		return session.getHandshakeInfo().getPrincipal()
 				.map(CollabWebSocketHandler::sessionInfoOf)
-				.defaultIfEmpty(new SessionInfo("EMPTY", null))
+				.defaultIfEmpty(new SessionInfo("EMPTY", "EMPTY", null))
 				.flatMap(info -> userIdentityService.resolveOrProvision(info.subject())
 						.onErrorMap(UserProvisioningFailure::new)
-						.flatMap(userId -> admitOrReject(session, threadId, userId, info.tokenExpiresAt()))
+						.flatMap(userId -> admitOrReject(session, threadId, userId,
+								new PresenceParticipant(info.subject(), info.displayName()),
+								info.tokenExpiresAt()))
 						.onErrorResume(UserProvisioningFailure.class, error -> {
 							String traceId = newTraceId();
 							log.error("WebSocket user provisioning failed threadId={} traceId={}",
@@ -97,11 +100,11 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	* 그 응답을 클라이언트에 넘기지 않아 거부인지 서버 장애인지 구분되지 않는다.
 	*/
 	private Mono<Void> admitOrReject(WebSocketSession session, UUID threadId, UUID userId,
-			Instant tokenExpiresAt) {
+			PresenceParticipant actor, Instant tokenExpiresAt) {
 		return threadMembershipService.isActiveParticipant(threadId, userId)
 				.onErrorMap(MembershipLookupFailure::new)
 				.flatMap(participant -> participant
-						? handleRoomSession(session, threadId, userId, tokenExpiresAt)
+						? handleRoomSession(session, threadId, userId, actor, tokenExpiresAt)
 						: rejectRoomAccess(session, threadId))
 				.onErrorResume(MembershipLookupFailure.class, error -> {
 					String traceId = newTraceId();
@@ -120,11 +123,11 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	}
 
 	private Mono<Void> handleRoomSession(WebSocketSession session, UUID threadId, UUID userId,
-			Instant tokenExpiresAt) {
+			PresenceParticipant actor, Instant tokenExpiresAt) {
 		UUID connectionId = UUID.randomUUID();
 		Sinks.One<Void> inboundDone = Sinks.one();
 		Sinks.One<Void> outboundOverflow = Sinks.one();
-		RoomSessionRegistry.RoomMembership membership = roomSessionRegistry.join(threadId, connectionId, userId);
+		RoomSessionRegistry.RoomMembership membership = roomSessionRegistry.join(threadId, connectionId, actor);
 
 		// 참여자 스냅샷(#26)은 방송이 아니라 이 연결의 값이라, 방 버퍼 밖에서 맨 앞에 붙인다 —
 		// 느린 소비자용 버퍼 한 칸을 명단이 차지할 이유가 없다.
@@ -132,7 +135,7 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 				.startWith(membership.snapshot());
 
 		Flux<WsFrame> inboundResponses = session.receive()
-				.concatMap(message -> handleInbound(message, threadId, userId, membership.generation()))
+				.concatMap(message -> handleInbound(message, threadId, userId, actor, membership.generation()))
 				.doFinally(ignored -> inboundDone.tryEmitEmpty());
 
 		Flux<WebSocketMessage> outbound = Flux.merge(roomFrames, inboundResponses)
@@ -149,12 +152,12 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 				.then(session.close(SLOW_CONSUMER));
 
 		return Mono.firstWithSignal(messageLoop, tokenExpiry, slowConsumer)
-				.doFinally(ignored -> roomSessionRegistry.leave(threadId, connectionId, userId)
+				.doFinally(ignored -> roomSessionRegistry.leave(threadId, connectionId, actor)
 						.ifPresent(generation -> collabMessageDispatcher.closeGeneration(threadId, generation)));
 	}
 
 	private Mono<WsFrame> handleInbound(WebSocketMessage message, UUID threadId, UUID userId,
-			UUID roomGeneration) {
+			PresenceParticipant actor, UUID roomGeneration) {
 		String traceId = newTraceId();
 		String payload = textPayload(message);
 		if (payload == null) {
@@ -175,7 +178,8 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 			return Mono.just(malformed(threadId, traceId));
 		}
 
-		ChatMessageCommand command = new ChatMessageCommand(threadId, userId, inbound.content(), traceId);
+		ChatMessageCommand command = new ChatMessageCommand(threadId, userId, actor.subject(),
+				actor.displayName(), inbound.content(), traceId);
 		return threadMembershipService.isActiveParticipant(threadId, userId)
 				.flatMap(participant -> participant
 						? rejectIfLocked(command, roomGeneration, traceId)
@@ -275,9 +279,9 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	private static SessionInfo sessionInfoOf(Principal principal) {
 		if (principal instanceof JwtAuthenticationToken jwtAuthentication) {
 			var jwt = jwtAuthentication.getToken();
-			return new SessionInfo(jwt.getSubject(), jwt.getExpiresAt());
+			return new SessionInfo(jwt.getSubject(), JwtDisplayNames.of(jwt), jwt.getExpiresAt());
 		}
-		return new SessionInfo(principal.getName(), null);
+		return new SessionInfo(principal.getName(), principal.getName(), null);
 	}
 
 	private static String newTraceId() {
@@ -288,7 +292,7 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	private record InboundMessage(String type, String content) {
 	}
 
-	private record SessionInfo(String subject, Instant tokenExpiresAt) {
+	private record SessionInfo(String subject, String displayName, Instant tokenExpiresAt) {
 	}
 
 	private static final class UserProvisioningFailure extends RuntimeException {

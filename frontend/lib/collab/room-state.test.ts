@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
-import type { WsFrame } from '@/lib/transport/frames';
+import type { PresenceParticipant, WsFrame } from '@/lib/transport/frames';
 import {
   type CollabMessage,
   type RoomState,
@@ -14,20 +14,35 @@ import {
 
 const THREAD = 'thread-1';
 
-function join(userId: string): WsFrame {
-  return { type: 'presence.join', sessionId: THREAD, userId };
+/** subject를 받아 그 사람을 만든다. 표시 이름은 subject에서 파생시켜 둘이 섞이면 눈에 띄게 한다. */
+function person(subject: string): PresenceParticipant {
+  return { subject, displayName: `${subject} 님` };
 }
 
-function leave(userId: string): WsFrame {
-  return { type: 'presence.leave', sessionId: THREAD, userId };
+function join(subject: string): WsFrame {
+  return { type: 'presence.join', sessionId: THREAD, ...person(subject) };
 }
 
-function snapshot(...participants: string[]): WsFrame {
-  return { type: 'presence.snapshot', sessionId: THREAD, participants };
+function leave(subject: string): WsFrame {
+  return { type: 'presence.leave', sessionId: THREAD, ...person(subject) };
+}
+
+function snapshot(...subjects: string[]): WsFrame {
+  return {
+    type: 'presence.snapshot',
+    sessionId: THREAD,
+    participants: subjects.map(person),
+  };
 }
 
 function say(from: string, content: string): WsFrame {
-  return { type: 'chat.message', sessionId: THREAD, from, content };
+  return {
+    type: 'chat.message',
+    sessionId: THREAD,
+    from,
+    fromDisplayName: `${from} 님`,
+    content,
+  };
 }
 
 function notice(
@@ -81,12 +96,12 @@ function fold(
 describe('applyFrame - presence.join', () => {
   it('입장 순서대로 참여자를 쌓는다', () => {
     const state = fold([join('sujin'), join('minho')]);
-    expect(state.participants).toEqual(['sujin', 'minho']);
+    expect(state.participants).toEqual([person('sujin'), person('minho')]);
   });
 
   it('같은 사람의 join이 두 번 와도 한 번만 센다', () => {
     const state = fold([join('sujin'), join('minho'), join('sujin')]);
-    expect(state.participants).toEqual(['sujin', 'minho']);
+    expect(state.participants).toEqual([person('sujin'), person('minho')]);
   });
 });
 
@@ -94,7 +109,7 @@ describe('applyFrame - presence.snapshot', () => {
   it('붙는 순간 받은 명단으로 목록을 채운다 (본인 포함)', () => {
     // 서버가 보내는 명단에는 본인이 들어 있다 — 자기 입장은 자기가 받지 않기 때문이다.
     const state = fold([snapshot('sujin', 'minho')]);
-    expect(state.participants).toEqual(['sujin', 'minho']);
+    expect(state.participants).toEqual([person('sujin'), person('minho')]);
   });
 
   it('재연결로 다시 오면 그 사이 놓친 입퇴장까지 한 번에 맞춘다', () => {
@@ -102,7 +117,7 @@ describe('applyFrame - presence.snapshot', () => {
       snapshot('sujin', 'minho'),
       snapshot('minho', 'jiwoo'),
     ]);
-    expect(state.participants).toEqual(['minho', 'jiwoo']);
+    expect(state.participants).toEqual([person('minho'), person('jiwoo')]);
   });
 
   it('명단 뒤에 도착한 입퇴장을 이어서 반영한다', () => {
@@ -111,23 +126,23 @@ describe('applyFrame - presence.snapshot', () => {
       join('jiwoo'),
       leave('sujin'),
     ]);
-    expect(state.participants).toEqual(['minho', 'jiwoo']);
+    expect(state.participants).toEqual([person('minho'), person('jiwoo')]);
   });
 });
 
 describe('applyFrame - presence.leave', () => {
   it('나간 사람을 목록에서 지운다', () => {
     const state = fold([join('sujin'), join('minho'), leave('sujin')]);
-    expect(state.participants).toEqual(['minho']);
+    expect(state.participants).toEqual([person('minho')]);
   });
 
   it('목록에 없는 사람의 퇴장은 아무것도 바꾸지 않는다', () => {
     // 스냅샷을 못 받아 존재를 모르던 사람의 퇴장이 도착할 수 있다(#26 코멘트).
     const state = fold([join('sujin'), leave('minho')]);
-    expect(state.participants).toEqual(['sujin']);
+    expect(state.participants).toEqual([person('sujin')]);
     // 흐름에도 남기지 않는다 — 목록에서 지울 사람이 없으면 알릴 사건도 없다.
     expect(state.messages).toEqual([
-      { id: 'm1', event: 'join', userId: 'sujin' },
+      { id: 'm1', event: 'join', participant: person('sujin') },
     ]);
   });
 
@@ -138,7 +153,7 @@ describe('applyFrame - presence.leave', () => {
       leave('sujin'),
       join('sujin'),
     ]);
-    expect(state.participants).toEqual(['minho', 'sujin']);
+    expect(state.participants).toEqual([person('minho'), person('sujin')]);
   });
 
   it('참여자만 건드리고 대화 메시지는 남긴다', () => {
@@ -161,16 +176,16 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
       leave('sujin'),
     ]);
     expect(state.messages).toEqual([
-      { id: 'm1', event: 'join', userId: 'sujin' },
+      { id: 'm1', event: 'join', participant: person('sujin') },
       {
         id: 'm2',
-        from: 'sujin',
+        from: person('sujin'),
         content: '안녕하세요',
         streaming: false,
         citations: [],
         restrictedResultsOmitted: false,
       },
-      { id: 'm3', event: 'leave', userId: 'sujin' },
+      { id: 'm3', event: 'leave', participant: person('sujin') },
     ]);
   });
 
@@ -179,7 +194,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
     // 프레임)을 택한 이유가 이것이다(#26).
     const state = fold([snapshot('sujin', 'minho')]);
     expect(state.messages).toEqual([]);
-    expect(state.participants).toEqual(['sujin', 'minho']);
+    expect(state.participants).toEqual([person('sujin'), person('minho')]);
   });
 
   it('이미 아는 사람의 join이 또 와도 줄을 늘리지 않는다', () => {
@@ -199,7 +214,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
     expect(state.messages[1]).toEqual({
       id: 'm2',
       event: 'join',
-      userId: 'minho',
+      participant: person('minho'),
     });
   });
 });
@@ -210,7 +225,7 @@ describe('applyFrame - chat.message', () => {
     expect(state.messages).toEqual([
       {
         id: 'm1',
-        from: 'sujin',
+        from: person('sujin'),
         content: '이 계약서 확인 부탁해요',
         streaming: false,
         citations: [],
@@ -260,7 +275,7 @@ describe('applyFrame - chat.answer', () => {
       answer('따르면 10%입니다.', 'done'),
     ]);
 
-    expect(chats(state).map((m) => m.from)).toEqual([null, 'minho']);
+    expect(chats(state).map((m) => m.from)).toEqual([null, person('minho')]);
     expect(state.messages[0]).toMatchObject({
       content: '제12조에 따르면 10%입니다.',
       streaming: false,
@@ -269,7 +284,7 @@ describe('applyFrame - chat.answer', () => {
 
   it('사람 메시지 뒤에 오면 그 메시지에 섞이지 않는다', () => {
     const state = fold([say('sujin', '@AI 요약해줘'), answer('요약', 'done')]);
-    expect(chats(state).map((m) => m.from)).toEqual(['sujin', null]);
+    expect(chats(state).map((m) => m.from)).toEqual([person('sujin'), null]);
   });
 
   it('토큰보다 먼저 온 citations를 답변에 누적하고 docId 중복은 최신 값으로 바꾼다', () => {
