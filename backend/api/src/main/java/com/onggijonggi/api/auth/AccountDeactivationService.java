@@ -24,9 +24,11 @@ import reactor.core.scheduler.Schedulers;
  * Class Name : AccountDeactivationService.java
  * Description : 계정 비활성화·재활성화(#132). V9__app_user_status.sql이 미뤄둔 "소유 대화 정리·참여
  *               회수 순서"를 여기서 다룬다. 참여 정리는 #20의 end_rsn 관례를 따르되 새 토큰
- *               (ACCOUNT_INACTIVE)을 쓴다. 그 사람이 보낸 대기 초대도 같은 사유로 거둔다(#127) —
- *               초대는 아직 참가가 아니라 참여 정리에 걸리지 않기 때문이다. — SELF_LEAVE·OWNER_REVOKED 어느 쪽도 실제 사유와 맞지
+ *               (ACCOUNT_INACTIVE)을 쓴다 — SELF_LEAVE·OWNER_REVOKED 어느 쪽도 실제 사유와 맞지
  *               않기 때문이다.
+ *
+ *               그 사람이 보낸 대기 초대도 같은 사유로 거둔다(#127) — 초대는 아직 참가가 아니라
+ *               참여 정리에 걸리지 않기 때문이다.
  *
  *               OWNER인 방은 #20의 "위임 전엔 나갈 수 없다" 규칙을 그대로 따른다 — 다른 ACTIVE
  *               MEMBER가 있으면 그 사람에게 위임하고, 없으면(OWNER 혼자) #131의 Thr.archive()로
