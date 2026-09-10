@@ -64,6 +64,13 @@ public class KeycloakAdminClient {
 	 * 안 뜨고 말지만, 실존 검증에서 오류를 "없는 계정"으로 뭉뚱그리면 Admin API가 잠깐 흔들릴 때
 	 * 정상 초대가 거부된다. 404만 "없음"(false)이고 나머지 오류는 그대로 전파해 호출부가 5xx로
 	 * 답하게 한다 — 초대자가 다시 시도할 수 있어야 한다.
+	 *
+	 * 404를 삼키는 자리가 유저 조회 <b>안쪽</b>인 것이 중요하다. 체인 전체에 걸면 토큰
+	 * 엔드포인트의 404(realm 오설정·Keycloak 라우팅 변경)까지 "계정 없음"으로 둔갑해, 위에서
+	 * 막으려던 바로 그 일이 벌어진다.
+	 *
+	 * 실존 판정은 본문이 아니라 상태 코드로 한다 — 응답 본문에 기대면 본문이 비어 오는 경우
+	 * 빈 Mono가 되어, 호출부의 flatMap이 아예 실행되지 않는다(초대 행 없이 204).
 	 */
 	public Mono<Boolean> exists(String subject) {
 		return adminToken()
@@ -71,9 +78,10 @@ public class KeycloakAdminClient {
 						.uri("/admin/realms/{realm}/users/{id}", realm, subject)
 						.headers(headers -> headers.setBearerAuth(token))
 						.retrieve()
-						.bodyToMono(UserRepresentation.class)
-						.map(user -> true))
-				.onErrorResume(WebClientResponseException.NotFound.class, ignored -> Mono.just(false));
+						.toBodilessEntity()
+						.thenReturn(true)
+						.onErrorResume(WebClientResponseException.NotFound.class,
+								ignored -> Mono.just(false)));
 	}
 
 	private Mono<Optional<String>> lookupUser(String subject, String token) {
