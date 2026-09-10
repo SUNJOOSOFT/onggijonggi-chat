@@ -218,6 +218,69 @@ class ThreadParticipantServiceTest {
 				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.REMOVED, "actor-sub", "Actor")));
 	}
 
+	/**
+	* OWNER가 남을 제거하면 그 사람이 다른 탭으로 이미 연결돼 있어도 끊어야 한다(이슈 #135).
+	* evict를 부르는지, 그리고 targetSubject(제거당한 쪽)를 넘기는지를 본다 — actorSubject가
+	* 아니다.
+	*/
+	@Test
+	void removeByOwnerEvictsTheRemovedSubjectsOpenConnections() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser targetAppUser = new AppUser("target-sub");
+		UUID targetUserId = targetAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(appUserRepository.findByKeycloakSubj("target-sub")).thenReturn(Optional.of(targetAppUser));
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, targetUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, targetUserId, ThrMbrRole.MEMBER, actorUserId)));
+		when(keycloakAdminClient.displayName("target-sub")).thenReturn(Mono.just(Optional.empty()));
+
+		StepVerifier.create(service.remove(threadId, actorUserId, "actor-sub", "target-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).evict(threadId, "target-sub");
+	}
+
+	/** 자진 탈퇴도 같은 이유로 자기 자신의 다른 탭 연결을 끊어야 한다(이슈 #135). */
+	@Test
+	void selfLeaveEvictsTheActorsOwnOpenConnections() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.MEMBER, actorUserId)));
+		when(keycloakAdminClient.displayName("actor-sub")).thenReturn(Mono.just(Optional.of("Actor")));
+
+		StepVerifier.create(service.remove(threadId, actorUserId, "actor-sub", "actor-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).evict(threadId, "actor-sub");
+	}
+
+	/**
+	* Keycloak 조회 실패로 알림은 삼켜지지만(위 inviteSucceedsEvenWhenDisplayNameLookupFails와 같은
+	* 원칙), evict는 보안에 관련된 동작이라 알림 성패와 무관하게 반드시 불려야 한다(이슈 #135).
+	*/
+	@Test
+	void removeEvictsEvenWhenDisplayNameLookupFails() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser targetAppUser = new AppUser("target-sub");
+		UUID targetUserId = targetAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(appUserRepository.findByKeycloakSubj("target-sub")).thenReturn(Optional.of(targetAppUser));
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, targetUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, targetUserId, ThrMbrRole.MEMBER, actorUserId)));
+		when(keycloakAdminClient.displayName("target-sub"))
+				.thenReturn(Mono.error(new RuntimeException("keycloak down")));
+
+		StepVerifier.create(service.remove(threadId, actorUserId, "actor-sub", "target-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).evict(threadId, "target-sub");
+	}
+
 	/** 위임이 성공하면 새 OWNER의 subject를 실어 통지한다(이슈 #129). */
 	@Test
 	void transferOwnerNotifiesTheRoomWithTheNewOwnerSubject() {

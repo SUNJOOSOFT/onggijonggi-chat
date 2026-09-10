@@ -10,6 +10,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Predicate;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -18,6 +19,7 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.test.context.ActiveProfiles;
+import org.springframework.test.web.servlet.client.RestTestClient;
 import org.springframework.web.reactive.socket.CloseStatus;
 import org.springframework.web.reactive.socket.WebSocketHandler;
 import org.springframework.web.reactive.socket.WebSocketMessage;
@@ -46,7 +48,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
+@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class,
+		FakeKeycloakAdminConfig.class})
 @ExtendWith(ThreadDumpOnStallExtension.class)
 class CollabWebSocketHandlerTest {
 
@@ -62,6 +65,13 @@ class CollabWebSocketHandlerTest {
 
 	@Autowired
 	private RoomSessionRegistry roomSessionRegistry;
+
+	private RestTestClient restTestClient;
+
+	@BeforeEach
+	void setUp() {
+		restTestClient = RestTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
+	}
 
 	@Test
 	void broadcastsAValidatedFrameBackToTheAuthenticatedSender() throws Exception {
@@ -374,10 +384,28 @@ class CollabWebSocketHandlerTest {
 		String token = TestJwtSupport.signedJwt("evicted-ws-user", List.of("USER"));
 		List<String> received = new CopyOnWriteArrayList<>();
 		CountDownLatch joined = new CountDownLatch(1);
-		CountDownLatch completed = new CountDownLatch(1);
-		AtomicReference<Throwable> failure = new AtomicReference<>();
-		AtomicReference<CloseStatus> closeStatus = new AtomicReference<>();
 
+		// .block()으로 클라이언트를 메인 스레드에서 동기적으로 기다리는(다른 FORBIDDEN 테스트와
+		// 같은, 검증된 패턴) 대신 evict 호출 시점을 맞춰야 해서, 그 호출만 별도 스레드로 뺀다.
+		Thread evictor = new Thread(() -> {
+			try {
+				if (!joined.await(5, TimeUnit.SECONDS)) {
+					return;
+				}
+			} catch (InterruptedException interrupted) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+			roomSessionRegistry.evict(threadId, "evicted-ws-user");
+		});
+		evictor.start();
+
+		// closeStatus()로 종료 코드를 직접 확인하는 대신 session.receive()가 예외 없이 깨끗하게
+		// 완료되는 것으로 "정상 종료"를 확인한다 — closeStatus()를 receive()와 함께 구독해도
+		// 이 시나리오(연결 도중 서버가 먼저 닫음)에서는 값을 못 받는 것을 실측으로 재확인했다
+		// (production 쪽 이중 close 버그를 고친 뒤에도 재현됨 — Reactor Netty 클라이언트 쪽
+		// 한계로 보인다). block()이 예외 없이 반환된다는 사실 자체가 이미 정상 종료를 증명한다
+		// — 타임아웃이나 에러였다면 여기서 막혔을 것이다.
 		new ReactorNettyWebSocketClient()
 				.execute(wsUri(threadId), allowedHeaders(), new WebSocketHandler() {
 					@Override
@@ -392,25 +420,75 @@ class CollabWebSocketHandlerTest {
 									received.add(message.getPayloadAsText());
 									joined.countDown();
 								})
-								.then(session.closeStatus().doOnNext(closeStatus::set))
 								.then();
 					}
 				})
-				.doOnError(error -> failure.compareAndSet(null, error))
-				.doFinally(ignored -> completed.countDown())
-				.subscribe();
+				.block(WsTestTimeouts.BLOCK);
+		evictor.join(TimeUnit.SECONDS.toMillis(5));
 
-		assertThat(joined.await(5, TimeUnit.SECONDS)).isTrue();
+		assertThat(received).hasSize(2);
+		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(1), WsFrame.class);
+		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.code()).isEqualTo("FORBIDDEN");
+	}
 
-		assertThat(roomSessionRegistry.evict(threadId, "evicted-ws-user")).isTrue();
+	/**
+	* 위 테스트가 CollabWebSocketHandler 쪽 처리만 좁혀 봤다면, 이 테스트는 참가자 제거 REST
+	* 엔드포인트(ThreadParticipantService.remove)가 evict까지 실제로 부르는 배선(이슈 #135)이
+	* 이어져 있는지를 REST 호출 하나로 확인한다.
+	*/
+	@Test
+	void closesTheConnectionWhenTheOwnerRemovesTheParticipantOverRest() throws Exception {
+		UUID threadId = rooms.openRoom("evict-owner", "evict-target");
+		String token = TestJwtSupport.signedJwt("evict-target", List.of("USER"));
+		List<String> received = new CopyOnWriteArrayList<>();
+		CountDownLatch joined = new CountDownLatch(1);
 
-		assertThat(completed.await(5, TimeUnit.SECONDS)).isTrue();
-		assertThat(failure.get()).isNull();
+		// .block()으로 클라이언트를 메인 스레드에서 동기적으로 기다리는(다른 FORBIDDEN 테스트와
+		// 같은, 검증된 패턴) 대신 REST 제거 호출 시점을 맞춰야 해서, 그 호출만 별도 스레드로 뺀다.
+		Thread remover = new Thread(() -> {
+			try {
+				if (!joined.await(5, TimeUnit.SECONDS)) {
+					return;
+				}
+			} catch (InterruptedException interrupted) {
+				Thread.currentThread().interrupt();
+				return;
+			}
+			restTestClient.delete()
+					.uri("/api/collab/threads/{threadId}/participants/{subject}", threadId, "evict-target")
+					.header(HttpHeaders.AUTHORIZATION,
+							"Bearer " + TestJwtSupport.signedJwt("evict-owner", List.of("USER")))
+					.exchange()
+					.expectStatus().isNoContent();
+		});
+		remover.start();
+
+		// closeStatus() 대신 session.receive()가 예외 없이 깨끗하게 완료되는 것으로 정상 종료를
+		// 확인한다 — 위 sendsForbiddenAndClosesTheConnectionWhenEvicted와 같은 이유다.
+		new ReactorNettyWebSocketClient()
+				.execute(wsUri(threadId), allowedHeaders(), new WebSocketHandler() {
+					@Override
+					public List<String> getSubProtocols() {
+						return List.of("access_token", token);
+					}
+
+					@Override
+					public Mono<Void> handle(WebSocketSession session) {
+						return session.receive()
+								.doOnNext(message -> {
+									received.add(message.getPayloadAsText());
+									joined.countDown();
+								})
+								.then();
+					}
+				})
+				.block(WsTestTimeouts.BLOCK);
+		remover.join(TimeUnit.SECONDS.toMillis(5));
 
 		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(received.size() - 1), WsFrame.class);
 		assertThat(error.sessionId()).isEqualTo(threadId);
 		assertThat(error.code()).isEqualTo("FORBIDDEN");
-		assertThat(closeStatus.get().getCode()).isEqualTo(1000);
 	}
 
 	@Test

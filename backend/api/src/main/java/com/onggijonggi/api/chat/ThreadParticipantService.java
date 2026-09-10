@@ -167,6 +167,11 @@ public class ThreadParticipantService {
 	* 그 조회가 권한 검사보다 먼저 실행돼 OWNER가 아닌 사람도 "이 subject가 가입한 적 있는지"를
 	* 403/404 차이로 알아낼 수 있다(invite·transferOwner는 이미 권한 검사가 먼저였는데 이 메서드만
 	* 순서가 반대였다). actorSubject는 호출자가 이미 아는 자기 값이라 이 비교에 DB 조회가 없다.
+	*
+	* DB 반영·통지 뒤 evict를 부르는 것은 자진 탈퇴·OWNER 제거 둘 다에 적용한다 — 어느 쪽이든
+	* targetSubject의 ACTIVE 참가 행이 끝났다는 사실은 같고, 다른 탭으로 이미 연결돼 있으면 그
+	* 연결도 같이 끊어야 한다(이슈 #135). evict가 아무 연결도 못 찾아도(애초에 접속한 적 없음)
+	* 조용히 false만 돌려주므로 별도 분기가 필요 없다.
 	* @param actorSubject 호출자 자신의 Keycloak subject(자진 탈퇴 판정용, 조회하지 않는다)
 	*/
 	public Mono<Void> remove(UUID threadId, UUID actorUserId, String actorSubject, String targetSubject) {
@@ -187,7 +192,8 @@ public class ThreadParticipantService {
 				})
 				.subscribeOn(Schedulers.boundedElastic())
 				.then(Mono.defer(
-						() -> notifyParticipantChanged(threadId, ParticipantChangeAction.REMOVED, targetSubject)));
+						() -> notifyParticipantChanged(threadId, ParticipantChangeAction.REMOVED, targetSubject)))
+				.doOnSuccess(ignored -> roomSessionRegistry.evict(threadId, targetSubject));
 	}
 
 	/**

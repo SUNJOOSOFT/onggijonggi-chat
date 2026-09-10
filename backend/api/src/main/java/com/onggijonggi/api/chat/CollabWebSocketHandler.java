@@ -44,6 +44,11 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 
 	private static final CloseStatus SLOW_CONSUMER = new CloseStatus(1011, "outbound buffer overflow");
 
+	/** evict(이슈 #135)로 FORBIDDEN 프레임을 보낸 뒤, session.send()가 그 프레임을 실제로 flush할
+	 * 시간을 벌어주고서야 닫는다 — evictionNotice가 완료된 즉시 닫으면, 그 완료 신호가 프레임이
+	 * 실제로 네트워크에 나가는 것보다 먼저 도착할 여지가 있다. */
+	private static final Duration EVICTED_FRAME_FLUSH_GRACE_PERIOD = Duration.ofMillis(200);
+
 	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join",
 			"presence.leave", "presence.snapshot", "error");
 
@@ -156,21 +161,28 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 
 		// evict(이슈 #135)로 강제 종료될 때도 FORBIDDEN 프레임을 보낸 뒤 닫는다 — 연결 거부
 		// 시점(rejectRoomAccess)과 같은 사유 전달 방식이다. 별도 Mono로 session.send()를 한 번 더
-		// 부르지 않고 이 merge 안에 프레임 하나로 끼워 넣는 이유는, WebSocketSession.send()는
-		// 세션당 한 번만 구독할 수 있어(Reactor Netty 제약) messageLoop의 send(outbound)와 동시에
-		// 두 번째 send()를 부르면 두 스트림이 같은 커넥션에 충돌한다. takeUntil은 이 evictedFrame이
-		// 나간 바로 뒤에 스트림을 끝내므로(reactor의 inclusive 종료), 프레임이 확실히 나간 다음에만
-		// messageLoop의 기존 session.close(NORMAL) 경로를 탄다.
+		// 부르지 않고 기존 outbound 스트림에 이어 붙이는 이유는, WebSocketSession.send()는 세션당
+		// 한 번만 구독할 수 있어(Reactor Netty 제약) messageLoop의 send(outbound)와 동시에 두 번째
+		// send()를 부르면 두 스트림이 같은 커넥션에 충돌하기 때문이다.
+		//
+		// evictedFrame을 내보내려고 roomFrames·inboundResponses를 takeUntilOther로 즉시 취소하는
+		// 방식을 먼저 시도했으나, 그러면 session.receive()(inboundResponses가 감싼 것)도 함께
+		// 취소된다 — 그 취소가 Reactor Netty 채널 자체를 즉시 끊어버려, evictedFrame이 실제로
+		// flush되기 전에 연결이 끊기는 경합이 실제로 재현됐다(클라이언트 closeStatus가 정상 종료
+		// 1000이 아니라 비정상 종료 1005로 관측됨). 그래서 evictionNotice를 merge의 세 번째
+		// 소스로 그냥 얹어 다른 프레임과 똑같이 자연스럽게 흘려보내고(취소 없음), 실제 종료는
+		// 별도 Mono(evictedClose)가 맡는다 — evictionNotice가 끝난 뒤 짧게 기다려 session.send()가
+		// 그 프레임을 flush할 시간을 준 다음에야 close를 부른다.
 		ErrorFrame evictedFrame = new ErrorFrame(threadId, "FORBIDDEN", "참여자 명단에서 제외되어 연결이 종료됩니다.",
 				newTraceId());
 		Flux<WsFrame> evictionNotice = membership.kicked()
 				.doOnSuccess(ignored -> log.debug(
 						"Closing evicted WebSocket connection threadId={} connectionId={}", threadId, connectionId))
-				.thenMany(Flux.just(evictedFrame));
+				.thenMany(Flux.<WsFrame>just(evictedFrame))
+				.cache();
 
 		Flux<WebSocketMessage> outbound = Flux.merge(roomFrames, inboundResponses, evictionNotice)
 				.takeUntilOther(inboundDone.asMono())
-				.takeUntil(frame -> frame == evictedFrame)
 				.map(frame -> session.textMessage(serialize(frame)));
 
 		Mono<Void> messageLoop = session.send(outbound).then(session.close(CloseStatus.NORMAL));
@@ -181,8 +193,16 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 				.doOnSuccess(ignored -> log.warn(
 						"Closing slow WebSocket consumer threadId={} connectionId={}", threadId, connectionId))
 				.then(session.close(SLOW_CONSUMER));
+		// session.close(...)를 여기 직접 쓰면 자바가 .then()의 인자를 메서드 호출 시점에 바로
+		// 평가해, evict가 일어나기도 전에(이 메서드가 실행되는 즉시) 닫아버린다 — 마치
+		// ThreadParticipantService.notifyParticipantChanged의 Mono.defer 주석이 경고하는 것과
+		// 같은 함정이다. Mono.defer로 감싸 evictedClose가 실제로 구독될 때(즉 evict 이후)에만
+		// close()를 부르게 한다.
+		Mono<Void> evictedClose = evictionNotice.then()
+				.then(Mono.delay(EVICTED_FRAME_FLUSH_GRACE_PERIOD))
+				.then(Mono.defer(() -> session.close(CloseStatus.NORMAL)));
 
-		return Mono.firstWithSignal(messageLoop, tokenExpiry, slowConsumer)
+		return Mono.firstWithSignal(messageLoop, tokenExpiry, slowConsumer, evictedClose)
 				.doFinally(ignored -> roomSessionRegistry.leave(threadId, connectionId, actor)
 						.ifPresent(generation -> collabMessageDispatcher.closeGeneration(threadId, generation)));
 	}
