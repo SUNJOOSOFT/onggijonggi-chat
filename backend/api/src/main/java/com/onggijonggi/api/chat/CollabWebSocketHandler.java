@@ -154,8 +154,23 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 				.concatMap(message -> handleInbound(message, threadId, userId, actor, membership.generation()))
 				.doFinally(ignored -> inboundDone.tryEmitEmpty());
 
-		Flux<WebSocketMessage> outbound = Flux.merge(roomFrames, inboundResponses)
+		// evict(이슈 #135)로 강제 종료될 때도 FORBIDDEN 프레임을 보낸 뒤 닫는다 — 연결 거부
+		// 시점(rejectRoomAccess)과 같은 사유 전달 방식이다. 별도 Mono로 session.send()를 한 번 더
+		// 부르지 않고 이 merge 안에 프레임 하나로 끼워 넣는 이유는, WebSocketSession.send()는
+		// 세션당 한 번만 구독할 수 있어(Reactor Netty 제약) messageLoop의 send(outbound)와 동시에
+		// 두 번째 send()를 부르면 두 스트림이 같은 커넥션에 충돌한다. takeUntil은 이 evictedFrame이
+		// 나간 바로 뒤에 스트림을 끝내므로(reactor의 inclusive 종료), 프레임이 확실히 나간 다음에만
+		// messageLoop의 기존 session.close(NORMAL) 경로를 탄다.
+		ErrorFrame evictedFrame = new ErrorFrame(threadId, "FORBIDDEN", "참여자 명단에서 제외되어 연결이 종료됩니다.",
+				newTraceId());
+		Flux<WsFrame> evictionNotice = membership.kicked()
+				.doOnSuccess(ignored -> log.debug(
+						"Closing evicted WebSocket connection threadId={} connectionId={}", threadId, connectionId))
+				.thenMany(Flux.just(evictedFrame));
+
+		Flux<WebSocketMessage> outbound = Flux.merge(roomFrames, inboundResponses, evictionNotice)
 				.takeUntilOther(inboundDone.asMono())
+				.takeUntil(frame -> frame == evictedFrame)
 				.map(frame -> session.textMessage(serialize(frame)));
 
 		Mono<Void> messageLoop = session.send(outbound).then(session.close(CloseStatus.NORMAL));

@@ -60,6 +60,9 @@ class CollabWebSocketHandlerTest {
 	@Autowired
 	private CollabRoomFixture.CollabRooms rooms;
 
+	@Autowired
+	private RoomSessionRegistry roomSessionRegistry;
+
 	@Test
 	void broadcastsAValidatedFrameBackToTheAuthenticatedSender() throws Exception {
 		UUID threadId = rooms.openRoom("collab-ws-user");
@@ -354,6 +357,60 @@ class CollabWebSocketHandlerTest {
 			outbound.tryEmitComplete();
 			member.dispose();
 		}
+	}
+
+	/**
+	* RoomSessionRegistry.evict(이슈 #135)가 보낸 kicked 신호로 연결이 실제로 끊기는지 확인한다 —
+	* 참가자 제거 흐름(ThreadParticipantService)이 evict를 부르는 배선은 별도라, 여기서는 evict를
+	* 직접 호출해 CollabWebSocketHandler 쪽 처리(FORBIDDEN 프레임 전송 + 정상 종료)만 검증한다.
+	*
+	* evict 호출 시점은 참여자 스냅샷(첫 프레임) 수신을 기다려 맞춘다 — 클라이언트가 그 프레임을
+	* 받았다는 것 자체가 서버의 registry.join()이 이미 끝났다는 증거라, evict가 "아직 등록 안 된
+	* 연결"을 조용히 못 찾는 경합이 생기지 않는다.
+	*/
+	@Test
+	void sendsForbiddenAndClosesTheConnectionWhenEvicted() throws Exception {
+		UUID threadId = rooms.openRoom("evicted-ws-user");
+		String token = TestJwtSupport.signedJwt("evicted-ws-user", List.of("USER"));
+		List<String> received = new CopyOnWriteArrayList<>();
+		CountDownLatch joined = new CountDownLatch(1);
+		CountDownLatch completed = new CountDownLatch(1);
+		AtomicReference<Throwable> failure = new AtomicReference<>();
+		AtomicReference<CloseStatus> closeStatus = new AtomicReference<>();
+
+		new ReactorNettyWebSocketClient()
+				.execute(wsUri(threadId), allowedHeaders(), new WebSocketHandler() {
+					@Override
+					public List<String> getSubProtocols() {
+						return List.of("access_token", token);
+					}
+
+					@Override
+					public Mono<Void> handle(WebSocketSession session) {
+						return session.receive()
+								.doOnNext(message -> {
+									received.add(message.getPayloadAsText());
+									joined.countDown();
+								})
+								.then(session.closeStatus().doOnNext(closeStatus::set))
+								.then();
+					}
+				})
+				.doOnError(error -> failure.compareAndSet(null, error))
+				.doFinally(ignored -> completed.countDown())
+				.subscribe();
+
+		assertThat(joined.await(5, TimeUnit.SECONDS)).isTrue();
+
+		assertThat(roomSessionRegistry.evict(threadId, "evicted-ws-user")).isTrue();
+
+		assertThat(completed.await(5, TimeUnit.SECONDS)).isTrue();
+		assertThat(failure.get()).isNull();
+
+		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(received.size() - 1), WsFrame.class);
+		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.code()).isEqualTo("FORBIDDEN");
+		assertThat(closeStatus.get().getCode()).isEqualTo(1000);
 	}
 
 	@Test
