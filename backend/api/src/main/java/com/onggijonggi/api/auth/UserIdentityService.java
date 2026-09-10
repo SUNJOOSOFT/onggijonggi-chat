@@ -1,5 +1,6 @@
 package com.onggijonggi.api.auth;
 
+import com.onggijonggi.api.chat.InvitationAcceptanceService;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
 import java.util.UUID;
@@ -12,16 +13,20 @@ import reactor.core.scheduler.Schedulers;
  * Class Name : UserIdentityService.java
  * Description : Keycloak JWT subject를 app_user 행으로 지연(JIT) 프로비저닝한다. 회원가입 시점이 아니라
  *               첫 채팅 요청 시점에 조회하고 없으면 그 자리에서 생성한다 — Keycloak을 별도로 연동할 필요
- *               없이 매 요청마다 재확인하므로 실패해도 다음 요청에서 자연히 복구된다. JPA(블로킹)를
+ *               없이 매 요청마다 재확인하므로 실패해도 다음 요청에서 자연히 복구된다. 행을 새로
+ *               만든 순간이 곧 첫 로그인이라, 그 자리에서 대기 초대를 참가로 전환한다(이슈 #127). JPA(블로킹)를
  *               WebFlux 요청 스레드에서 직접 부르지 않도록 boundedElastic으로 오프로딩한다.
  */
 @Service
 public class UserIdentityService {
 
 	private final AppUserRepository appUserRepository;
+	private final InvitationAcceptanceService invitationAcceptanceService;
 
-	public UserIdentityService(AppUserRepository appUserRepository) {
+	public UserIdentityService(AppUserRepository appUserRepository,
+			InvitationAcceptanceService invitationAcceptanceService) {
 		this.appUserRepository = appUserRepository;
+		this.invitationAcceptanceService = invitationAcceptanceService;
 	}
 
 	/**
@@ -48,12 +53,31 @@ public class UserIdentityService {
 	* @return 새로 만들었거나, 경합에서 진 경우 이긴 쪽이 만든 행의 id
 	*/
 	private UUID createOrFetchExisting(String keycloakSubj) {
+		UUID createdId = createOrNull(keycloakSubj);
+		if (createdId == null) {
+			return appUserRepository.findByKeycloakSubj(keycloakSubj)
+					.map(AppUser::getId)
+					.orElseThrow(() -> new IllegalStateException(
+							"keycloak_subj unique 위반인데 그 행이 없다: " + keycloakSubj));
+		}
+		// 여기가 이 사람의 첫 로그인이다 — 그 앞으로 온 대기 초대를 참가로 바꾼다(이슈 #127).
+		// 경합에서 진 쪽(createdId == null)은 이미 이긴 쪽이 전환했으므로 다시 하지 않는다.
+		invitationAcceptanceService.acceptPendingBlocking(createdId, keycloakSubj);
+		return createdId;
+	}
+
+	/**
+	* app_user 행 생성만 시도한다. try가 save() 한 줄만 감싸는 것이 중요하다 — 전환까지 감싸면
+	* 초대 전환에서 올라온 무결성 예외를 "app_user 경합"으로 오판하고, 뒤이은 재조회가 방금 만든
+	* 행을 찾아내 <b>정상 반환</b>해 버린다. 전환은 첫 로그인 한 번뿐이라 재시도도 없어, 그 초대는
+	* 아무 흔적 없이 영구히 대기 상태로 남는다.
+	* @return 새로 만든 행의 id, 경합에서 졌으면 null
+	*/
+	private UUID createOrNull(String keycloakSubj) {
 		try {
 			return appUserRepository.save(new AppUser(keycloakSubj)).getId();
 		} catch (DataIntegrityViolationException raced) {
-			return appUserRepository.findByKeycloakSubj(keycloakSubj)
-					.map(AppUser::getId)
-					.orElseThrow(() -> raced);
+			return null;
 		}
 	}
 

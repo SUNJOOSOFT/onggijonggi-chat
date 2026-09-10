@@ -28,7 +28,8 @@ import org.springframework.test.web.servlet.client.RestTestClient;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
+@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class,
+		FakeKeycloakAdminConfig.class})
 class ThreadParticipantControllerTest {
 
 	@LocalServerPort
@@ -105,12 +106,29 @@ class ThreadParticipantControllerTest {
 				.expectBody(String.class).value(body -> assertThat(body).contains("\"code\":\"NOT_FOUND\""));
 	}
 
-	/** 한 번도 로그인하지 않은 subject는 초대할 수 없다 — 그 자리에서 계정을 만들지 않는다. */
+	/**
+	* 한 번도 로그인하지 않은 사람도 초대할 수 있다(이슈 #127). app_user 행을 그 자리에서 만들지는
+	* 않고 대기 초대로 남긴다 — 오타로 만든 유령 계정이 영구히 남지 않게 하려는 것이다.
+	*/
 	@Test
-	void invitingAnUnknownSubjectIsNotFound() {
-		UUID threadId = rooms.openRoom("unknown-owner");
+	void invitingSomeoneWhoNeverLoggedInLeavesAPendingInvitation() {
+		UUID threadId = rooms.openRoom("pending-owner");
 
-		invite(threadId, "unknown-owner", "never-logged-in").expectStatus().isNotFound();
+		invite(threadId, "pending-owner", "never-logged-in").expectStatus().isNoContent();
+
+		assertThat(rooms.pendingInvitations(threadId)).containsExactly("never-logged-in");
+		// 초대만으로 계정이 생기지는 않는다.
+		assertThat(rooms.userExists("never-logged-in")).isFalse();
+	}
+
+	/** Keycloak에 없는 subject는 초대할 수 없다 — 오타가 영원히 발동하지 않는 초대로 남는 것을 막는다. */
+	@Test
+	void invitingASubjectMissingFromKeycloakIsNotFound() {
+		UUID threadId = rooms.openRoom("ghost-check-owner");
+
+		invite(threadId, "ghost-check-owner", "ghost-nobody").expectStatus().isNotFound();
+
+		assertThat(rooms.pendingInvitations(threadId)).isEmpty();
 	}
 
 	@Test

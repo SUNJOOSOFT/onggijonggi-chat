@@ -8,10 +8,13 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import com.onggijonggi.common.chat.domain.ThrInv;
+import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
@@ -52,12 +55,18 @@ class ThreadParticipantServiceTest {
 	@Mock
 	private KeycloakAdminClient keycloakAdminClient;
 
+	@Mock
+	private ThrInvRepository thrInvRepository;
+
+	@Mock
+	private InvitationAcceptanceService invitationAcceptanceService;
+
 	private ThreadParticipantService service;
 
 	@BeforeEach
 	void setUp() {
 		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository,
-				roomSessionRegistry, keycloakAdminClient);
+				roomSessionRegistry, keycloakAdminClient, thrInvRepository, invitationAcceptanceService);
 	}
 
 	/**
@@ -257,6 +266,55 @@ class ThreadParticipantServiceTest {
 		StepVerifier.create(service.invite(threadId, actorUserId, "invitee-sub")).verifyComplete();
 
 		verify(roomSessionRegistry, never()).notifyIfListening(any(), any());
+	}
+
+	/**
+	* 대상이 초대 처리 도중에 첫 로그인을 마친 경우다. 첫 조회는 미스라 대기 초대로 가지만, 그
+	* 사이에 app_user 행이 생기면 전환을 도는 쪽(첫 로그인 경로)은 아직 커밋되지 않은 우리 초대를
+	* 보지 못한다 — 초대 행을 남긴 뒤 재확인해 우리가 전환해야 한다. 재확인이 없으면 그 초대는
+	* 아무 오류 없이 영구히 대기한다.
+	*/
+	@Test
+	void inviteConvertsThePendingRowWhenTheInviteeLoggedInMeanwhile() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser invitee = new AppUser("late-sub");
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		// 첫 조회는 미스, 재확인에서는 방금 만들어진 행이 보인다.
+		when(appUserRepository.findByKeycloakSubj("late-sub"))
+				.thenReturn(Optional.empty(), Optional.of(invitee));
+		when(keycloakAdminClient.exists("late-sub")).thenReturn(Mono.just(true));
+		ThrInv pending = new ThrInv(threadId, "late-sub", actorUserId);
+		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "late-sub", ThrInvStatus.PENDING))
+				.thenReturn(Optional.empty(), Optional.of(pending));
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "late-sub")).verifyComplete();
+
+		verify(thrInvRepository).save(any(ThrInv.class));
+		verify(invitationAcceptanceService).acceptOneBlocking(pending.getId(), invitee.getId());
+	}
+
+	/** 대상이 아직 로그인하지 않았으면 전환을 돌리지 않는다 — 대기 초대로만 남는다. */
+	@Test
+	void inviteLeavesTheRowPendingWhenTheInviteeStillHasNoAccount() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("never-sub")).thenReturn(Optional.empty());
+		when(keycloakAdminClient.exists("never-sub")).thenReturn(Mono.just(true));
+		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "never-sub", ThrInvStatus.PENDING))
+				.thenReturn(Optional.empty());
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "never-sub")).verifyComplete();
+
+		verify(thrInvRepository).save(any(ThrInv.class));
+		verify(invitationAcceptanceService, never()).acceptOneBlocking(any(), any());
 	}
 
 }

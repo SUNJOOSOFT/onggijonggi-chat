@@ -1,10 +1,13 @@
 package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import com.onggijonggi.common.chat.domain.ThrInv;
+import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
@@ -12,6 +15,7 @@ import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.slf4j.Logger;
@@ -49,15 +53,20 @@ public class ThreadParticipantService {
 	private final AppUserRepository appUserRepository;
 	private final RoomSessionRegistry roomSessionRegistry;
 	private final KeycloakAdminClient keycloakAdminClient;
+	private final ThrInvRepository thrInvRepository;
+	private final InvitationAcceptanceService invitationAcceptanceService;
 
 	public ThreadParticipantService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository,
 			AppUserRepository appUserRepository, RoomSessionRegistry roomSessionRegistry,
-			KeycloakAdminClient keycloakAdminClient) {
+			KeycloakAdminClient keycloakAdminClient, ThrInvRepository thrInvRepository,
+			InvitationAcceptanceService invitationAcceptanceService) {
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
 		this.appUserRepository = appUserRepository;
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.keycloakAdminClient = keycloakAdminClient;
+		this.thrInvRepository = thrInvRepository;
+		this.invitationAcceptanceService = invitationAcceptanceService;
 	}
 
 	/** 참가자면 누구나 볼 수 있다 — 자기 방 구성원을 읽는 것뿐이라 OWNER로 좁히지 않는다. */
@@ -79,7 +88,17 @@ public class ThreadParticipantService {
 		return Mono.fromCallable(() -> {
 					requireOwnerRole(requireActiveParticipant(threadId, actorUserId));
 					requireWritableThread(threadId);
-					UUID inviteeUserId = resolveUserId(inviteeSubject);
+					return appUserRepository.findByKeycloakSubj(inviteeSubject).map(AppUser::getId);
+				})
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(invitee -> invitee
+						.map(userId -> joinNow(threadId, actorUserId, userId, inviteeSubject))
+						.orElseGet(() -> inviteForFirstLogin(threadId, actorUserId, inviteeSubject)));
+	}
+
+	/** 이미 로그인한 적 있는 사람은 지금처럼 곧바로 참가시킨다 — 기존 동작 그대로다(이슈 #127 결정). */
+	private Mono<Void> joinNow(UUID threadId, UUID actorUserId, UUID inviteeUserId, String inviteeSubject) {
+		return Mono.fromCallable(() -> {
 					if (thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId,
 							ThrMbrStatus.ACTIVE)) {
 						return false;
@@ -91,6 +110,53 @@ public class ThreadParticipantService {
 				.flatMap(changed -> changed
 						? notifyParticipantChanged(threadId, ParticipantChangeAction.INVITED, inviteeSubject)
 						: Mono.<Void>empty());
+	}
+
+	/**
+	* 아직 로그인한 적 없는 사람은 대기 초대로 남겨, 그 사람의 첫 로그인 때 참가로 전환한다(이슈 #127).
+	*
+	* Keycloak에 실재하는 계정인지 먼저 확인한다. 확인 없이 받아주면 오타 하나가 영원히 발동하지 않는
+	* 초대로 남는다. exists()는 404만 "없음"으로 보고 나머지 오류는 전파하므로, Admin API 장애가
+	* 정상 초대를 조용히 거부하는 일은 없다.
+	*/
+	private Mono<Void> inviteForFirstLogin(UUID threadId, UUID actorUserId, String inviteeSubject) {
+		return keycloakAdminClient.exists(inviteeSubject)
+				.flatMap(exists -> exists
+						? savePendingInvitation(threadId, actorUserId, inviteeSubject)
+						: Mono.error(notParticipant()));
+	}
+
+	private Mono<Void> savePendingInvitation(UUID threadId, UUID actorUserId, String inviteeSubject) {
+		return Mono.<Void>fromCallable(() -> {
+					if (thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject,
+							ThrInvStatus.PENDING).isEmpty()) {
+						saveIgnoringDuplicate(new ThrInv(threadId, inviteeSubject, actorUserId));
+					}
+					acceptIfAlreadyLoggedIn(threadId, inviteeSubject);
+					return null;
+				})
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	* 초대 행을 남긴 <b>뒤에</b> 대상의 app_user 행을 한 번 더 본다. 위쪽 findByKeycloakSubj가
+	* 미스였는데 그 사이에 대상이 첫 로그인을 마쳤을 수 있고, 그 창은 좁지 않다 — 두 지점 사이에
+	* exists()의 Keycloak HTTP 왕복이 그대로 들어간다.
+	*
+	* 전환은 app_user 행을 새로 만든 순간에만 도는데, 그쪽이 초대 테이블을 훑을 때 우리 초대 행이
+	* 아직 커밋되지 않았다면 그쪽도 우리도 전환하지 않는다 — 전환 시도는 첫 로그인 한 번뿐이라
+	* 그 초대는 영구히 대기한다. 각자 자기 쓰기를 커밋한 뒤에 상대를 보므로, 이 재확인이 있으면
+	* 적어도 한쪽은 상대를 본다.
+	*/
+	private void acceptIfAlreadyLoggedIn(UUID threadId, String inviteeSubject) {
+		Optional<UUID> inviteeUserId = appUserRepository.findByKeycloakSubj(inviteeSubject)
+				.map(AppUser::getId);
+		if (inviteeUserId.isEmpty()) {
+			return;
+		}
+		thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject, ThrInvStatus.PENDING)
+				.ifPresent(invitation -> invitationAcceptanceService.acceptOneBlocking(
+						invitation.getId(), inviteeUserId.get()));
 	}
 
 	/**
@@ -214,6 +280,15 @@ public class ThreadParticipantService {
 			thrMbrRepository.save(member);
 		} catch (DataIntegrityViolationException raced) {
 			// 이긴 쪽이 만든 활성 참가 행이 이미 있으므로 그대로 성공으로 둔다.
+		}
+	}
+
+	/** 대기 중 초대 부분 유니크 위반도 같은 이유로 성공으로 둔다(ux_thr_inv_pending). */
+	private void saveIgnoringDuplicate(ThrInv invitation) {
+		try {
+			thrInvRepository.save(invitation);
+		} catch (DataIntegrityViolationException raced) {
+			// 이긴 쪽이 만든 대기 초대가 이미 있다.
 		}
 	}
 

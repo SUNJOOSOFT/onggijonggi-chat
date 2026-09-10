@@ -2,12 +2,17 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.UserIdentityService;
 import com.onggijonggi.common.chat.domain.Thr;
+import com.onggijonggi.common.chat.domain.ThrInv;
+import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Comparator;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.boot.test.context.TestConfiguration;
@@ -27,8 +32,10 @@ public class CollabRoomFixture {
 
 	@Bean
 	CollabRooms collabRooms(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository,
-			UserIdentityService userIdentityService) {
-		return new CollabRooms(thrRepository, thrMbrRepository, userIdentityService);
+			UserIdentityService userIdentityService, ThrInvRepository thrInvRepository,
+			AppUserRepository appUserRepository) {
+		return new CollabRooms(thrRepository, thrMbrRepository, userIdentityService, thrInvRepository,
+				appUserRepository);
 	}
 
 	public static final class CollabRooms {
@@ -36,12 +43,39 @@ public class CollabRoomFixture {
 		private final ThrRepository thrRepository;
 		private final ThrMbrRepository thrMbrRepository;
 		private final UserIdentityService userIdentityService;
+		private final ThrInvRepository thrInvRepository;
+		private final AppUserRepository appUserRepository;
 
 		CollabRooms(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository,
-				UserIdentityService userIdentityService) {
+				UserIdentityService userIdentityService, ThrInvRepository thrInvRepository,
+				AppUserRepository appUserRepository) {
 			this.thrRepository = thrRepository;
 			this.thrMbrRepository = thrMbrRepository;
 			this.userIdentityService = userIdentityService;
+			this.thrInvRepository = thrInvRepository;
+			this.appUserRepository = appUserRepository;
+		}
+
+		/** 그 방의 대기 중 초대 대상 subject들(이슈 #127). */
+		public List<String> pendingInvitations(UUID threadId) {
+			return thrInvRepository.findAll().stream()
+					.filter(invitation -> invitation.getThrId().equals(threadId)
+							&& invitation.getStatus() == ThrInvStatus.PENDING)
+					.map(ThrInv::getSubj)
+					.toList();
+		}
+
+		/** app_user 행이 생겼는지 — 초대만으로는 생기지 않아야 한다. */
+		public boolean userExists(String subject) {
+			return appUserRepository.findByKeycloakSubj(subject).isPresent();
+		}
+
+		/** 초대가 어떻게 끝났는지 확인할 때 쓴다(수락·거둠). */
+		public Optional<ThrInv> lastInvitation(UUID threadId, String subject) {
+			return thrInvRepository.findAll().stream()
+					.filter(invitation -> invitation.getThrId().equals(threadId)
+							&& invitation.getSubj().equals(subject))
+					.max(Comparator.comparing(ThrInv::getCreatedAt));
 		}
 
 		public UUID openRoom(String... subjects) {

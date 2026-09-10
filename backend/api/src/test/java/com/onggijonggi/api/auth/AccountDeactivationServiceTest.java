@@ -7,9 +7,12 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.common.chat.domain.Thr;
+import com.onggijonggi.common.chat.domain.ThrInv;
+import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
@@ -44,11 +47,15 @@ class AccountDeactivationServiceTest {
 	@Mock
 	private ThrRepository thrRepository;
 
+	@Mock
+	private ThrInvRepository thrInvRepository;
+
 	private AccountDeactivationService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new AccountDeactivationService(appUserRepository, thrMbrRepository, thrRepository);
+		service = new AccountDeactivationService(appUserRepository, thrMbrRepository, thrRepository,
+				thrInvRepository);
 	}
 
 	@Test
@@ -67,6 +74,30 @@ class AccountDeactivationServiceTest {
 		assertThat(user.getStatus()).isEqualTo(AppUserStatus.INACTIVE);
 		verify(thrMbrRepository).save(membership);
 		verify(appUserRepository).save(user);
+	}
+
+	/**
+	* 초대는 아직 참가가 아니라 참여 정리(findByUserIdAndStatus)에 걸리지 않는다. 따로 거두지
+	* 않으면 초대자가 떠난 뒤에도 대상이 로그인하는 순간 방에 들어온다(이슈 #127).
+	*/
+	@Test
+	void deactivateRevokesInvitationsTheUserHadSent() {
+		AppUser inviter = new AppUser("inviter-sub");
+		ThrInv sent = new ThrInv(UUID.randomUUID(), "never-logged-in", inviter.getId());
+
+		when(appUserRepository.findById(inviter.getId())).thenReturn(Optional.of(inviter));
+		when(thrMbrRepository.findByUserIdAndStatus(inviter.getId(), ThrMbrStatus.ACTIVE))
+				.thenReturn(List.of());
+		when(thrInvRepository.findByCreatedByUserIdAndStatus(inviter.getId(), ThrInvStatus.PENDING))
+				.thenReturn(List.of(sent));
+
+		StepVerifier.create(service.deactivate(inviter.getId())).verifyComplete();
+
+		assertThat(sent.getStatus()).isEqualTo(ThrInvStatus.REVOKED);
+		// 참여 정리와 같은 사유 토큰을 쓴다.
+		assertThat(sent.getEndRsn()).isEqualTo("ACCOUNT_INACTIVE");
+		// 행을 지우지 않는다 — 누가 누구를 초대했었는지가 남아야 한다.
+		verify(thrInvRepository).save(sent);
 	}
 
 	/**

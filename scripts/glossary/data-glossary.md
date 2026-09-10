@@ -43,6 +43,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `inactive` | `inactive` | 비활성 | 예외 | 관용 유지 — 알고리즘 결과 `inc`는 increment·include와 혼동. `inactive_at` 대칭, 기존 `created`/`updated`/`deleted`/`locked`/`archived`와 동일 패턴 |
 | `indexed` | `indexed` | 색인됨 | 예외 | 관용 — `indexed_at` 대칭 |
 | `idx` | `indexing` | 색인 실행 | 예외 | 관용어 — 알고리즘은 `ind`로 `indexed`와 충돌 |
+| `inv` | `invitation` | 초대 | 알고리즘 | - |
 | `json` | `json` | JSON | 알고리즘 | - |
 | `key` | `key` | 키 | 알고리즘 | - |
 | `keycloak` | `keycloak` | - | 예외 | 고유명사 — 축약하지 않음 |
