@@ -33,6 +33,7 @@ import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -53,6 +54,9 @@ import reactor.core.scheduler.Schedulers;
  */
 @RestController
 public class CollabThreadController {
+
+	/** 후보 검색 최소 글자 수. 한 글자로는 realm을 통째로 훑는 꼴이라 서버에서 막는다(#172). */
+	private static final int CANDIDATE_QUERY_MIN = 2;
 
 	private final CurrentActorProvider currentActorProvider;
 	private final ThrRepository thrRepository;
@@ -158,6 +162,33 @@ public class CollabThreadController {
 			@Valid @RequestBody ParticipantSubjectRequest request) {
 		return actorUserId()
 				.flatMap(userId -> threadParticipantService.invite(threadId, userId, request.subject()));
+	}
+
+	/**
+	* 초대할 사람을 이름으로 찾는다(이슈 #172). 초대와 같은 인가(OWNER)를 쓴다 — 초대할 수 없는
+	* 사람에게 검색을 열면 계정 목록만 노출된다.
+	*
+	* 검색어가 너무 짧으면 realm을 통째로 훑는 꼴이라 여기서 막고 빈 목록으로 답한다. 오류가
+	* 아니라 빈 결과인 것은, 글자를 지워 가는 도중의 상태이지 잘못된 요청이 아니기 때문이다.
+	*/
+	@GetMapping("/api/collab/threads/{threadId}/participants/candidates")
+	public Flux<InviteCandidate> searchInviteCandidates(@PathVariable UUID threadId,
+			@RequestParam("q") String query) {
+		String trimmed = query.trim();
+		if (trimmed.length() < CANDIDATE_QUERY_MIN) {
+			return Flux.empty();
+		}
+		return actorUserId()
+				.flatMap(userId -> threadParticipantService.searchCandidates(threadId, userId, trimmed))
+				.flatMapMany(Flux::fromIterable);
+	}
+
+	/** 대기 초대를 거둔다(이슈 #172). 초대해 놓고 잊은 것을 되돌릴 유일한 경로다. */
+	@DeleteMapping("/api/collab/threads/{threadId}/invitations/{subject}")
+	@ResponseStatus(HttpStatus.NO_CONTENT)
+	public Mono<Void> revokeInvitation(@PathVariable UUID threadId, @PathVariable String subject) {
+		return actorUserId()
+				.flatMap(userId -> threadParticipantService.revokeInvitation(threadId, userId, subject));
 	}
 
 	/**
@@ -271,7 +302,8 @@ public class CollabThreadController {
 				.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 				.map(displayNamesBySubject -> participants.stream()
 						.map(participant -> new ParticipantView(participant.subject(), participant.role(),
-								participant.self(), displayNamesBySubject.get(participant.subject())))
+								participant.self(), displayNamesBySubject.get(participant.subject()),
+								participant.pending()))
 						.toList());
 	}
 

@@ -13,11 +13,14 @@ import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import java.util.stream.Stream;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -47,6 +50,9 @@ public class ThreadParticipantService {
 	private static final String SELF_LEAVE = "SELF_LEAVE";
 
 	private static final String OWNER_REVOKED = "OWNER_REVOKED";
+
+	/** 후보 검색 상한. 초대창은 좁혀서 고르는 자리라, 많이 주기보다 검색어를 좁히게 하는 편이 낫다. */
+	private static final int CANDIDATE_SEARCH_MAX = 20;
 
 	private final ThrMbrRepository thrMbrRepository;
 	private final ThrRepository thrRepository;
@@ -94,6 +100,60 @@ public class ThreadParticipantService {
 				.flatMap(invitee -> invitee
 						.map(userId -> joinNow(threadId, actorUserId, userId, inviteeSubject))
 						.orElseGet(() -> inviteForFirstLogin(threadId, actorUserId, inviteeSubject)));
+	}
+
+	/**
+	* 초대할 사람을 이름으로 찾는다(이슈 #172). OWNER만 부를 수 있다 — 초대할 수 없는 사람에게
+	* 검색을 열어 주면 계정 목록만 노출되고 할 수 있는 일은 없다. 인가를 invite()와 같은 자리에
+	* 걸어 두면, 나중에 "멤버도 초대 가능"으로 바뀌어도 검색이 저절로 따라온다.
+	*
+	* 스레드 스코프인 것은 그 인가를 재사용하기 위해서이자, 이미 그 방에 있는 사람과 이미 부른
+	* 사람을 결과에서 뺄 수 있기 때문이다 — 고를 수 없는 항목을 보여줄 이유가 없다.
+	*
+	* @param query 부분 일치 검색어. 너무 짧으면 realm을 통째로 훑는 꼴이라 호출부가 막는다
+	*/
+	public Mono<List<InviteCandidate>> searchCandidates(UUID threadId, UUID actorUserId, String query) {
+		return Mono.fromCallable(() -> {
+					requireOwnerRole(requireActiveParticipant(threadId, actorUserId));
+					return excludedSubjects(threadId);
+				})
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(excluded -> keycloakAdminClient.search(query, CANDIDATE_SEARCH_MAX)
+						.map(found -> found.stream()
+								.filter(user -> !excluded.contains(user.subject()))
+								.map(user -> new InviteCandidate(user.subject(), user.displayName()))
+								.toList()));
+	}
+
+	/** 이미 참가 중이거나 이미 대기 초대가 있는 사람 — 다시 부를 수 없으니 후보에서 뺀다. */
+	private Set<String> excludedSubjects(UUID threadId) {
+		Set<String> excluded = new HashSet<>();
+		List<ThrMbr> members = thrMbrRepository.findByThrIdAndStatus(threadId, ThrMbrStatus.ACTIVE);
+		appUserRepository.findAllById(members.stream().map(ThrMbr::getUserId).toList())
+				.forEach(user -> excluded.add(user.getKeycloakSubj()));
+		thrInvRepository.findByThrIdAndStatus(threadId, ThrInvStatus.PENDING)
+				.forEach(invitation -> excluded.add(invitation.getSubj()));
+		return excluded;
+	}
+
+	/**
+	* 대기 초대를 거둔다(이슈 #172). 초대해 놓고 잊은 것을 되돌릴 유일한 경로다 —
+	* ux_thr_inv_pending 때문에 재초대는 같은 행으로 흡수돼, 취소가 없으면 그 초대는 영영 남는다.
+	*
+	* 행은 지우지 않고 REVOKED로 남긴다 — 누가 누구를 불렀었는지가 사후에 확인되어야 한다(#127과
+	* 같은 이유). 사유 토큰도 참가자 제거와 같은 OWNER_REVOKED를 쓴다.
+	*/
+	public Mono<Void> revokeInvitation(UUID threadId, UUID actorUserId, String inviteeSubject) {
+		return Mono.<Void>fromCallable(() -> {
+					requireOwnerRole(requireActiveParticipant(threadId, actorUserId));
+					ThrInv invitation = thrInvRepository
+							.findByThrIdAndSubjAndStatus(threadId, inviteeSubject, ThrInvStatus.PENDING)
+							.orElseThrow(ThreadParticipantService::notParticipant);
+					invitation.end(ThrInvStatus.REVOKED, OWNER_REVOKED);
+					thrInvRepository.save(invitation);
+					return null;
+				})
+				.subscribeOn(Schedulers.boundedElastic());
 	}
 
 	/** 이미 로그인한 적 있는 사람은 지금처럼 곧바로 참가시킨다 — 기존 동작 그대로다(이슈 #127 결정). */
@@ -226,10 +286,16 @@ public class ThreadParticipantService {
 				.findAllById(members.stream().map(ThrMbr::getUserId).toList())
 				.stream()
 				.collect(Collectors.toMap(AppUser::getId, AppUser::getKeycloakSubj));
-		return members.stream()
+		Stream<ThreadParticipant> joined = members.stream()
 				.map(member -> new ThreadParticipant(subjectsByUserId.get(member.getUserId()), member.getRole(),
-						member.getUserId().equals(actorUserId)))
-				.sorted(Comparator.comparing(ThreadParticipant::role)
+						member.getUserId().equals(actorUserId), false));
+		Stream<ThreadParticipant> pending = thrInvRepository
+				.findByThrIdAndStatus(threadId, ThrInvStatus.PENDING).stream()
+				.map(invitation -> new ThreadParticipant(invitation.getSubj(), ThrMbrRole.MEMBER, false, true));
+		// 대기 초대는 참가자 아래로 모은다 — 아직 방에 없는 사람이라 명단 사이에 섞이면 읽기 어렵다.
+		return Stream.concat(joined, pending)
+				.sorted(Comparator.comparing(ThreadParticipant::pending)
+						.thenComparing(ThreadParticipant::role)
 						.thenComparing(ThreadParticipant::subject, Comparator.nullsLast(String::compareTo)))
 				.toList();
 	}

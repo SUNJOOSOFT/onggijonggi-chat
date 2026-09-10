@@ -24,4 +24,7 @@ public interface ThrInvRepository extends JpaRepository<ThrInv, UUID> {
 	/** 초대자가 퇴사하면 그가 보낸 대기 초대를 거둔다(#127 결정). */
 	List<ThrInv> findByCreatedByUserIdAndStatus(UUID createdByUserId, ThrInvStatus status);
 
+	/** 방의 대기 초대 — 참여자 명단에 함께 얹고, 검색 후보에서 걸러내는 데 쓴다(#172). */
+	List<ThrInv> findByThrIdAndStatus(UUID thrId, ThrInvStatus status);
+
 }

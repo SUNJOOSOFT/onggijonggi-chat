@@ -3,6 +3,7 @@ package com.onggijonggi.api.auth.keycloak;
 import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
@@ -84,6 +85,35 @@ public class KeycloakAdminClient {
 								ignored -> Mono.just(false)));
 	}
 
+	/**
+	 * 이름·이메일·username으로 계정을 찾는다(이슈 #172의 초대 대상 검색).
+	 *
+	 * 초대창이 subject(UUID)를 손으로 받던 것을 대체한다 — 사람이 그 값을 알 방법이 앱 안에
+	 * 없었다. 결과의 subject는 화면이 그대로 초대 API에 넘기고, 사람은 표시 이름만 본다.
+	 *
+	 * 표시 이름은 displayName()과 같은 규약(username = OIDC preferred_username)을 쓴다.
+	 *
+	 * 오류는 displayName()처럼 삼키지 않고 전파한다. 검색이 빈 결과와 장애를 구분하지 못하면
+	 * "그런 사람 없음"으로 보여 초대자가 헛물을 켠다 — exists()와 같은 판단이다.
+	 *
+	 * @param query 부분 일치 검색어. Keycloak이 username·email·firstName·lastName을 함께 본다
+	 * @param max 최대 결과 수. 상한은 호출부가 정한다
+	 */
+	public Mono<List<KeycloakUserSummary>> search(String query, int max) {
+		return adminToken()
+				.flatMapMany(token -> webClient.get()
+						.uri(builder -> builder.path("/admin/realms/{realm}/users")
+								.queryParam("search", query)
+								.queryParam("max", max)
+								.queryParam("briefRepresentation", true)
+								.build(realm))
+						.headers(headers -> headers.setBearerAuth(token))
+						.retrieve()
+						.bodyToFlux(SearchedUser.class))
+				.map(user -> new KeycloakUserSummary(user.id(), user.username()))
+				.collectList();
+	}
+
 	private Mono<Optional<String>> lookupUser(String subject, String token) {
 		return webClient.get()
 				.uri("/admin/realms/{realm}/users/{id}", realm, subject)
@@ -128,6 +158,10 @@ public class KeycloakAdminClient {
 
 	/** username을 표시 이름으로 쓴다 — OIDC의 preferred_username과 같은 값이다. */
 	private record UserRepresentation(String username) {
+	}
+
+	/** 검색 응답 항목. briefRepresentation이라 id·username 외에는 오지 않는다. */
+	private record SearchedUser(String id, String username) {
 	}
 
 }

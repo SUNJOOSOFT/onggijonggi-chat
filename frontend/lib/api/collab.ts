@@ -70,6 +70,17 @@ export interface ThreadParticipant {
   role: 'OWNER' | 'MEMBER';
   self: boolean;
   displayName: string;
+  /**
+   * 아직 참가가 아니라 대기 초대인지(이슈 #172). 초대해도 명단에 아무것도 뜨지 않아 조용한
+   * 실패와 구분되지 않던 것을 없앤다. 서버가 참가자 아래로 모아서 내려준다.
+   */
+  pending: boolean;
+}
+
+/** 초대 후보 검색 결과(이슈 #172). 사람은 displayName만 보고 고르고, subject는 화면이 되돌려 준다. */
+export interface InviteCandidate {
+  subject: string;
+  displayName: string;
 }
 
 /** 스레드의 ACTIVE 참여자 목록. 실패하면 예외를 던져 호출부(Sheet)가 안내하게 한다. */
@@ -132,6 +143,43 @@ export async function transferOwnership(
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ subject }),
     },
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+}
+
+/**
+ * 초대할 사람을 이름으로 찾는다(이슈 #172). OWNER만 부를 수 있다.
+ *
+ * 두 글자 미만이면 서버가 빈 목록으로 답한다 — 글자를 지워 가는 도중의 상태이지 오류가 아니다.
+ * 이미 참가 중이거나 이미 부른 사람은 서버가 걸러서 내려주므로 화면은 받은 대로 보여주면 된다.
+ */
+export async function searchInviteCandidates(
+  threadId: string,
+  query: string,
+): Promise<InviteCandidate[]> {
+  const res = await authFetch(
+    bffUrl(
+      `${COLLAB_THREADS_PATH}/${threadId}/participants/candidates?q=${encodeURIComponent(query)}`,
+    ),
+  );
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<InviteCandidate[]>;
+}
+
+/** 대기 초대를 거둔다(이슈 #172). OWNER만 호출할 수 있고, 대기 중이 아니면 404다. */
+export async function revokeInvitation(
+  threadId: string,
+  subject: string,
+): Promise<void> {
+  const res = await authFetch(
+    bffUrl(
+      `${COLLAB_THREADS_PATH}/${threadId}/invitations/${encodeURIComponent(subject)}`,
+    ),
+    { method: 'DELETE' },
   );
   if (!res.ok) {
     throw new Error(await res.text());

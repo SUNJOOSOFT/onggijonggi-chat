@@ -22,7 +22,7 @@
  같은 확정적 사실이기 때문이다.
  *********************************************************/
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { Users } from 'lucide-react';
 import { toast } from 'sonner';
@@ -52,7 +52,10 @@ import {
   fetchThreadParticipants,
   inviteParticipant,
   removeParticipant,
+  revokeInvitation,
+  searchInviteCandidates,
   transferOwnership,
+  type InviteCandidate,
   type ThreadParticipant,
 } from '@/lib/api/collab';
 import { resolveChatError } from '@/lib/api/errors';
@@ -79,7 +82,9 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
     null,
   );
   const [busy, setBusy] = useState(false);
-  const [inviteSubject, setInviteSubject] = useState('');
+  const [inviteQuery, setInviteQuery] = useState('');
+  const [candidates, setCandidates] = useState<InviteCandidate[]>([]);
+  const [searching, setSearching] = useState(false);
 
   const callerRole = participants.find((p) => p.self)?.role;
 
@@ -104,13 +109,17 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
     }
   }
 
-  async function handleInvite() {
-    const subject = inviteSubject.trim();
-    if (!subject || busy) return;
+  /**
+   * 고른 사람을 초대한다. subject는 검색 결과가 들고 있던 값을 그대로 되돌려 주는 것이라
+   * 사람이 UUID를 볼 일이 없다(이슈 #172).
+   */
+  async function handleInvite(candidate: InviteCandidate) {
+    if (busy) return;
     setBusy(true);
     try {
-      await inviteParticipant(threadId, subject);
-      setInviteSubject('');
+      await inviteParticipant(threadId, candidate.subject);
+      setInviteQuery('');
+      setCandidates([]);
       await load();
     } catch (err) {
       toast.error(resolveChatError(err as Error).message);
@@ -118,6 +127,57 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
       setBusy(false);
     }
   }
+
+  /** 대기 초대를 거둔다. 성공하면 명단을 다시 불러 그 줄이 사라진다. */
+  async function handleRevoke(target: ThreadParticipant) {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await revokeInvitation(threadId, target.subject);
+      await load();
+    } catch (err) {
+      toast.error(resolveChatError(err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  /**
+   * 검색어가 멎으면 후보를 불러온다. 타이핑마다 부르면 Keycloak Admin API를 글자 수만큼
+   * 두드리게 된다 — 250ms는 사람이 한 단어를 마치는 간격이다.
+   *
+   * 두 글자 미만은 서버가 빈 목록으로 답하므로 아예 부르지 않는다. 응답이 늦게 도착한 이전
+   * 검색이 최신 결과를 덮지 않도록 cancelled 플래그로 막는다.
+   */
+  useEffect(() => {
+    const query = inviteQuery.trim();
+    if (callerRole !== 'OWNER' || query.length < 2) {
+      setCandidates([]);
+      setSearching(false);
+      return;
+    }
+    let cancelled = false;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      searchInviteCandidates(threadId, query)
+        .then((found) => {
+          if (!cancelled) setCandidates(found);
+        })
+        .catch((err) => {
+          if (!cancelled) {
+            setCandidates([]);
+            toast.error(resolveChatError(err as Error).message);
+          }
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 250);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [inviteQuery, threadId, callerRole]);
 
   async function handleConfirm() {
     const action = pendingAction;
@@ -211,12 +271,25 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
                           </span>
                         )}
                         <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-xs text-muted-foreground">
-                          {ROLE_LABEL[participant.role]}
+                          {participant.pending
+                            ? '초대 대기'
+                            : ROLE_LABEL[participant.role]}
                         </span>
                       </span>
 
                       <span className="flex shrink-0 gap-1">
-                        {participant.self ? (
+                        {participant.pending ? (
+                          callerRole === 'OWNER' && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => void handleRevoke(participant)}
+                            >
+                              초대 취소
+                            </Button>
+                          )
+                        ) : participant.self ? (
                           <Button
                             variant="ghost"
                             size="sm"
@@ -269,30 +342,59 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
 
                 {callerRole === 'OWNER' && (
                   <div className="flex flex-col gap-2 border-t pt-4">
-                    <Label htmlFor="invite-subject">초대할 사용자 식별자</Label>
-                    <div className="flex gap-2">
-                      <Input
-                        id="invite-subject"
-                        placeholder="가입한 사용자의 식별자를 입력하세요"
-                        value={inviteSubject}
-                        disabled={busy}
-                        onChange={(event) =>
-                          setInviteSubject(event.target.value)
-                        }
-                        onKeyDown={(event) => {
-                          if (event.key === 'Enter') {
-                            event.preventDefault();
-                            void handleInvite();
-                          }
-                        }}
-                      />
-                      <Button
-                        disabled={busy || inviteSubject.trim() === ''}
-                        onClick={() => void handleInvite()}
-                      >
-                        초대
-                      </Button>
-                    </div>
+                    <Label htmlFor="invite-search">사람 초대</Label>
+                    <Input
+                      id="invite-search"
+                      placeholder="이름이나 이메일로 검색하세요"
+                      value={inviteQuery}
+                      disabled={busy}
+                      onChange={(event) => setInviteQuery(event.target.value)}
+                    />
+
+                    {/* 두 글자 미만은 검색하지 않는다 — 안내가 없으면 고장으로 읽힌다. */}
+                    {inviteQuery.trim().length > 0 &&
+                      inviteQuery.trim().length < 2 && (
+                        <p className="px-1 text-xs text-muted-foreground">
+                          두 글자 이상 입력하세요.
+                        </p>
+                      )}
+
+                    {searching && (
+                      <p className="px-1 text-xs text-muted-foreground">
+                        찾는 중…
+                      </p>
+                    )}
+
+                    {!searching &&
+                      inviteQuery.trim().length >= 2 &&
+                      candidates.length === 0 && (
+                        <p className="px-1 text-xs text-muted-foreground">
+                          찾는 사람이 없어요. 이미 방에 있거나 초대한 사람은
+                          결과에 나오지 않아요.
+                        </p>
+                      )}
+
+                    {candidates.length > 0 && (
+                      <ul className="flex flex-col gap-1">
+                        {candidates.map((candidate) => (
+                          <li
+                            key={candidate.subject}
+                            className="flex items-center justify-between gap-2 rounded-md px-2 py-1.5 text-sm"
+                          >
+                            <span className="truncate">
+                              {candidate.displayName}
+                            </span>
+                            <Button
+                              size="sm"
+                              disabled={busy}
+                              onClick={() => void handleInvite(candidate)}
+                            >
+                              초대
+                            </Button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
                 )}
               </>
