@@ -233,4 +233,30 @@ class ThreadParticipantServiceTest {
 						"new-owner-sub", "New Owner")));
 	}
 
+	/**
+	* Keycloak 조회가 실패해도 참여자 변경 자체는 이미 커밋돼 있으므로 호출자에게는 성공을
+	* 돌려줘야 한다(이슈 #129) — 통지 실패가 초대 응답까지 5xx로 끌고 가면 실제로는 성공한
+	* 작업이 실패로 보인다.
+	*/
+	@Test
+	void inviteSucceedsEvenWhenDisplayNameLookupFails() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser inviteeAppUser = new AppUser("invitee-sub");
+		UUID inviteeUserId = inviteeAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("invitee-sub")).thenReturn(Optional.of(inviteeAppUser));
+		when(thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(false);
+		when(keycloakAdminClient.displayName("invitee-sub"))
+				.thenReturn(Mono.error(new RuntimeException("keycloak down")));
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "invitee-sub")).verifyComplete();
+
+		verify(roomSessionRegistry, never()).notifyIfListening(any(), any());
+	}
+
 }

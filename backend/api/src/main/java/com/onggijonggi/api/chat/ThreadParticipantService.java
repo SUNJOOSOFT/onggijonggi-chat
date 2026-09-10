@@ -14,6 +14,8 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
@@ -34,6 +36,8 @@ import reactor.core.scheduler.Schedulers;
  */
 @Service
 public class ThreadParticipantService {
+
+	private static final Logger log = LoggerFactory.getLogger(ThreadParticipantService.class);
 
 	/** end_rsn은 고정 토큰만 쓴다 — 자유 입력을 받으면 나중에 집계·감사가 불가능해진다. */
 	private static final String SELF_LEAVE = "SELF_LEAVE";
@@ -174,12 +178,20 @@ public class ThreadParticipantService {
 	* {@code .then(notifyParticipantChanged(...))}로 쓰면 Java가 인자를 즉시 평가해 앞선
 	* fromCallable이 아직 구독도 되기 전에(즉 remove·transferOwner가 권한 검사·상태 검증을 통과
 	* 하기도 전에) keycloakAdminClient를 호출해 버린다.
+	*
+	* Keycloak 조회 실패는 삼키고 로그만 남긴다 — 이 시점엔 참가자 변경이 이미 DB에 커밋돼 있어,
+	* 통지 실패로 호출자에게 5xx를 돌려주면 실제로는 성공한 초대·제거·위임이 실패로 보인다
+	* (PersistingChatStreamService의 "저장 실패는 채팅을 막지 않는다"와 같은 원칙).
 	*/
 	private Mono<Void> notifyParticipantChanged(UUID threadId, ParticipantChangeAction action, String subject) {
 		return keycloakAdminClient.displayName(subject)
 				.map(displayName -> displayName.orElse(subject))
 				.doOnNext(displayName -> roomSessionRegistry.notifyIfListening(threadId,
 						new ParticipantChangedFrame(threadId, action, subject, displayName)))
+				.onErrorResume(error -> {
+					log.error("참여자 변경 통지 실패 threadId={} action={}", threadId, action, error);
+					return Mono.empty();
+				})
 				.then();
 	}
 
