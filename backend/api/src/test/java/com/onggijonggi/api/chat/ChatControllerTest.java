@@ -251,6 +251,37 @@ class ChatControllerTest {
 				.expectHeader().exists(HttpHeaders.ACCESS_CONTROL_ALLOW_ORIGIN);
 	}
 
+	/**
+	 * CORS 허용 메서드에 PUT이 빠져 소유권 위임(#20)·잠금·보관(#131)이 브라우저에서만 막혀 있었다.
+	 * 위 allowsCorsPreflightWithoutToken은 Allow-Origin 존재만 봐서 이 구멍을 통과시켰다.
+	 */
+	@Test
+	void allowsPreflightForPutSoOwnerTransferAndLockReachTheServer() {
+		restTestClient.method(HttpMethod.OPTIONS)
+				.uri("/api/collab/threads/00000000-0000-0000-0000-000000000000/owner")
+				.header(HttpHeaders.ORIGIN, "http://localhost:3010")
+				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "PUT")
+				.exchange()
+				.expectStatus().is2xxSuccessful()
+				.expectHeader().valueMatches(HttpHeaders.ACCESS_CONTROL_ALLOW_METHODS, ".*PUT.*");
+	}
+
+	/**
+	 * 협업방 생성이 실어 보내는 Idempotency-Key(#149)가 허용 헤더에 없어, 방 생성이 브라우저에서만
+	 * 막혀 있었다. CORS는 브라우저만 강제하므로 서버 대 서버 테스트로는 드러나지 않는다.
+	 */
+	@Test
+	void allowsPreflightForIdempotencyKeySoThreadCreationReachesTheServer() {
+		restTestClient.method(HttpMethod.OPTIONS)
+				.uri("/api/collab/threads")
+				.header(HttpHeaders.ORIGIN, "http://localhost:3010")
+				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_METHOD, "POST")
+				.header(HttpHeaders.ACCESS_CONTROL_REQUEST_HEADERS, "Idempotency-Key")
+				.exchange()
+				.expectStatus().is2xxSuccessful()
+				.expectHeader().valueMatches(HttpHeaders.ACCESS_CONTROL_ALLOW_HEADERS, "(?i).*Idempotency-Key.*");
+	}
+
 	/** docker-compose 헬스체크가 무토큰 /actuator/health 200 응답에 의존한다(02·EDGE). */
 	@Test
 	void allowsActuatorHealthWithoutToken() {
