@@ -293,6 +293,7 @@ class ThreadParticipantServiceTest {
 		ThrInv pending = new ThrInv(threadId, "late-sub", actorUserId);
 		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "late-sub", ThrInvStatus.PENDING))
 				.thenReturn(Optional.empty(), Optional.of(pending));
+		when(keycloakAdminClient.displayName("late-sub")).thenReturn(Mono.just(Optional.of("Late")));
 
 		StepVerifier.create(service.invite(threadId, actorUserId, "late-sub")).verifyComplete();
 
@@ -313,6 +314,7 @@ class ThreadParticipantServiceTest {
 		when(keycloakAdminClient.exists("never-sub")).thenReturn(Mono.just(true));
 		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "never-sub", ThrInvStatus.PENDING))
 				.thenReturn(Optional.empty());
+		when(keycloakAdminClient.displayName("never-sub")).thenReturn(Mono.just(Optional.of("Never")));
 
 		StepVerifier.create(service.invite(threadId, actorUserId, "never-sub")).verifyComplete();
 
@@ -377,6 +379,7 @@ class ThreadParticipantServiceTest {
 				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
 		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "invited-sub", ThrInvStatus.PENDING))
 				.thenReturn(Optional.of(invitation));
+		when(keycloakAdminClient.displayName("invited-sub")).thenReturn(Mono.just(Optional.empty()));
 
 		StepVerifier.create(service.revokeInvitation(threadId, actorUserId, "invited-sub")).verifyComplete();
 
@@ -429,6 +432,97 @@ class ThreadParticipantServiceTest {
 					assertThat(participants.get(1).self()).isFalse();
 				})
 				.verifyComplete();
+	}
+
+	/** 대기 초대도 명단을 바꾸므로 통지한다. 참가가 아니라 INVITE_PENDING이다(이슈 #172·#129). */
+	@Test
+	void pendingInvitationNotifiesTheRoomWithItsOwnAction() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("waiting-sub")).thenReturn(Optional.empty());
+		when(keycloakAdminClient.exists("waiting-sub")).thenReturn(Mono.just(true));
+		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "waiting-sub", ThrInvStatus.PENDING))
+				.thenReturn(Optional.empty());
+		when(keycloakAdminClient.displayName("waiting-sub"))
+				.thenReturn(Mono.just(Optional.of("아직 로그인 전")));
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "waiting-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.INVITE_PENDING,
+						"waiting-sub", "아직 로그인 전")));
+	}
+
+	/** 이미 같은 대기 초대가 있으면 명단이 바뀌지 않는다 — joinNow의 멱등 생략과 같은 결이다. */
+	@Test
+	void repeatedPendingInvitationDoesNotNotify() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("waiting-sub")).thenReturn(Optional.empty());
+		when(keycloakAdminClient.exists("waiting-sub")).thenReturn(Mono.just(true));
+		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "waiting-sub", ThrInvStatus.PENDING))
+				.thenReturn(Optional.of(new ThrInv(threadId, "waiting-sub", actorUserId)));
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "waiting-sub")).verifyComplete();
+
+		verify(roomSessionRegistry, never()).notifyIfListening(any(), any());
+	}
+
+	/**
+	* 초대를 남기는 사이에 대상이 첫 로그인을 마쳐 전환된 경우다. 그 사람은 이제 실제 참가자이므로
+	* 대기가 아니라 INVITED로 알린다.
+	*/
+	@Test
+	void notifiesInvitedWhenThePendingRowConvertedImmediately() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser invitee = new AppUser("late-sub");
+		ThrInv pending = new ThrInv(threadId, "late-sub", actorUserId);
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("late-sub"))
+				.thenReturn(Optional.empty(), Optional.of(invitee));
+		when(keycloakAdminClient.exists("late-sub")).thenReturn(Mono.just(true));
+		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "late-sub", ThrInvStatus.PENDING))
+				.thenReturn(Optional.empty(), Optional.of(pending));
+		when(keycloakAdminClient.displayName("late-sub")).thenReturn(Mono.just(Optional.of("Late")));
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "late-sub")).verifyComplete();
+
+		verify(invitationAcceptanceService).acceptOneBlocking(pending.getId(), invitee.getId());
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.INVITED, "late-sub",
+						"Late")));
+	}
+
+	/** 초대 취소도 명단을 바꾼다. 참가한 적이 없으므로 REMOVED가 아니라 INVITE_REVOKED다. */
+	@Test
+	void revokeNotifiesTheRoomWithItsOwnAction() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		ThrInv invitation = new ThrInv(threadId, "invited-sub", actorUserId);
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrInvRepository.findByThrIdAndSubjAndStatus(threadId, "invited-sub", ThrInvStatus.PENDING))
+				.thenReturn(Optional.of(invitation));
+		when(keycloakAdminClient.displayName("invited-sub")).thenReturn(Mono.just(Optional.of("초대된 사람")));
+
+		StepVerifier.create(service.revokeInvitation(threadId, actorUserId, "invited-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.INVITE_REVOKED,
+						"invited-sub", "초대된 사람")));
 	}
 
 }

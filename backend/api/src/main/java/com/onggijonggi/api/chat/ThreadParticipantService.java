@@ -153,7 +153,9 @@ public class ThreadParticipantService {
 					thrInvRepository.save(invitation);
 					return null;
 				})
-				.subscribeOn(Schedulers.boundedElastic());
+				.subscribeOn(Schedulers.boundedElastic())
+				.then(Mono.defer(() -> notifyParticipantChanged(threadId,
+						ParticipantChangeAction.INVITE_REVOKED, inviteeSubject)));
 	}
 
 	/** 이미 로그인한 적 있는 사람은 지금처럼 곧바로 참가시킨다 — 기존 동작 그대로다(이슈 #127 결정). */
@@ -186,16 +188,30 @@ public class ThreadParticipantService {
 						: Mono.error(notParticipant()));
 	}
 
+	/**
+	* 통지 액션이 둘로 갈린다. 초대 행을 남기는 사이에 대상이 첫 로그인을 마쳐 전환됐다면 그
+	* 사람은 이미 참가자이므로 INVITED고, 대기로 남았으면 INVITE_PENDING이다. 이미 같은 대기
+	* 초대가 있었고 전환도 없었다면 명단이 바뀌지 않았으므로 아무것도 보내지 않는다 — 멱등
+	* 호출에 통지를 생략하는 joinNow와 같은 결이다.
+	*/
 	private Mono<Void> savePendingInvitation(UUID threadId, UUID actorUserId, String inviteeSubject) {
-		return Mono.<Void>fromCallable(() -> {
-					if (thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject,
-							ThrInvStatus.PENDING).isEmpty()) {
+		return Mono.fromCallable(() -> {
+					boolean created = thrInvRepository.findByThrIdAndSubjAndStatus(threadId,
+							inviteeSubject, ThrInvStatus.PENDING).isEmpty();
+					if (created) {
 						saveIgnoringDuplicate(new ThrInv(threadId, inviteeSubject, actorUserId));
 					}
-					acceptIfAlreadyLoggedIn(threadId, inviteeSubject);
-					return null;
+					boolean joined = acceptIfAlreadyLoggedIn(threadId, inviteeSubject);
+					if (joined) {
+						return Optional.of(ParticipantChangeAction.INVITED);
+					}
+					return created ? Optional.of(ParticipantChangeAction.INVITE_PENDING)
+							: Optional.<ParticipantChangeAction>empty();
 				})
-				.subscribeOn(Schedulers.boundedElastic());
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(action -> action
+						.map(value -> notifyParticipantChanged(threadId, value, inviteeSubject))
+						.orElseGet(Mono::empty));
 	}
 
 	/**
@@ -207,16 +223,19 @@ public class ThreadParticipantService {
 	* 아직 커밋되지 않았다면 그쪽도 우리도 전환하지 않는다 — 전환 시도는 첫 로그인 한 번뿐이라
 	* 그 초대는 영구히 대기한다. 각자 자기 쓰기를 커밋한 뒤에 상대를 보므로, 이 재확인이 있으면
 	* 적어도 한쪽은 상대를 본다.
+	* @return 여기서 실제 참가로 전환했으면 true
 	*/
-	private void acceptIfAlreadyLoggedIn(UUID threadId, String inviteeSubject) {
+	private boolean acceptIfAlreadyLoggedIn(UUID threadId, String inviteeSubject) {
 		Optional<UUID> inviteeUserId = appUserRepository.findByKeycloakSubj(inviteeSubject)
 				.map(AppUser::getId);
 		if (inviteeUserId.isEmpty()) {
-			return;
+			return false;
 		}
-		thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject, ThrInvStatus.PENDING)
-				.ifPresent(invitation -> invitationAcceptanceService.acceptOneBlocking(
-						invitation.getId(), inviteeUserId.get()));
+		Optional<ThrInv> pending = thrInvRepository.findByThrIdAndSubjAndStatus(threadId,
+				inviteeSubject, ThrInvStatus.PENDING);
+		pending.ifPresent(invitation -> invitationAcceptanceService.acceptOneBlocking(
+				invitation.getId(), inviteeUserId.get()));
+		return pending.isPresent();
 	}
 
 	/**
