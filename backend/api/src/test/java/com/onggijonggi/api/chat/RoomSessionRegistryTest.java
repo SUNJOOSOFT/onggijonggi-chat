@@ -1,9 +1,11 @@
 package com.onggijonggi.api.chat;
 
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -26,7 +28,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *               확인한다. 입퇴장 통보(이슈 #25)는 연결이 아니라 사용자 단위라, 한 사람이 탭을
  *               여럿 열었을 때 통보가 새지 않는지도 함께 본다. 방이 비었다 다시 생긴 뒤 옛 세대로는
  *               방송이 들어가지 않는지도 확인한다(이슈 #102). 참가자 제거 시 그 사람의 연결(탭이
- *               여럿이어도 전부)에만 강제 종료 신호가 가고 다른 연결은 영향받지 않는지도
+ *               여럿이어도 전부)에만 강제 종료 신호가 가고 다른 연결은 영향받지 않는지, 그리고
+ *               evict가 같은 연결의 leave와 동시에 실행돼도 방 상태가 깨지지 않는지도
  *               확인한다(이슈 #135).
  */
 class RoomSessionRegistryTest {
@@ -477,6 +480,42 @@ class RoomSessionRegistryTest {
 
 		registry.join(roomId, UUID.randomUUID(), anyone());
 		assertThat(registry.evict(roomId, "still-nobody")).isFalse();
+	}
+
+	/**
+	* RoomState.add/remove/evict는 각각 synchronized라 상호 배제는 걸려 있지만, 서로 다른
+	* public 메서드(evict·leave)가 같은 연결을 동시에 건드리는 조합은 별도로 검증된 적이 없었다
+	* (이슈 #135 PR 코멘트). 어느 쪽이 먼저 실행되든 예외 없이 끝나고, 방이 정상 상태로
+	* 남는지(마지막 연결이 빠졌다는 신호)를 CyclicBarrier로 실제 동시 실행을 만들어 본다.
+	*/
+	@Test
+	void evictAndLeaveRunningConcurrentlyDoNotCorruptRoomState() throws Exception {
+		UUID roomId = UUID.randomUUID();
+		UUID connectionId = UUID.randomUUID();
+		PresenceParticipant participant = participant("racing");
+		RoomSessionRegistry.RoomMembership membership = registry.join(roomId, connectionId, participant);
+		CyclicBarrier barrier = new CyclicBarrier(2);
+		ExecutorService pool = Executors.newFixedThreadPool(2);
+
+		try {
+			Future<Boolean> evicted = pool.submit(() -> {
+				barrier.await();
+				return registry.evict(roomId, "racing");
+			});
+			Future<Optional<UUID>> emptiedGeneration = pool.submit(() -> {
+				barrier.await();
+				return registry.leave(roomId, connectionId, participant);
+			});
+
+			// 순서와 무관하게 예외 없이 끝나야 한다 — evict가 이겨서 kicked를 완료시켰든, leave가
+			// 이겨서 evict가 연결을 못 찾고 false를 돌려줬든 둘 다 정상 결과다.
+			evicted.get(5, TimeUnit.SECONDS);
+			// leave는 이 연결이 방의 유일한 연결이라 방이 비었다는 세대를 항상 돌려준다 — evict와의
+			// 실행 순서가 이 결과를 바꾸지 않는다(evict는 leave가 지우는 연결 목록에 영향을 주지 않는다).
+			assertThat(emptiedGeneration.get(5, TimeUnit.SECONDS)).contains(membership.generation());
+		} finally {
+			pool.shutdownNow();
+		}
 	}
 
 	private void broadcastRange(UUID roomId, UUID roomGeneration, String prefix, CountDownLatch start) {
