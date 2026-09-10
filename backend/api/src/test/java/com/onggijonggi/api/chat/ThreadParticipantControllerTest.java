@@ -1,10 +1,12 @@
 package com.onggijonggi.api.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -13,6 +15,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
@@ -37,6 +40,9 @@ class ThreadParticipantControllerTest {
 
 	@Autowired
 	private CollabRoomFixture.CollabRooms rooms;
+
+	@Autowired
+	private ThrMbrRepository thrMbrRepository;
 
 	private RestTestClient restTestClient;
 
@@ -152,6 +158,34 @@ class ThreadParticipantControllerTest {
 		ThrMbr ended = rooms.lastParticipation(threadId, "leave-member").orElseThrow();
 		assertThat(ended.getStatus()).isEqualTo(ThrMbrStatus.LEFT);
 		assertThat(ended.getEndRsn()).isEqualTo("SELF_LEAVE");
+	}
+
+	/**
+	* OWNER의 강퇴와 대상의 자진 탈퇴가 같은 참가 행을 동시에 읽으면, 둘 다 그 행이 ACTIVE인 걸 보고
+	* 각자 end()를 시도한다(이슈 #137). ver(낙관적 잠금)이 없으면 나중에 커밋한 쪽이 조용히 앞선
+	* 결과를 덮어써, 최종 status·end_rsn이 실제 일어난 일과 어긋난다.
+	*
+	* 실제 동시성으로 재현하지 않고, 자진 탈퇴 요청이 강퇴보다 먼저 그 행을 읽어 뒀다고 가정한
+	* 사본을 fixture로 미리 만들어 둔다 — 낙관적 잠금이 막으려는 것은 "언제 일어났는가"가 아니라
+	* "읽은 뒤로 아무도 안 건드렸는가"이므로, 강퇴 요청(HTTP)을 먼저 커밋시킨 뒤 그 사본으로
+	* 저장을 시도하는 것으로 같은 경합을 결정적으로 재현할 수 있다.
+	*/
+	@Test
+	void concurrentRemovalAndSelfLeaveOnTheSameRowFailTheSecondWrite() {
+		UUID threadId = rooms.openRoom("race-owner", "race-member");
+
+		ThrMbr readBySelfLeaveRequest = rooms.activeParticipant(threadId, "race-member");
+
+		remove(threadId, "race-owner", "race-member").expectStatus().isNoContent();
+
+		readBySelfLeaveRequest.end(ThrMbrStatus.LEFT, "SELF_LEAVE");
+		assertThatThrownBy(() -> thrMbrRepository.save(readBySelfLeaveRequest))
+				.isInstanceOf(OptimisticLockingFailureException.class);
+
+		// 실제로 반영된 것은 먼저 커밋된 강퇴 쪽 하나뿐이다 — 진 쪽이 이루려던 상태로 덮이지 않는다.
+		ThrMbr ended = rooms.lastParticipation(threadId, "race-member").orElseThrow();
+		assertThat(ended.getStatus()).isEqualTo(ThrMbrStatus.REVOKED);
+		assertThat(ended.getEndRsn()).isEqualTo("OWNER_REVOKED");
 	}
 
 	@Test

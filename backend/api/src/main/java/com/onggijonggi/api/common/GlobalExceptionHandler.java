@@ -4,6 +4,7 @@ import com.onggijonggi.api.chat.IdempotencyKeyConflictException;
 import com.openai.errors.OpenAIServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
 import org.springframework.http.ResponseEntity;
@@ -74,6 +75,17 @@ public class GlobalExceptionHandler {
 			ServerWebExchange exchange) {
 		return ResponseEntity.status(HttpStatus.CONFLICT)
 				.body(ErrorResponse.of("IDEMPOTENCY_KEY_CONFLICT", ex.getMessage(), traceId(exchange)));
+	}
+
+	/** ThrMbr.ver(이슈 #137) 같은 낙관적 잠금 필드가 읽은 뒤 다른 트랜잭션에 덮어써졌을 때. 같은
+	 * 참여자 상태 충돌이라 코드·문구를 handleStatusException의 409와 맞춘다 — 클라이언트가 다시
+	 * 명단을 읽고 재시도하면 되는 문제다. */
+	@ExceptionHandler(OptimisticLockingFailureException.class)
+	public ResponseEntity<ErrorResponse> handleOptimisticLockingFailure(OptimisticLockingFailureException ex,
+			ServerWebExchange exchange) {
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+				.body(ErrorResponse.of("PARTICIPANT_STATE_CONFLICT", "참여자 상태가 바뀌어 요청을 처리할 수 없습니다.",
+						traceId(exchange)));
 	}
 
 	/**

@@ -119,6 +119,15 @@ public class CollabRoomFixture {
 			return activeMember(threadId, subject).getRole();
 		}
 
+		/**
+		 * 활성 참가 행을 새로 읽어 온다(이슈 #137). 매번 독립된 리포지토리 호출(독립 트랜잭션)이라,
+		 * 같은 행을 두 번 부르면 같은 데이터를 담은 서로 다른 엔티티 인스턴스 두 개가 나온다 —
+		 * 실제 스레드 동시성 없이, 두 요청이 같은 행을 동시에 읽어 둔 상황을 결정적으로 재현할 때 쓴다.
+		 */
+		public ThrMbr activeParticipant(UUID threadId, String subject) {
+			return activeMember(threadId, subject);
+		}
+
 		/** 활성 행이 없으면(나갔거나 제거됐으면) 그 마지막 참가 행의 상태를 돌려준다. */
 		public Optional<ThrMbr> lastParticipation(UUID threadId, String subject) {
 			UUID userId = user(subject);
