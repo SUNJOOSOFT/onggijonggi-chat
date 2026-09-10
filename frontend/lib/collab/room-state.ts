@@ -276,7 +276,7 @@ function extendAnswer(
 
 /**
  * 프레임 하나를 상태에 접는다. 알 수 없는 프레임은 parse-frame.ts가 이미 걸러내므로
- * 여기 도착하는 것은 계약 안의 일곱 가지뿐이고, switch는 그 일곱을 모두 다룬다.
+ * 여기 도착하는 것은 계약 안의 여덟 가지뿐이고, switch는 그 여덟을 모두 다룬다.
  */
 export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
   switch (frame.type) {
@@ -314,6 +314,12 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         displayName: frame.displayName,
       });
     }
+
+    // 참여자 명단이 바뀌었다는 신호일 뿐 이 상태에 접을 것이 없다(이슈 #129·#172).
+    // 여기 participants는 접속자(presence)라 명단과 다른 목록이고, 명단은 REST로 읽는
+    // 참여자 시트가 들고 있다 — 재조회는 use-collab-room이 신호로 내보낸다.
+    case 'participant.changed':
+      return state;
 
     case 'chat.message':
       return appendMessage(

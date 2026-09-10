@@ -346,4 +346,32 @@ describe('parseFrame — system.notice(#29)', () => {
       }),
     ).toBeNull();
   });
+  it('participant.changed를 통과시킨다', () => {
+    // frames.ts 유니온에만 더하고 여기 스키마를 빠뜨리면 컴파일은 통과하고 이 프레임만
+    // 조용히 버려진다 — 실제로 한 번 그렇게 놓쳐서 남기는 테스트다.
+    const frame = parseFrame({
+      type: 'participant.changed',
+      sessionId: 'room-1',
+      action: 'INVITE_PENDING',
+      subject: 'sub-1',
+      displayName: '아직 로그인 전',
+    });
+
+    expect(frame?.type).toBe('participant.changed');
+  });
+
+  it('모르는 action이 와도 버리지 않는다', () => {
+    // 서버가 액션을 하나 더한 뒤 프론트를 아직 배포하지 않은 상태다. 화면은 action으로
+    // 분기하지 않으므로 통지 자체는 살아 있어야 한다.
+    const frame = parseFrame({
+      type: 'participant.changed',
+      sessionId: 'room-1',
+      action: 'SOMETHING_NEW',
+      subject: 'sub-1',
+      displayName: '누군가',
+    });
+
+    expect(frame?.type).toBe('participant.changed');
+  });
+
 });

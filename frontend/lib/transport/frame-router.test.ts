@@ -8,6 +8,7 @@ import type {
   PresenceSnapshotFrame,
   SystemNoticeFrame,
   WsErrorFrame,
+  WsFrame,
 } from './frames';
 
 describe('routeFrame', () => {
@@ -135,4 +136,19 @@ describe('routeFrame — system.notice(#29)', () => {
     expect(onSystemNotice).toHaveBeenCalledExactlyOnceWith(frame);
     expect(onError).not.toHaveBeenCalled();
   });
+  it('participant.changed를 onParticipantChanged로 보낸다', () => {
+    const frame: WsFrame = {
+      type: 'participant.changed',
+      sessionId: 'room-1',
+      action: 'INVITE_PENDING',
+      subject: 'sub-1',
+      displayName: '아직 로그인 전',
+    };
+    const onParticipantChanged = vi.fn();
+
+    routeFrame(frame, { onParticipantChanged });
+
+    expect(onParticipantChanged).toHaveBeenCalledWith(frame);
+  });
+
 });

@@ -10,6 +10,7 @@
 import type {
   ChatAnswerFrame,
   ChatMessageFrame,
+  ParticipantChangedFrame,
   PresenceJoinFrame,
   PresenceLeaveFrame,
   PresenceSnapshotFrame,
@@ -24,6 +25,7 @@ export interface FrameHandlers {
   onPresenceJoin?: (frame: PresenceJoinFrame) => void;
   onPresenceLeave?: (frame: PresenceLeaveFrame) => void;
   onPresenceSnapshot?: (frame: PresenceSnapshotFrame) => void;
+  onParticipantChanged?: (frame: ParticipantChangedFrame) => void;
   onSystemNotice?: (frame: SystemNoticeFrame) => void;
   onError?: (frame: WsErrorFrame) => void;
 }
@@ -44,6 +46,9 @@ export function routeFrame(frame: WsFrame, handlers: FrameHandlers): void {
       return;
     case 'presence.snapshot':
       handlers.onPresenceSnapshot?.(frame);
+      return;
+    case 'participant.changed':
+      handlers.onParticipantChanged?.(frame);
       return;
     case 'system.notice':
       handlers.onSystemNotice?.(frame);

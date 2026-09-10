@@ -467,4 +467,23 @@ describe('system.notice(#29)', () => {
     ]);
     expect(state.messages).toHaveLength(1);
   });
+  it('participant.changed는 접속자 상태를 건드리지 않는다', () => {
+    // 명단(REST)과 접속자(presence)는 다른 목록이다 — 이 프레임은 시트 재조회 신호일 뿐이다.
+    const before = applyFrame(initialRoomState, {
+      type: 'presence.snapshot',
+      sessionId: 'room-1',
+      participants: [{ subject: 'sub-1', displayName: '나' }],
+    });
+
+    const after = applyFrame(before, {
+      type: 'participant.changed',
+      sessionId: 'room-1',
+      action: 'INVITE_PENDING',
+      subject: 'sub-2',
+      displayName: '초대된 사람',
+    });
+
+    expect(after).toBe(before);
+  });
+
 });

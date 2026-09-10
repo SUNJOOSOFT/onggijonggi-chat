@@ -166,8 +166,14 @@ function useThreadTitle(threadId: string): string {
 }
 
 export function CollabRoom({ threadId }: { threadId: string }) {
-  const { state, connection, send, dismissError, dismissNotice } =
-    useCollabRoom(threadId);
+  const {
+    state,
+    connection,
+    send,
+    dismissError,
+    dismissNotice,
+    participantsRevision,
+  } = useCollabRoom(threadId);
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
   const title = useThreadTitle(threadId);
 
@@ -196,7 +202,10 @@ export function CollabRoom({ threadId }: { threadId: string }) {
       <header className="flex sticky top-0 items-center gap-2 border-b bg-background px-2 py-1.5">
         <SidebarToggle />
         <h1 className="text-sm font-semibold">{title}</h1>
-        <ParticipantsSheet threadId={threadId} />
+        <ParticipantsSheet
+          threadId={threadId}
+          refreshSignal={participantsRevision}
+        />
         <span className="ml-auto pr-2 text-xs text-muted-foreground">
           {CONNECTION_LABEL[connection]}
         </span>

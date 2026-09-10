@@ -47,12 +47,19 @@ export interface CollabRoom {
   dismissError: () => void;
   /** 방 위에 얹힌 시스템 알림(#29) 하나를 닫는다. */
   dismissNotice: (code: string) => void;
+  /**
+   * 참여자 명단이 바뀌었다는 통보를 받을 때마다 1씩 오르는 눈금(이슈 #129·#172). 명단 자체는
+   * 이 훅이 들지 않는다 — REST로 읽는 참여자 시트가 들고, 이 값은 그쪽에 "다시 불러와"만
+   * 전한다. 값의 크기에는 의미가 없다.
+   */
+  participantsRevision: number;
 }
 
 export function useCollabRoom(threadId: string): CollabRoom {
   const [state, setState] = useState<RoomState>(initialRoomState);
   const [connection, setConnection] = useState<RoomConnection>('connecting');
   const connectionRef = useRef<WsConnection | null>(null);
+  const [participantsRevision, setParticipantsRevision] = useState(0);
 
   useEffect(() => {
     const ws = openWsConnection(threadId, {
@@ -67,6 +74,12 @@ export function useCollabRoom(threadId: string): CollabRoom {
           // applyFrame이 그대로 흘려보낸다. warning은 반대로 배너로 남는다.
           if (frame.type === 'system.notice' && frame.severity === 'info') {
             toast.info(noticeMessage(frame.message));
+          }
+          // 참여자 명단은 이 훅의 상태가 아니라 REST를 읽는 참여자 시트가 들고 있다.
+          // 값을 세지 않고 눈금만 올려, 시트가 "다시 불러오라"는 신호로만 쓰게 한다 —
+          // action으로 분기할 이유가 없다(어느 액션이든 답은 재조회다).
+          if (frame.type === 'participant.changed') {
+            setParticipantsRevision((current) => current + 1);
           }
           setState((current) => applyFrame(current, frame));
         }
@@ -111,5 +124,12 @@ export function useCollabRoom(threadId: string): CollabRoom {
     [],
   );
 
-  return { state, connection, send, dismissError, dismissNotice };
+  return {
+    state,
+    connection,
+    send,
+    dismissError,
+    dismissNotice,
+    participantsRevision,
+  };
 }

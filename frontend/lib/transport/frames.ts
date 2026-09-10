@@ -134,6 +134,28 @@ export interface SystemNoticeFrame {
   traceId: string;
 }
 
+/**
+ * 참여자 명단이 바뀌었음을 알리는 프레임(이슈 #129·#172). presence(#25·#26)가 "지금 접속해
+ * 있는가"를 다루는 것과 달리 이쪽은 "이 방의 참여자인가"다 — 접속 중이 아닌 사람이 초대되는
+ * 경우처럼 presence로는 표현되지 않는 변화가 있어 타입이 따로 있다.
+ *
+ * action으로 분기하지 않고 명단 재조회 트리거로만 쓴다. 서버가 값을 다섯으로 나눈 것은
+ * 나중에 액션별 시스템 메시지가 필요해졌을 때를 위한 것이라, 지금 화면이 그 값을 해석할
+ * 이유가 없다 — 어느 액션이든 "다시 불러와"가 정답이다.
+ */
+export interface ParticipantChangedFrame {
+  type: 'participant.changed';
+  sessionId: string;
+  /**
+   * 서버가 지금 보내는 값은 INVITED·REMOVED·OWNER_TRANSFERRED·INVITE_PENDING·INVITE_REVOKED
+   * 다섯이지만 union으로 좁히지 않는다 — 화면이 이 값으로 분기하지 않는데 좁혀 두면 서버가
+   * 액션을 하나 더한 순간 프론트를 배포하기 전까지 통지가 통째로 사라진다.
+   */
+  action: string;
+  subject: string;
+  displayName: string;
+}
+
 /** 서버 WsFrame과 대응하는 전체 유니온. 새 타입이 추가되면 여기 한 곳만 넓히면 되고,
  * frame-router.ts의 exhaustive switch가 미처리 케이스를 컴파일 타임에 잡아준다. */
 export type WsFrame =
@@ -142,6 +164,7 @@ export type WsFrame =
   | PresenceJoinFrame
   | PresenceLeaveFrame
   | PresenceSnapshotFrame
+  | ParticipantChangedFrame
   | SystemNoticeFrame
   | WsErrorFrame;
 

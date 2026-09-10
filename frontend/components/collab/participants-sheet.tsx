@@ -72,7 +72,18 @@ type PendingAction = {
 
 type LoadStatus = 'idle' | 'loading' | 'loaded' | 'error';
 
-export function ParticipantsSheet({ threadId }: { threadId: string }) {
+export function ParticipantsSheet({
+  threadId,
+  refreshSignal,
+}: {
+  threadId: string;
+  /**
+   * WS로 참여자 변경을 통보받을 때마다 올라가는 눈금(이슈 #129·#172). 값 자체에는 의미가
+   * 없고 "바뀌었다"만 나른다 — 시트가 열려 있을 때만 다시 불러온다. 닫혀 있으면 어차피
+   * 열 때 load()가 도므로 미리 부를 이유가 없다.
+   */
+  refreshSignal: number;
+}) {
   const router = useRouter();
   const [open, setOpen] = useState(false);
   const [status, setStatus] = useState<LoadStatus>('idle');
@@ -141,6 +152,13 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
       setBusy(false);
     }
   }
+
+  // biome-ignore lint/correctness/useExhaustiveDependencies: refreshSignal이 이 effect의
+  // 트리거다 — load는 매 렌더 새로 만들어져 deps에 넣으면 무한 재조회가 된다.
+  useEffect(() => {
+    if (refreshSignal === 0 || !open) return;
+    void load();
+  }, [refreshSignal, open]);
 
   /**
    * 검색어가 멎으면 후보를 불러온다. 타이핑마다 부르면 Keycloak Admin API를 글자 수만큼

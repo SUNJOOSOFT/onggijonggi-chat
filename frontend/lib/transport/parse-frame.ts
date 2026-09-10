@@ -74,6 +74,20 @@ const systemNoticeFrameSchema = z.object({
   traceId: z.string(),
 });
 
+/**
+ * 참여자 명단 변경 통지(#129·#172). action을 union으로 좁히지 않고 무엇이 와도 문자열로
+ * 받는다 — 화면은 이 값으로 분기하지 않고 "명단을 다시 불러와"로만 쓰는데, 좁혀 두면 서버가
+ * 새 액션을 추가한 순간 프론트를 배포하기 전까지 통지가 통째로 사라진다. system.notice의
+ * severity와 같은 판단이다.
+ */
+const participantChangedFrameSchema = z.object({
+  type: z.literal('participant.changed'),
+  sessionId: z.string(),
+  action: z.string(),
+  subject: z.string(),
+  displayName: z.string(),
+});
+
 /** 연결 수립 자체가 실패하는 경우처럼 특정 세션에 속하지 않는 오류는 sessionId가 null일 수
  * 있다(ErrorFrame.java 주석과 동일 계약). */
 const wsErrorFrameSchema = z.object({
@@ -84,14 +98,17 @@ const wsErrorFrameSchema = z.object({
   traceId: z.string(),
 });
 
-/** type 필드로 판별하는 유니온. 알려진 7개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
- * 포함) 파싱이 실패한다 — parseFrame이 그 실패를 null로 흡수한다. */
+/** type 필드로 판별하는 유니온. 알려진 8개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
+ * 포함) 파싱이 실패한다 — parseFrame이 그 실패를 null로 흡수한다. frames.ts의 WsFrame 유니온에
+ * 타입을 더하면 여기 스키마도 함께 더해야 한다 — 빠뜨리면 컴파일은 통과하고 그 프레임만
+ * 조용히 버려진다. */
 const wsFrameSchema = z.discriminatedUnion('type', [
   chatAnswerFrameSchema,
   chatMessageFrameSchema,
   presenceJoinFrameSchema,
   presenceLeaveFrameSchema,
   presenceSnapshotFrameSchema,
+  participantChangedFrameSchema,
   systemNoticeFrameSchema,
   wsErrorFrameSchema,
 ]);
