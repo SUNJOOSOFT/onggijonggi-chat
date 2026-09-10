@@ -2,10 +2,12 @@ package com.onggijonggi.api.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
@@ -23,6 +25,7 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Mono;
 import reactor.test.StepVerifier;
 
 /**
@@ -43,11 +46,18 @@ class ThreadParticipantServiceTest {
 	@Mock
 	private AppUserRepository appUserRepository;
 
+	@Mock
+	private RoomSessionRegistry roomSessionRegistry;
+
+	@Mock
+	private KeycloakAdminClient keycloakAdminClient;
+
 	private ThreadParticipantService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository);
+		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository,
+				roomSessionRegistry, keycloakAdminClient);
 	}
 
 	/**
@@ -116,6 +126,111 @@ class ThreadParticipantServiceTest {
 						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
 						.isEqualTo(HttpStatus.CONFLICT));
 		verify(appUserRepository, never()).findByKeycloakSubj(any());
+	}
+
+	/** 초대가 실제로 새 참가 행을 만들면 그 방 구독자 전원에게 통지해야 한다(이슈 #129). */
+	@Test
+	void inviteNotifiesTheRoomWhenANewParticipantIsAdded() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser inviteeAppUser = new AppUser("invitee-sub");
+		UUID inviteeUserId = inviteeAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("invitee-sub")).thenReturn(Optional.of(inviteeAppUser));
+		when(thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(false);
+		when(keycloakAdminClient.displayName("invitee-sub")).thenReturn(Mono.just(Optional.of("Invitee")));
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "invitee-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.INVITED, "invitee-sub",
+						"Invitee")));
+	}
+
+	/** 이미 ACTIVE인 사람을 다시 초대하면 명단이 바뀌지 않았으므로 통지하지 않는다(멱등, 이슈 #129). */
+	@Test
+	void inviteDoesNotNotifyWhenTheInviteeIsAlreadyActive() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser inviteeAppUser = new AppUser("invitee-sub");
+		UUID inviteeUserId = inviteeAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(thrRepository.existsByIdAndStatus(threadId, ThrStatus.ACTIVE)).thenReturn(true);
+		when(appUserRepository.findByKeycloakSubj("invitee-sub")).thenReturn(Optional.of(inviteeAppUser));
+		when(thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(true);
+
+		StepVerifier.create(service.invite(threadId, actorUserId, "invitee-sub")).verifyComplete();
+
+		verify(roomSessionRegistry, never()).notifyIfListening(any(), any());
+	}
+
+	/** OWNER가 다른 참가자를 제거하면 제거당한 본인을 포함해 그 방 전원에게 통지한다(이슈 #129). */
+	@Test
+	void removeByOwnerNotifiesTheRoomWithTheRemovedSubject() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser targetAppUser = new AppUser("target-sub");
+		UUID targetUserId = targetAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(appUserRepository.findByKeycloakSubj("target-sub")).thenReturn(Optional.of(targetAppUser));
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, targetUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, targetUserId, ThrMbrRole.MEMBER, actorUserId)));
+		when(keycloakAdminClient.displayName("target-sub")).thenReturn(Mono.just(Optional.empty()));
+
+		StepVerifier.create(service.remove(threadId, actorUserId, "actor-sub", "target-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.REMOVED, "target-sub",
+						"target-sub")));
+	}
+
+	/** 자진 탈퇴도 참가자 명단이 바뀌는 일이라 남은 참가자에게 통지한다(이슈 #129). */
+	@Test
+	void selfLeaveNotifiesTheRoomWithTheActorsOwnSubject() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.MEMBER, actorUserId)));
+		when(keycloakAdminClient.displayName("actor-sub")).thenReturn(Mono.just(Optional.of("Actor")));
+
+		StepVerifier.create(service.remove(threadId, actorUserId, "actor-sub", "actor-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.REMOVED, "actor-sub", "Actor")));
+	}
+
+	/** 위임이 성공하면 새 OWNER의 subject를 실어 통지한다(이슈 #129). */
+	@Test
+	void transferOwnerNotifiesTheRoomWithTheNewOwnerSubject() {
+		UUID threadId = UUID.randomUUID();
+		UUID actorUserId = UUID.randomUUID();
+		AppUser targetAppUser = new AppUser("new-owner-sub");
+		UUID targetUserId = targetAppUser.getId();
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, actorUserId, ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, actorUserId, ThrMbrRole.OWNER, actorUserId)));
+		when(appUserRepository.findByKeycloakSubj("new-owner-sub")).thenReturn(Optional.of(targetAppUser));
+		when(thrMbrRepository.findByThrIdAndUserIdAndRoleAndStatus(threadId, targetUserId, ThrMbrRole.MEMBER,
+				ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, targetUserId, ThrMbrRole.MEMBER, actorUserId)));
+		when(thrMbrRepository.transferOwnership(threadId, actorUserId, targetUserId)).thenReturn(2);
+		when(keycloakAdminClient.displayName("new-owner-sub")).thenReturn(Mono.just(Optional.of("New Owner")));
+
+		StepVerifier.create(service.transferOwner(threadId, actorUserId, "new-owner-sub")).verifyComplete();
+
+		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.OWNER_TRANSFERRED,
+						"new-owner-sub", "New Owner")));
 	}
 
 }
