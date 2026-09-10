@@ -11,7 +11,7 @@ import java.util.UUID;
 
 /**
  * Class Name : ThrInv.java
- * Description : 아직 로그인한 적 없는 사람에 대한 Thread 초대(V13__thread_invitation.sql `thr_inv`,
+ * Description : 아직 로그인한 적 없는 사람에 대한 Thread 초대(V14__thread_invitation.sql `thr_inv`,
  *               이슈 #127).
  *
  *               대상을 subject 문자열로 들고 app_user FK를 걸지 않는 것이 이 엔티티의 존재

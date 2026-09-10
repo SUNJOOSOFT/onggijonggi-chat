@@ -82,11 +82,19 @@ public class SecurityConfig {
 		return new RateLimitWebFilter(objectMapper, rateLimitClock, rateLimitWindowSeconds, rateLimitPerMinute);
 	}
 
+	/**
+	* CORS는 브라우저만 강제한다 — 서버 대 서버 테스트에는 프리플라이트가 없어, 여기 빠진 메서드나
+	* 헤더는 테스트를 통과하고 화면에서만 막힌다. 컨트롤러에 새 메서드나 커스텀 요청 헤더를 더할
+	* 때 이 목록도 함께 늘려야 한다.
+	*/
 	private CorsConfigurationSource corsConfigurationSource() {
 		CorsConfiguration configuration = new CorsConfiguration();
 		configuration.setAllowedOrigins(allowedOrigins);
-		configuration.setAllowedMethods(List.of("POST", "GET", "DELETE", "PATCH", "OPTIONS"));
-		configuration.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+		// PUT은 소유권 위임(#20)·잠금·보관(#131)이 쓴다.
+		configuration.setAllowedMethods(List.of("POST", "GET", "PUT", "DELETE", "PATCH", "OPTIONS"));
+		// Idempotency-Key는 협업방 생성 재시도(#149)가 실어 보낸다.
+		configuration.setAllowedHeaders(
+				List.of("Authorization", "Content-Type", "Accept", "Idempotency-Key"));
 		configuration.setAllowCredentials(false);
 		configuration.setExposedHeaders(List.of("X-Trace-Id", "Retry-After"));
 		configuration.setMaxAge(3600L);
