@@ -36,13 +36,23 @@ export async function fetchCollabThreads(): Promise<CollabThreadSummary[]> {
   return res.json() as Promise<CollabThreadSummary[]>;
 }
 
-/** 협업방을 만들고 새 방 UUID를 돌려준다. 제목 검증은 서버가 최종 책임진다. */
+/**
+ * 협업방을 만들고 새 방 UUID를 돌려준다. 제목 검증은 서버가 최종 책임진다.
+ *
+ * idempotencyKey를 넘기면(이슈 #149) 응답 유실 뒤 같은 키로 재시도해도 방이 두 번 만들어지지
+ * 않는다 — 호출부가 재시도 사이에 같은 값을 재사용해야 의미가 있고, 이 함수는 값을 생성하지
+ * 않는다(무엇이 "같은 시도"인지는 화면의 재시도 흐름이 정할 몫이다).
+ */
 export async function createCollabThread(
   title: string,
+  idempotencyKey?: string,
 ): Promise<CreateCollabThreadResponse> {
   const res = await authFetch(bffUrl(COLLAB_THREADS_PATH), {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
+    },
     body: JSON.stringify({ title }),
   });
   if (!res.ok) {

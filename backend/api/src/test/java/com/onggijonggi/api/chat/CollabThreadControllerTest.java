@@ -21,6 +21,7 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpStatus;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
@@ -115,6 +116,31 @@ class CollabThreadControllerTest {
 				.jsonPath("$.error.code").isEqualTo("VALIDATION_ERROR");
 
 		assertThat(thrRepository.count()).isEqualTo(before);
+	}
+
+	/** Idempotency-Key로 재시도하면 새 방을 또 만들지 않는다(이슈 #149) — allowsDifferentRoomsToHaveTheSameTitle과
+	 * 대조된다: 키가 없으면 같은 title도 매번 새 방이지만, 키가 같으면 한 번만 만들어진다. */
+	@Test
+	void returnsTheSameThreadWhenRetriedWithTheSameIdempotencyKey() {
+		String title = "재시도 방";
+		String key = UUID.randomUUID().toString();
+
+		createThread("idem-owner", title, key).expectStatus().isCreated();
+		createThread("idem-owner", title, key).expectStatus().isCreated();
+
+		assertThat(threadsNamed(title)).hasSize(1);
+	}
+
+	/** 같은 키에 다른 title이 오면 이전 방을 조용히 돌려주지 않고 409로 거절한다(이슈 #149). */
+	@Test
+	void rejectsRetryWithTheSameKeyButADifferentTitle() {
+		String key = UUID.randomUUID().toString();
+		createThread("idem-conflict-owner", "첫 제목", key).expectStatus().isCreated();
+
+		createThread("idem-conflict-owner", "다른 제목", key)
+				.expectStatus().isEqualTo(HttpStatus.CONFLICT)
+				.expectBody()
+				.jsonPath("$.error.code").isEqualTo("IDEMPOTENCY_KEY_CONFLICT");
 	}
 
 	@Test
@@ -302,12 +328,18 @@ class CollabThreadControllerTest {
 	}
 
 	private RestTestClient.ResponseSpec createThread(String subject, String title) {
-		return restTestClient.post()
+		return createThread(subject, title, null);
+	}
+
+	private RestTestClient.ResponseSpec createThread(String subject, String title, String idempotencyKey) {
+		RestTestClient.RequestBodySpec request = restTestClient.post()
 				.uri("/api/collab/threads")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt(subject, List.of("USER")))
-				.contentType(org.springframework.http.MediaType.APPLICATION_JSON)
-				.body(Map.of("title", title))
-				.exchange();
+				.contentType(org.springframework.http.MediaType.APPLICATION_JSON);
+		if (idempotencyKey != null) {
+			request = request.header("Idempotency-Key", idempotencyKey);
+		}
+		return request.body(Map.of("title", title)).exchange();
 	}
 
 	private List<Thr> threadsNamed(String title) {

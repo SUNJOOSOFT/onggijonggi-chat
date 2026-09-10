@@ -49,6 +49,7 @@
 | `ended` | 종료됨 |
 | `error` | 오류 |
 | `file` | 파일 |
+| `idempotency` | 멱등성 |
 | `inactive` | 비활성 |
 | `indexed` | 색인됨 |
 | `indexing` | 색인 실행 |

@@ -12,7 +12,7 @@
 
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
-import { type FormEvent, useEffect, useState } from 'react';
+import { type FormEvent, useEffect, useRef, useState } from 'react';
 
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { Button } from '@/components/ui/button';
@@ -32,6 +32,9 @@ export function ThreadList() {
   const [title, setTitle] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
+  /** 재시도 사이에는 같은 키를 재사용해야 서버가 같은 시도로 본다(이슈 #149) — 매번 새로
+   * 생성하면 idempotency가 무의미해진다. 제목을 고치면 다른 시도로 보고 초기화한다. */
+  const idempotencyKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -55,8 +58,9 @@ export function ThreadList() {
     }
     setCreating(true);
     setCreateError(null);
+    idempotencyKeyRef.current ??= crypto.randomUUID();
     try {
-      const created = await createCollabThread(title);
+      const created = await createCollabThread(title, idempotencyKeyRef.current);
       router.push(`/collab/${created.id}`);
     } catch (error) {
       setCreateError(
@@ -85,7 +89,12 @@ export function ThreadList() {
             aria-describedby={createError ? 'create-thread-error' : undefined}
             disabled={creating}
             maxLength={255}
-            onChange={(event) => setTitle(event.target.value)}
+            onChange={(event) => {
+              setTitle(event.target.value);
+              // 제목을 고쳤다는 것은 이전 시도의 재시도가 아니라 새 시도라는 뜻이다 — 이전 키를
+              // 그대로 쓰면 이번 title이 그 키의 최초 title과 달라 서버가 충돌로 거절한다.
+              idempotencyKeyRef.current = null;
+            }}
             placeholder="새 협업방 제목"
             value={title}
           />

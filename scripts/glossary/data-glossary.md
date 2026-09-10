@@ -38,6 +38,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `err` | `error` | 오류 | 알고리즘 | - |
 | `file` | `file` | 파일 | 알고리즘 | - |
 | `fgpt` | `fingerprint` | - | 예외 | 관용어 — 알고리즘 결과 `fng`가 의미 불명확, 4자로 늘려 가독성 확보 |
+| `idm` | `idempotency` | 멱등성 | 알고리즘 | - |
 | `id` | `identifier` | - | 예외 | 관용어(팀 합의) |
 | `inactive` | `inactive` | 비활성 | 예외 | 관용 유지 — 알고리즘 결과 `inc`는 increment·include와 혼동. `inactive_at` 대칭, 기존 `created`/`updated`/`deleted`/`locked`/`archived`와 동일 패턴 |
 | `indexed` | `indexed` | 색인됨 | 예외 | 관용 — `indexed_at` 대칭 |

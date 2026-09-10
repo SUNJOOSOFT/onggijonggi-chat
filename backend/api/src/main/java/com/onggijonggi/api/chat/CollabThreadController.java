@@ -24,6 +24,7 @@ import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -31,6 +32,7 @@ import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
 import org.springframework.web.server.ResponseStatusException;
@@ -109,15 +111,35 @@ public class CollabThreadController {
 				.flatMapMany(Flux::fromIterable);
 	}
 
-	/** 인증된 사용자는 제목만으로 방을 만들며, 생성 서비스가 최초 OWNER 참가를 함께 만든다. */
+	/**
+	* 인증된 사용자는 제목만으로 방을 만들며, 생성 서비스가 최초 OWNER 참가를 함께 만든다.
+	* Idempotency-Key 헤더가 있으면(이슈 #149) 응답 유실 뒤 재시도에도 같은 방을 그대로 돌려준다 —
+	* 헤더가 없는 호출은 이 계약을 요구하지 않은 것으로 보고 기존과 동일하게 매번 새로 만든다.
+	*/
 	@PostMapping("/api/collab/threads")
 	@ResponseStatus(HttpStatus.CREATED)
-	public Mono<CreateCollabThreadResponse> createThread(@Valid @RequestBody CreateCollabThreadRequest request) {
+	public Mono<CreateCollabThreadResponse> createThread(
+			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
+			@Valid @RequestBody CreateCollabThreadRequest request) {
 		return actorUserId()
-				.flatMap(userId -> Mono.fromCallable(() -> collabThreadCreationService
-						.createBlocking(userId, request.title()))
+				.flatMap(userId -> Mono
+						.fromCallable(() -> createWithRetry(userId, request.title(), idempotencyKey))
 						.subscribeOn(Schedulers.boundedElastic()))
 				.map(CreateCollabThreadResponse::new);
+	}
+
+	/**
+	* 같은 idempotency key로 동시에 들어온 다른 요청이 먼저 커밋되면, 우리 쪽 저장은 thr_idm_key의
+	* 유니크 인덱스에 막혀 트랜잭션째 롤백된다(CollabThreadCreationService 주석 참고). 그 순간엔
+	* 이긴 쪽 행이 이미 커밋돼 있으므로, 한 번만 다시 불러 그 결과를 그대로 따라간다 — 두 번째
+	* 시도까지 같은 경합에 걸릴 일은 없다.
+	*/
+	private UUID createWithRetry(UUID userId, String title, String idempotencyKey) {
+		try {
+			return collabThreadCreationService.createBlocking(userId, title, idempotencyKey);
+		} catch (DataIntegrityViolationException raced) {
+			return collabThreadCreationService.createBlocking(userId, title, idempotencyKey);
+		}
 	}
 
 	/** 명단은 참가자면 누구나 본다 — 제거·위임 대상을 지목하려면 먼저 누가 있는지 알아야 한다. */

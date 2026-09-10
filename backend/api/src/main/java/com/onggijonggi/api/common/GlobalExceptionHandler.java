@@ -1,5 +1,6 @@
 package com.onggijonggi.api.common;
 
+import com.onggijonggi.api.chat.IdempotencyKeyConflictException;
 import com.openai.errors.OpenAIServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -64,6 +65,15 @@ public class GlobalExceptionHandler {
 			message = "참여자 상태가 바뀌어 요청을 처리할 수 없습니다.";
 		}
 		return ResponseEntity.status(status).body(ErrorResponse.of(code, message, traceId(exchange)));
+	}
+
+	/** 같은 idempotency key에 이전과 다른 요청 내용이 온 경우(이슈 #149) — 참여자 상태 충돌(409)과는
+	 * 원인이 달라 별도 타입·코드로 구분한다. */
+	@ExceptionHandler(IdempotencyKeyConflictException.class)
+	public ResponseEntity<ErrorResponse> handleIdempotencyKeyConflict(IdempotencyKeyConflictException ex,
+			ServerWebExchange exchange) {
+		return ResponseEntity.status(HttpStatus.CONFLICT)
+				.body(ErrorResponse.of("IDEMPOTENCY_KEY_CONFLICT", ex.getMessage(), traceId(exchange)));
 	}
 
 	/**
