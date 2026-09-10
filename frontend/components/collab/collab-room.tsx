@@ -259,7 +259,7 @@ export function CollabRoom({ threadId }: { threadId: string }) {
             이름은 프레임이 실어 온 값이고, subject는 동명이인을 가릴 수 있게 title로 남긴다. */}
         <aside className="hidden w-56 shrink-0 flex-col gap-2 border-l p-4 sm:flex">
           <h2 className="text-xs font-medium text-muted-foreground">
-            참여자 {state.participants.length}
+            접속중 {state.participants.length}
           </h2>
           <ul className="flex flex-col gap-1">
             {state.participants.map((participant) => (

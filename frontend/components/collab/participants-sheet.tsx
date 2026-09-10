@@ -166,7 +166,7 @@ export function ParticipantsSheet({ threadId }: { threadId: string }) {
         <SheetTrigger asChild>
           <Button variant="ghost" size="sm" className="gap-1.5">
             <Users className="h-4 w-4" />
-            참여자
+            참여자 관리
           </Button>
         </SheetTrigger>
         <SheetContent>
