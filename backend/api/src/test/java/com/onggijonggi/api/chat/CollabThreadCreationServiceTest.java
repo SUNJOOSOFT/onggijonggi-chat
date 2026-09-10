@@ -9,7 +9,13 @@ import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import java.util.List;
 import java.util.UUID;
+import java.util.concurrent.Callable;
+import java.util.concurrent.CyclicBarrier;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
@@ -89,6 +95,53 @@ class CollabThreadCreationServiceTest {
 
 		assertThatThrownBy(() -> collabThreadCreationService.createBlocking(userId, "다른 제목", key))
 				.isInstanceOf(IdempotencyKeyConflictException.class);
+	}
+
+	/**
+	* CyclicBarrier로 두 스레드의 createBlocking 진입을 동시로 맞춰, 서비스 레벨 @Transactional 아래
+	* flush 시점에 유니크 인덱스 위반이 터질 때도 DataIntegrityViolationException으로 새어나오는지
+	* 실제로 검증한다 — 개별 save() 호출이 아니라 트랜잭션 commit 근처에서 발생하는 예외라, 다른
+	* 타입(TransactionSystemException 등)으로 바뀌어 CollabThreadController.createWithRetry의 catch를
+	* 비껴갈 위험이 있었다. 한쪽은 성공하고 다른 쪽은 DataIntegrityViolationException을 던지며, 진
+	* 쪽의 thr도 트랜잭션째 롤백돼 남지 않아야 한다.
+	*/
+	@Test
+	void oneOfTwoConcurrentCreationsWithTheSameKeyFailsWithDataIntegrityViolation() throws Exception {
+		UUID userId = UUID.randomUUID();
+		String title = "동시성 방";
+		String key = UUID.randomUUID().toString();
+		CyclicBarrier barrier = new CyclicBarrier(2);
+		ExecutorService pool = Executors.newFixedThreadPool(2);
+		try {
+			Callable<Throwable> attempt = () -> {
+				barrier.await();
+				try {
+					collabThreadCreationService.createBlocking(userId, title, key);
+					return null;
+				} catch (Throwable thrown) {
+					return thrown;
+				}
+			};
+			List<Future<Throwable>> results = pool.invokeAll(List.of(attempt, attempt));
+			List<Throwable> outcomes = results.stream().map(this::unwrap).toList();
+
+			assertThat(outcomes).hasSize(2);
+			assertThat(outcomes).filteredOn(java.util.Objects::isNull).hasSize(1);
+			assertThat(outcomes).filteredOn(java.util.Objects::nonNull)
+					.singleElement()
+					.isInstanceOf(DataIntegrityViolationException.class);
+			assertThat(thrRepository.findAll()).extracting(Thr::getTitle).containsOnlyOnce(title);
+		} finally {
+			pool.shutdown();
+		}
+	}
+
+	private Throwable unwrap(Future<Throwable> future) {
+		try {
+			return future.get();
+		} catch (Exception e) {
+			throw new RuntimeException(e);
+		}
 	}
 
 	/** 다른 사용자가 우연히 같은 키 문자열을 써도 서로 다른 요청으로 취급한다 — 키는 사용자 범위다. */
