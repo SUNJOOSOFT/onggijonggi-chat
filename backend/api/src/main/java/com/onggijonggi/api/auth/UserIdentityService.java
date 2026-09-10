@@ -53,16 +53,31 @@ public class UserIdentityService {
 	* @return 새로 만들었거나, 경합에서 진 경우 이긴 쪽이 만든 행의 id
 	*/
 	private UUID createOrFetchExisting(String keycloakSubj) {
-		try {
-			UUID createdId = appUserRepository.save(new AppUser(keycloakSubj)).getId();
-			// 여기가 이 사람의 첫 로그인이다 — 그 앞으로 온 대기 초대를 참가로 바꾼다(이슈 #127).
-			// 경합에서 진 쪽(아래 catch)은 이미 이긴 쪽이 전환했으므로 다시 하지 않는다.
-			invitationAcceptanceService.acceptPendingBlocking(createdId, keycloakSubj);
-			return createdId;
-		} catch (DataIntegrityViolationException raced) {
+		UUID createdId = createOrNull(keycloakSubj);
+		if (createdId == null) {
 			return appUserRepository.findByKeycloakSubj(keycloakSubj)
 					.map(AppUser::getId)
-					.orElseThrow(() -> raced);
+					.orElseThrow(() -> new IllegalStateException(
+							"keycloak_subj unique 위반인데 그 행이 없다: " + keycloakSubj));
+		}
+		// 여기가 이 사람의 첫 로그인이다 — 그 앞으로 온 대기 초대를 참가로 바꾼다(이슈 #127).
+		// 경합에서 진 쪽(createdId == null)은 이미 이긴 쪽이 전환했으므로 다시 하지 않는다.
+		invitationAcceptanceService.acceptPendingBlocking(createdId, keycloakSubj);
+		return createdId;
+	}
+
+	/**
+	* app_user 행 생성만 시도한다. try가 save() 한 줄만 감싸는 것이 중요하다 — 전환까지 감싸면
+	* 초대 전환에서 올라온 무결성 예외를 "app_user 경합"으로 오판하고, 뒤이은 재조회가 방금 만든
+	* 행을 찾아내 <b>정상 반환</b>해 버린다. 전환은 첫 로그인 한 번뿐이라 재시도도 없어, 그 초대는
+	* 아무 흔적 없이 영구히 대기 상태로 남는다.
+	* @return 새로 만든 행의 id, 경합에서 졌으면 null
+	*/
+	private UUID createOrNull(String keycloakSubj) {
+		try {
+			return appUserRepository.save(new AppUser(keycloakSubj)).getId();
+		} catch (DataIntegrityViolationException raced) {
+			return null;
 		}
 	}
 

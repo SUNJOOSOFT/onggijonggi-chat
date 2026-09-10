@@ -1,33 +1,28 @@
 package com.onggijonggi.api.chat;
 
-import static org.assertj.core.api.Assertions.assertThat;
-import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.Mockito.never;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
-import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
-import com.onggijonggi.common.chat.domain.ThrMbr;
-import com.onggijonggi.common.chat.domain.ThrMbrRole;
-import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.persistence.ThrInvRepository;
-import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
-import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.util.List;
-import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
-import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.DataIntegrityViolationException;
 
 /**
  * Class Name : InvitationAcceptanceServiceTest.java
- * Description : 첫 로그인 때 대기 초대가 실제 참가로 바뀌는 경로(이슈 #127).
+ * Description : 첫 로그인 때 대기 초대를 건별로 전환하는 루프와 경합 재시도(이슈 #127).
+ *               전환 자체는 PendingInvitationAcceptanceTest가 다룬다.
  */
 @ExtendWith(MockitoExtension.class)
 class InvitationAcceptanceServiceTest {
@@ -36,82 +31,74 @@ class InvitationAcceptanceServiceTest {
 	private ThrInvRepository thrInvRepository;
 
 	@Mock
-	private ThrMbrRepository thrMbrRepository;
-
-	@Mock
-	private ThrRepository thrRepository;
+	private PendingInvitationAcceptance pendingInvitationAcceptance;
 
 	private InvitationAcceptanceService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new InvitationAcceptanceService(thrInvRepository, thrMbrRepository, thrRepository);
+		service = new InvitationAcceptanceService(thrInvRepository, pendingInvitationAcceptance);
 	}
 
+	/** 방이 여럿이면 초대도 여럿이다 — 건별로 각자의 트랜잭션에서 전환한다. */
 	@Test
-	void turnsAPendingInvitationIntoParticipation() {
-		UUID inviterId = UUID.randomUUID();
-		UUID newUserId = UUID.randomUUID();
-		Thr room = Thr.collab(inviterId, "초대받은 방");
-		ThrInv invitation = new ThrInv(room.getId(), "first-login-sub", inviterId);
-
-		when(thrInvRepository.findBySubjAndStatus("first-login-sub", ThrInvStatus.PENDING))
-				.thenReturn(List.of(invitation));
-		when(thrRepository.findById(room.getId())).thenReturn(Optional.of(room));
-		when(thrMbrRepository.existsByThrIdAndUserIdAndStatus(room.getId(), newUserId,
-				ThrMbrStatus.ACTIVE)).thenReturn(false);
-
-		service.acceptPendingBlocking(newUserId, "first-login-sub");
-
-		ArgumentCaptor<ThrMbr> saved = ArgumentCaptor.forClass(ThrMbr.class);
-		verify(thrMbrRepository).save(saved.capture());
-		assertThat(saved.getValue().getUserId()).isEqualTo(newUserId);
-		assertThat(saved.getValue().getRole()).isEqualTo(ThrMbrRole.MEMBER);
-		// "누가 이 사람을 들였나"의 답은 초대한 사람이어야 한다.
-		assertThat(saved.getValue().getCreatedByUserId()).isEqualTo(inviterId);
-
-		assertThat(invitation.getStatus()).isEqualTo(ThrInvStatus.ACCEPTED);
-		assertThat(invitation.getEndRsn()).isEqualTo("FIRST_LOGIN");
-		verify(thrInvRepository).save(invitation);
-	}
-
-	@Test
-	void closesTheInvitationWithoutASecondRowWhenAlreadyJoined() {
-		UUID inviterId = UUID.randomUUID();
+	void convertsEveryPendingInvitationOneByOne() {
 		UUID userId = UUID.randomUUID();
-		Thr room = Thr.collab(inviterId, "이미 들어간 방");
-		ThrInv invitation = new ThrInv(room.getId(), "already-in-sub", inviterId);
+		UUID inviterId = UUID.randomUUID();
+		ThrInv first = new ThrInv(UUID.randomUUID(), "multi-sub", inviterId);
+		ThrInv second = new ThrInv(UUID.randomUUID(), "multi-sub", inviterId);
 
-		when(thrInvRepository.findBySubjAndStatus("already-in-sub", ThrInvStatus.PENDING))
-				.thenReturn(List.of(invitation));
-		when(thrRepository.findById(room.getId())).thenReturn(Optional.of(room));
-		// 초대를 받아둔 사이에 다른 경로로 이미 참가했다.
-		when(thrMbrRepository.existsByThrIdAndUserIdAndStatus(room.getId(), userId,
-				ThrMbrStatus.ACTIVE)).thenReturn(true);
+		when(thrInvRepository.findBySubjAndStatus("multi-sub", ThrInvStatus.PENDING))
+				.thenReturn(List.of(first, second));
 
-		service.acceptPendingBlocking(userId, "already-in-sub");
+		service.acceptPendingBlocking(userId, "multi-sub");
 
-		verify(thrMbrRepository, never()).save(any());
-		assertThat(invitation.getStatus()).isEqualTo(ThrInvStatus.ACCEPTED);
+		verify(pendingInvitationAcceptance).acceptOneBlocking(first.getId(), userId);
+		verify(pendingInvitationAcceptance).acceptOneBlocking(second.getId(), userId);
 	}
 
-	/** 잠기거나 보관된 방은 초대 자체를 막는 requireWritableThread와 같은 기준으로 전환도 미룬다. */
+	/**
+	 * 활성 참가자 유니크 경합으로 한 건이 되돌아가면 그 건만 다시 시도한다. 그냥 넘기면 실제로는
+	 * 참가해 있는데 초대만 영구히 PENDING으로 남는다 — 전환 시도는 첫 로그인 한 번뿐이다.
+	 */
 	@Test
-	void leavesTheInvitationPendingWhenTheRoomIsNotActive() {
-		UUID inviterId = UUID.randomUUID();
-		Thr room = Thr.collab(inviterId, "보관된 방");
-		room.archive();
-		ThrInv invitation = new ThrInv(room.getId(), "archived-sub", inviterId);
+	void retriesTheRacedInvitationOnce() {
+		UUID userId = UUID.randomUUID();
+		ThrInv invitation = new ThrInv(UUID.randomUUID(), "raced-sub", UUID.randomUUID());
 
-		when(thrInvRepository.findBySubjAndStatus("archived-sub", ThrInvStatus.PENDING))
+		when(thrInvRepository.findBySubjAndStatus("raced-sub", ThrInvStatus.PENDING))
 				.thenReturn(List.of(invitation));
-		when(thrRepository.findById(room.getId())).thenReturn(Optional.of(room));
+		doThrow(new DataIntegrityViolationException("ux_thr_mbr_active_participant"))
+				.doNothing()
+				.when(pendingInvitationAcceptance)
+				.acceptOneBlocking(invitation.getId(), userId);
 
-		service.acceptPendingBlocking(UUID.randomUUID(), "archived-sub");
+		service.acceptPendingBlocking(userId, "raced-sub");
 
-		verify(thrMbrRepository, never()).save(any());
-		verify(thrInvRepository, never()).save(any());
-		assertThat(invitation.getStatus()).isEqualTo(ThrInvStatus.PENDING);
+		verify(pendingInvitationAcceptance, times(2)).acceptOneBlocking(invitation.getId(), userId);
+	}
+
+	/** 한 방의 경합이 다른 방의 전환을 막지 않는다 — 경계가 배치 전체가 아니라 초대 한 건이다. */
+	@Test
+	void keepsConvertingOtherRoomsAfterOneRaces() {
+		UUID userId = UUID.randomUUID();
+		UUID inviterId = UUID.randomUUID();
+		ThrInv raced = new ThrInv(UUID.randomUUID(), "mixed-sub", inviterId);
+		ThrInv healthy = new ThrInv(UUID.randomUUID(), "mixed-sub", inviterId);
+
+		when(thrInvRepository.findBySubjAndStatus("mixed-sub", ThrInvStatus.PENDING))
+				.thenReturn(List.of(raced, healthy));
+		doThrow(new DataIntegrityViolationException("ux_thr_mbr_active_participant"))
+				.doNothing()
+				.when(pendingInvitationAcceptance)
+				.acceptOneBlocking(eq(raced.getId()), eq(userId));
+		doNothing().when(pendingInvitationAcceptance)
+				.acceptOneBlocking(eq(healthy.getId()), eq(userId));
+
+		service.acceptPendingBlocking(userId, "mixed-sub");
+
+		verify(pendingInvitationAcceptance, times(2)).acceptOneBlocking(raced.getId(), userId);
+		verify(pendingInvitationAcceptance).acceptOneBlocking(healthy.getId(), userId);
 	}
 
 }

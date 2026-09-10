@@ -15,6 +15,7 @@ import com.onggijonggi.common.user.AppUserRepository;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
 import java.util.UUID;
 import java.util.stream.Collectors;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -48,15 +49,18 @@ public class ThreadParticipantService {
 	private final AppUserRepository appUserRepository;
 	private final ThrInvRepository thrInvRepository;
 	private final KeycloakAdminClient keycloakAdminClient;
+	private final InvitationAcceptanceService invitationAcceptanceService;
 
 	public ThreadParticipantService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository,
 			AppUserRepository appUserRepository, ThrInvRepository thrInvRepository,
-			KeycloakAdminClient keycloakAdminClient) {
+			KeycloakAdminClient keycloakAdminClient,
+			InvitationAcceptanceService invitationAcceptanceService) {
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
 		this.appUserRepository = appUserRepository;
 		this.thrInvRepository = thrInvRepository;
 		this.keycloakAdminClient = keycloakAdminClient;
+		this.invitationAcceptanceService = invitationAcceptanceService;
 	}
 
 	/** 참가자면 누구나 볼 수 있다 — 자기 방 구성원을 읽는 것뿐이라 OWNER로 좁히지 않는다. */
@@ -115,13 +119,34 @@ public class ThreadParticipantService {
 	private Mono<Void> savePendingInvitation(UUID threadId, UUID actorUserId, String inviteeSubject) {
 		return Mono.<Void>fromCallable(() -> {
 					if (thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject,
-							ThrInvStatus.PENDING).isPresent()) {
-						return null;
+							ThrInvStatus.PENDING).isEmpty()) {
+						saveIgnoringDuplicate(new ThrInv(threadId, inviteeSubject, actorUserId));
 					}
-					saveIgnoringDuplicate(new ThrInv(threadId, inviteeSubject, actorUserId));
+					acceptIfAlreadyLoggedIn(threadId, inviteeSubject);
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/**
+	* 초대 행을 남긴 <b>뒤에</b> 대상의 app_user 행을 한 번 더 본다. 위쪽 findByKeycloakSubj가
+	* 미스였는데 그 사이에 대상이 첫 로그인을 마쳤을 수 있고, 그 창은 좁지 않다 — 두 지점 사이에
+	* exists()의 Keycloak HTTP 왕복이 그대로 들어간다.
+	*
+	* 전환은 app_user 행을 새로 만든 순간에만 도는데, 그쪽이 초대 테이블을 훑을 때 우리 초대 행이
+	* 아직 커밋되지 않았다면 그쪽도 우리도 전환하지 않는다 — 전환 시도는 첫 로그인 한 번뿐이라
+	* 그 초대는 영구히 대기한다. 각자 자기 쓰기를 커밋한 뒤에 상대를 보므로, 이 재확인이 있으면
+	* 적어도 한쪽은 상대를 본다.
+	*/
+	private void acceptIfAlreadyLoggedIn(UUID threadId, String inviteeSubject) {
+		Optional<UUID> inviteeUserId = appUserRepository.findByKeycloakSubj(inviteeSubject)
+				.map(AppUser::getId);
+		if (inviteeUserId.isEmpty()) {
+			return;
+		}
+		thrInvRepository.findByThrIdAndSubjAndStatus(threadId, inviteeSubject, ThrInvStatus.PENDING)
+				.ifPresent(invitation -> invitationAcceptanceService.acceptOneBlocking(
+						invitation.getId(), inviteeUserId.get()));
 	}
 
 	/**

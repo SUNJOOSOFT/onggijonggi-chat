@@ -1,19 +1,11 @@
 package com.onggijonggi.api.chat;
 
-import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
-import com.onggijonggi.common.chat.domain.ThrMbr;
-import com.onggijonggi.common.chat.domain.ThrMbrRole;
-import com.onggijonggi.common.chat.domain.ThrMbrStatus;
-import com.onggijonggi.common.chat.domain.ThrStatus;
 import com.onggijonggi.common.chat.persistence.ThrInvRepository;
-import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
-import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Class Name : InvitationAcceptanceService.java
@@ -23,69 +15,56 @@ import org.springframework.transaction.annotation.Transactional;
  *               곧 첫 로그인이라, 매 요청마다 초대 테이블을 훑지 않는다. 그쪽에 로직을 직접 넣지
  *               않은 것은 UserIdentityService가 모든 인증 경로(HTTP·WS)가 지나는 자리이기 때문이다.
  *
+ *               이 클래스는 <b>트랜잭션을 열지 않는다.</b> 초대 한 건이 트랜잭션 단위고, 그
+ *               경계는 PendingInvitationAcceptance가 REQUIRES_NEW로 갖는다 — 한 방의 유니크
+ *               경합이 다른 방들의 전환까지 되돌리지 않게 하려는 것이다. 여기서 @Transactional을
+ *               다시 걸면 그 격리가 무의미해진다.
+ *
  *               전환은 ACTIVE 방에만 한다. 잠기거나 보관된 방의 초대는 PENDING으로 남겨 둔다 —
- *               초대 자체를 막는 requireWritableThread와 같은 기준이고, 방이 다시 열리면 그때
- *               전환된다(다음 로그인이 아니라 이 사람의 첫 로그인 한 번뿐이라는 점은 한계로 남는다).
+ *               초대 자체를 막는 requireWritableThread와 같은 기준이다. 전환 시도가 이 사람의 첫
+ *               로그인 한 번뿐이고 Thr에는 ACTIVE로 되돌아오는 경로가 없어(lock()·archive()만
+ *               있다), 그 초대는 사실상 계속 대기한다 — 초대 수명 관리는 후속 몫이다.
  */
 @Service
 public class InvitationAcceptanceService {
 
-	/** end_rsn 고정 토큰 — ThreadParticipantService의 SELF_LEAVE·OWNER_REVOKED와 같은 자리다. */
-	private static final String FIRST_LOGIN = "FIRST_LOGIN";
-
 	private final ThrInvRepository thrInvRepository;
-	private final ThrMbrRepository thrMbrRepository;
-	private final ThrRepository thrRepository;
+	private final PendingInvitationAcceptance pendingInvitationAcceptance;
 
 	public InvitationAcceptanceService(ThrInvRepository thrInvRepository,
-			ThrMbrRepository thrMbrRepository, ThrRepository thrRepository) {
+			PendingInvitationAcceptance pendingInvitationAcceptance) {
 		this.thrInvRepository = thrInvRepository;
-		this.thrMbrRepository = thrMbrRepository;
-		this.thrRepository = thrRepository;
+		this.pendingInvitationAcceptance = pendingInvitationAcceptance;
 	}
 
 	/**
-	 * 대기 초대를 참가로 바꾼다. 초대가 여럿(방이 여럿)일 수 있어 한 트랜잭션으로 묶는다.
+	 * 대기 초대를 참가로 바꾼다. 초대가 여럿(방이 여럿)일 수 있어 건별로 돌린다.
 	 *
-	 * 초대자(createdByUserId)를 그대로 참가 행의 created_by_user_id로 옮긴다 — 나중에 "누가 이
-	 * 사람을 들였나"를 물으면 초대한 사람이 답이어야 한다.
+	 * 유니크 위반이 올라오면 한 번 다시 시도한다. 그 위반은 "다른 경로가 이 사람을 같은 방에 먼저
+	 * 넣었다"는 뜻인데, 위반이 난 트랜잭션은 통째로 되돌아가 초대가 PENDING으로 남는다 — 그냥
+	 * 넘기면 실제로는 참가해 있는데 초대만 영구히 대기하는 상태가 된다. 재시도의 존재 검사는
+	 * 이긴 쪽이 만든 행을 보므로 INSERT를 건너뛰고 초대만 닫는다.
 	 *
 	 * JPA는 블로킹이라 호출부가 이미 boundedElastic 위에 있어야 한다.
 	 */
-	@Transactional
 	public void acceptPendingBlocking(UUID userId, String subject) {
 		for (ThrInv invitation : thrInvRepository.findBySubjAndStatus(subject, ThrInvStatus.PENDING)) {
-			if (!isOpen(invitation.getThrId())) {
-				continue;
-			}
-			joinIfAbsent(invitation, userId);
-			invitation.end(ThrInvStatus.ACCEPTED, FIRST_LOGIN);
-			thrInvRepository.save(invitation);
+			acceptOneBlocking(invitation.getId(), userId);
 		}
-	}
-
-	/** 방이 사라졌으면(cascade로 초대도 지워지므로 보통 여기 오지 않는다) 전환하지 않는다. */
-	private boolean isOpen(UUID threadId) {
-		return thrRepository.findById(threadId)
-				.map(Thr::getStatus)
-				.filter(status -> status == ThrStatus.ACTIVE)
-				.isPresent();
 	}
 
 	/**
-	 * 초대를 받아둔 사이에 다른 경로로 이미 참가했을 수 있다 — 그때는 참가 행을 더 만들지 않고
-	 * 초대만 닫는다. 활성 참가자 부분 유니크 위반도 같은 뜻이라 성공으로 둔다.
+	 * 초대 한 건만 전환한다. 첫 로그인 경로 외에 ThreadParticipantService의 초대 경로도 부른다 —
+	 * 초대를 남기는 사이에 대상이 이미 첫 로그인을 마쳤다면 아무도 전환하지 않기 때문이다.
+	 *
+	 * 재시도가 이 자리에 있는 이유는 REQUIRES_NEW 경계 <b>밖</b>이어야 하기 때문이다. 제약 위반이
+	 * 난 트랜잭션은 rollback-only라 그 안에서는 이어서 진행할 수 없다.
 	 */
-	private void joinIfAbsent(ThrInv invitation, UUID userId) {
-		if (thrMbrRepository.existsByThrIdAndUserIdAndStatus(invitation.getThrId(), userId,
-				ThrMbrStatus.ACTIVE)) {
-			return;
-		}
+	public void acceptOneBlocking(UUID invitationId, UUID userId) {
 		try {
-			thrMbrRepository.save(new ThrMbr(invitation.getThrId(), userId, ThrMbrRole.MEMBER,
-					invitation.getCreatedByUserId()));
+			pendingInvitationAcceptance.acceptOneBlocking(invitationId, userId);
 		} catch (DataIntegrityViolationException raced) {
-			// 이긴 쪽이 만든 활성 참가 행이 이미 있다.
+			pendingInvitationAcceptance.acceptOneBlocking(invitationId, userId);
 		}
 	}
 
