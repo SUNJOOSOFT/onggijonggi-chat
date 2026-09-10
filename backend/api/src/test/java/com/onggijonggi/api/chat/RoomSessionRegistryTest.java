@@ -25,7 +25,9 @@ import static org.assertj.core.api.Assertions.assertThat;
  *               다른 연결은 영향받지 않는지, 마지막 멤버가 나간 뒤 새 방 상태가 정상 동작하는지
  *               확인한다. 입퇴장 통보(이슈 #25)는 연결이 아니라 사용자 단위라, 한 사람이 탭을
  *               여럿 열었을 때 통보가 새지 않는지도 함께 본다. 방이 비었다 다시 생긴 뒤 옛 세대로는
- *               방송이 들어가지 않는지도 확인한다(이슈 #102).
+ *               방송이 들어가지 않는지도 확인한다(이슈 #102). 참가자 제거 시 그 사람의 연결(탭이
+ *               여럿이어도 전부)에만 강제 종료 신호가 가고 다른 연결은 영향받지 않는지도
+ *               확인한다(이슈 #135).
  */
 class RoomSessionRegistryTest {
 
@@ -425,6 +427,56 @@ class RoomSessionRegistryTest {
 		// 모르는 사람이 목록에 남지 않는다.
 		assertThat(late.snapshot().participants()).doesNotContain(leavingUser);
 		assertThat(late.snapshot().participants()).startsWith(stayingUser);
+	}
+
+	/** evict는 kicked 신호만 완료시킨다 — 실제 연결 제거는 CollabWebSocketHandler가 leave를 불러 한다(이슈 #135). */
+	@Test
+	void evictCompletesTheKickedSignalForTheMatchingSubject() {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant removedUser = participant("removed");
+		PresenceParticipant stayingUser = participant("staying");
+
+		RoomSessionRegistry.RoomMembership removed = registry.join(roomId, UUID.randomUUID(), removedUser);
+		RoomSessionRegistry.RoomMembership staying = registry.join(roomId, UUID.randomUUID(), stayingUser);
+		AtomicBoolean removedKicked = new AtomicBoolean();
+		AtomicBoolean stayingKicked = new AtomicBoolean();
+		removed.kicked().doOnSuccess(ignored -> removedKicked.set(true)).subscribe();
+		staying.kicked().doOnSuccess(ignored -> stayingKicked.set(true)).subscribe();
+
+		assertThat(registry.evict(roomId, removedUser.subject())).isTrue();
+
+		assertThat(removedKicked).isTrue();
+		assertThat(stayingKicked).isFalse();
+	}
+
+	/** 같은 사람이 탭을 여럿 열었으면 evict가 그 전부의 kicked 신호를 완료시킨다. */
+	@Test
+	void evictKicksEveryConnectionOfTheSameSubject() {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant twoTabUser = participant("twoTab");
+
+		RoomSessionRegistry.RoomMembership firstTab = registry.join(roomId, UUID.randomUUID(), twoTabUser);
+		RoomSessionRegistry.RoomMembership secondTab = registry.join(roomId, UUID.randomUUID(), twoTabUser);
+		AtomicBoolean firstTabKicked = new AtomicBoolean();
+		AtomicBoolean secondTabKicked = new AtomicBoolean();
+		firstTab.kicked().doOnSuccess(ignored -> firstTabKicked.set(true)).subscribe();
+		secondTab.kicked().doOnSuccess(ignored -> secondTabKicked.set(true)).subscribe();
+
+		assertThat(registry.evict(roomId, twoTabUser.subject())).isTrue();
+
+		assertThat(firstTabKicked).isTrue();
+		assertThat(secondTabKicked).isTrue();
+	}
+
+	/** 방이 없거나(접속한 적 없음) 그 subject의 연결이 없으면 조용히 false만 돌려준다 — 예외를 던지지 않는다. */
+	@Test
+	void evictIsANoOpWhenThereIsNoMatchingConnection() {
+		UUID roomId = UUID.randomUUID();
+
+		assertThat(registry.evict(roomId, "nobody-here")).isFalse();
+
+		registry.join(roomId, UUID.randomUUID(), anyone());
+		assertThat(registry.evict(roomId, "still-nobody")).isFalse();
 	}
 
 	private void broadcastRange(UUID roomId, UUID roomGeneration, String prefix, CountDownLatch start) {
