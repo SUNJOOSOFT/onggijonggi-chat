@@ -50,7 +50,7 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	private static final Duration EVICTED_FRAME_FLUSH_GRACE_PERIOD = Duration.ofMillis(200);
 
 	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join",
-			"presence.leave", "presence.snapshot", "error");
+			"presence.leave", "presence.snapshot", "error", "system.notice");
 
 	private final ObjectMapper objectMapper;
 
