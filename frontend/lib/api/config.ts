@@ -49,8 +49,14 @@ export const COLLAB_THREADS_PATH = '/api/collab/threads';
  * 1:1(server-history.ts)과 달리 클라이언트에서 부른다. WS 연결 수명과 맞물려 커서를 주고받아야
  * 해서 서버사이드 prefetch로는 조율되지 않는다(#189 코멘트).
  */
-export const collabThreadMessagesPath = (threadId: string): string =>
-  `${COLLAB_THREADS_PATH}/${encodeURIComponent(threadId)}/messages`;
+export const collabThreadMessagesPath = (
+  threadId: string,
+  afterSeq?: number,
+): string => {
+  const base = `${COLLAB_THREADS_PATH}/${encodeURIComponent(threadId)}/messages`;
+  // afterSeq를 주면 그 뒤만 받는다 — 재접속해서 끊긴 동안의 것만 따라잡을 때 쓴다(이슈 #190).
+  return afterSeq === undefined ? base : `${base}?afterSeq=${afterSeq}`;
+};
 
 /** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3). */
 export const WS_PATH = '/api/ws';

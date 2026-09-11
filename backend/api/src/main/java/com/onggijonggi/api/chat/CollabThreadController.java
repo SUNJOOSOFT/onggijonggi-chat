@@ -30,6 +30,7 @@ import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
 import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.PutMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
@@ -310,16 +311,23 @@ public class CollabThreadController {
 	/**
 	* 참가자가 아니거나 존재하지 않는 스레드면 404 — listMessages(ChatController)와 같은 이유로 존재
 	* 여부를 노출하지 않는다.
+	*
+	* afterSeq를 주면 그 값보다 큰 seq만 돌려준다(이슈 #190). 방 진입 때는 생략해 전부 받고,
+	* 재접속 때는 마지막으로 받은 seq를 넘겨 끊긴 동안의 것만 따라잡는다 — 방송은 그 순간 붙어
+	* 있는 연결에만 가고 다시 틀어주지 않으므로, 그 구멍을 메우는 경로가 이것뿐이다.
 	*/
 	@GetMapping("/api/collab/threads/{threadId}/messages")
-	public Flux<MsgItem> listMessages(@PathVariable UUID threadId) {
+	public Flux<MsgItem> listMessages(@PathVariable UUID threadId,
+			@RequestParam(name = "afterSeq", required = false) Long afterSeq) {
 		return currentActorProvider.currentActor()
 				.map(CurrentActor::userId)
 				.flatMap(userId -> threadMembershipService.isActiveParticipant(threadId, userId))
 				.flatMap(participant -> participant
 						? Mono.just(true)
 						: Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND)))
-				.then(Mono.fromCallable(() -> msgRepository.findByThrIdOrderBySeqAsc(threadId))
+				.then(Mono.fromCallable(() -> afterSeq == null
+								? msgRepository.findByThrIdOrderBySeqAsc(threadId)
+								: msgRepository.findByThrIdAndSeqGreaterThanOrderBySeqAsc(threadId, afterSeq))
 						.subscribeOn(Schedulers.boundedElastic()))
 				.flatMap(this::withAuthorDisplayNames)
 				.flatMapMany(Flux::fromIterable);

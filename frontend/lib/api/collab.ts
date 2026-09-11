@@ -206,11 +206,17 @@ export interface CollabMessageItem {
   completedAt: string | null;
 }
 
-/** 방의 과거 대화. 실패하면 예외를 던져 호출부가 정한다 — 이력을 못 얻었다고 방을 못 열 이유는 없다. */
+/**
+ * 방의 과거 대화. 실패하면 예외를 던져 호출부가 정한다 — 이력을 못 얻었다고 방을 못 열 이유는 없다.
+ *
+ * afterSeq를 주면 그 seq보다 큰 것만 받는다(이슈 #190). 방 진입 때는 생략해 전부 받고, 재접속
+ * 때는 마지막으로 받은 seq를 넘겨 끊긴 동안의 것만 따라잡는다.
+ */
 export async function fetchCollabMessages(
   threadId: string,
+  afterSeq?: number,
 ): Promise<CollabMessageItem[]> {
-  const res = await authFetch(bffUrl(collabThreadMessagesPath(threadId)));
+  const res = await authFetch(bffUrl(collabThreadMessagesPath(threadId, afterSeq)));
   if (!res.ok) {
     throw new Error(await res.text());
   }

@@ -114,6 +114,14 @@ export interface RoomState {
   error: RoomError | null;
   /** 다음 메시지에 붙일 번호. 순수 함수로 두려고 상태에 담았다 — 시계나 난수에 기대지 않는다. */
   nextMessageId: number;
+  /**
+   * 지금까지 받은 가장 큰 seq — 재접속 따라잡기의 커서다(이슈 #190).
+   *
+   * 아직 아무것도 못 받았으면 null이고, 그때 재접속하면 커서 없이 전부 다시 받는다.
+   * 연속성은 가정하지 않는다: 블록 예약이 구멍을 남기므로 "다음 번호"가 아니라 "이 번호보다
+   * 큰 것"을 요구하는 값으로만 쓴다.
+   */
+  lastSeq: number | null;
 }
 
 export const initialRoomState: RoomState = {
@@ -122,6 +130,7 @@ export const initialRoomState: RoomState = {
   notices: [],
   error: null,
   nextMessageId: 1,
+  lastSeq: null,
 };
 
 /** error.code가 방 접근 거부인지. 화면은 이 경우에만 방 대신 안내를 그린다. */
@@ -182,6 +191,8 @@ function appendMessage(
         restrictedResultsOmitted: false,
       },
     ],
+    // 실시간으로 받은 것도 커서를 밀어준다 — 끊겼을 때 어디서부터 따라잡을지가 이 값이다.
+    lastSeq: advanceCursor(state.lastSeq, seq),
   };
 }
 
@@ -194,7 +205,49 @@ function messageIndexById(state: RoomState, id: string): number | null {
 }
 
 /**
- * 방 진입 시 한 번 불러온 과거 대화를 흐름 앞에 붙인다(이슈 #190).
+ * seq가 가리키는 자리에 메시지를 끼워 넣는다(이슈 #190).
+ *
+ * 앞에 붙는 진입 이력과 뒤에 붙는 재접속 따라잡기를 한 규칙으로 다루려는 것이다 — 어느
+ * 쪽이든 "seq 순서대로 있어야 할 자리"는 같은 방식으로 구해진다. 입퇴장 줄은 seq가 없어
+ * 비교에서 빼고, 그래서 도착했던 자리에 그대로 남는다.
+ *
+ * 비교할 메시지가 하나도 없을 때(흐름이 비었거나 입퇴장 줄뿐일 때)는 커서로 가른다. 커서보다
+ * 큰 seq면 따라잡기라 끝에, 아니면 진입 이력이라 앞에 둔다 — 이 경우에만 판단할 근거가
+ * 흐름 안에 없다.
+ */
+function insertBySeq(
+  messages: CollabEntry[],
+  incoming: CollabMessage[],
+  cursor: number | null,
+): CollabEntry[] {
+  const merged = [...messages];
+  for (const message of incoming) {
+    let index: number | null = null;
+    for (let i = merged.length - 1; i >= 0; i -= 1) {
+      const entry = merged[i];
+      if (isPresenceNotice(entry)) continue;
+      if (entry.seq <= message.seq) {
+        index = i + 1;
+        break;
+      }
+      index = i;
+    }
+    if (index === null) {
+      index = cursor !== null && message.seq > cursor ? merged.length : 0;
+    }
+    merged.splice(index, 0, message);
+  }
+  return merged;
+}
+
+/** 받은 것 중 가장 큰 seq. 커서는 뒤로 가지 않는다. */
+function advanceCursor(current: number | null, seq: number): number {
+  return current === null || seq > current ? seq : current;
+}
+
+/**
+ * 불러온 과거 대화를 흐름에 합친다(이슈 #190). 방 진입 시의 전체 이력과 재접속 시의 따라잡기가
+ * 같은 함수를 쓴다 — 둘 다 "REST로 받은 메시지를 seq 자리에 넣는다"는 같은 일이다.
  *
  * 이미 있는 msgId는 건너뛴다 — 이력을 받기 전에 WS로 먼저 도착한 메시지가 있을 수 있고,
  * 그때 같은 말이 두 번 보이면 안 된다. 남는 것들은 seq로 정렬해 앞에 통째로 붙인다: 이력은
@@ -221,8 +274,18 @@ export function applyHistory(
     .sort((left, right) => left.seq - right.seq)
     .map(toCollabMessage);
 
-  if (restored.length === 0) return state;
-  return { ...state, messages: [...restored, ...state.messages] };
+  // 건너뛴 줄(SYSTEM·빈 본문)도 커서는 지나쳐야 한다 — 그러지 않으면 다음 따라잡기가 같은
+  // 것을 또 받아온다.
+  const lastSeq = items.reduce(
+    (cursor, item) => advanceCursor(cursor, item.seq),
+    state.lastSeq,
+  );
+  if (restored.length === 0) return { ...state, lastSeq };
+  return {
+    ...state,
+    messages: insertBySeq(state.messages, restored, state.lastSeq),
+    lastSeq,
+  };
 }
 
 /** 이력 한 줄을 화면이 아는 모양으로. subject는 WS 프레임의 from과 같은 값이다(이슈 #190). */

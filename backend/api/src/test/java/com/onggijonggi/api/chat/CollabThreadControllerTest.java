@@ -276,6 +276,60 @@ class CollabThreadControllerTest {
 	}
 
 	/**
+	* 재접속 따라잡기(이슈 #190) — 끊긴 동안의 것만 받는다. seq를 촘촘히 두지 않은 것은 의도적이다:
+	* 블록 예약이 구멍을 남기므로 "다음 번호"가 아니라 "이 번호보다 큰 것"으로 동작해야 한다.
+	*/
+	@Test
+	void returnsOnlyMessagesAfterTheGivenSeq() {
+		UUID thrId = rooms.openRoom("after-owner", "after-member");
+		UUID ownerId = userIdentityService.resolveOrProvision("after-owner").block();
+		ThrMbr ownerMembership = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, ownerId, ThrMbrStatus.ACTIVE)
+				.orElseThrow();
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 0, ownerMembership.getId(), "끊기기 전"));
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 4, ownerMembership.getId(), "커서 그 자체"));
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 97, ownerMembership.getId(), "끊긴 동안"));
+
+		String body = restTestClient.get()
+				.uri("/api/collab/threads/{threadId}/messages?afterSeq=4", thrId)
+				.header(HttpHeaders.AUTHORIZATION,
+						"Bearer " + TestJwtSupport.signedJwt("after-member", List.of("USER")))
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(String.class)
+				.returnResult()
+				.getResponseBody();
+
+		assertThat(body).contains("\"끊긴 동안\"");
+		assertThat(body).doesNotContain("\"끊기기 전\"");
+		// 커서와 같은 seq는 이미 받은 것이라 다시 주지 않는다.
+		assertThat(body).doesNotContain("\"커서 그 자체\"");
+	}
+
+	/** 커서를 주지 않으면 전부 준다 — 방 진입 때 쓰는 모습이다(이슈 #190). */
+	@Test
+	void returnsEveryMessageWhenNoCursorIsGiven() {
+		UUID thrId = rooms.openRoom("nocursor-owner");
+		UUID ownerId = userIdentityService.resolveOrProvision("nocursor-owner").block();
+		ThrMbr ownerMembership = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, ownerId, ThrMbrStatus.ACTIVE)
+				.orElseThrow();
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 0, ownerMembership.getId(), "처음"));
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 97, ownerMembership.getId(), "나중"));
+
+		String body = restTestClient.get()
+				.uri("/api/collab/threads/{threadId}/messages", thrId)
+				.header(HttpHeaders.AUTHORIZATION,
+						"Bearer " + TestJwtSupport.signedJwt("nocursor-owner", List.of("USER")))
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody(String.class)
+				.returnResult()
+				.getResponseBody();
+
+		assertThat(body).contains("\"처음\"");
+		assertThat(body).contains("\"나중\"");
+	}
+
+	/**
 	* FakeKeycloakAdminConfig가 subject를 그대로 표시 이름으로 돌려주므로(이슈 #128과 같은 방식),
 	* HUMAN 메시지는 작성자의 subject가 표시 이름 자리에 그대로 보인다. AGENT는 thrMbrId가 없어
 	* 표시 이름도 null이다(이슈 #147).
