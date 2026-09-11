@@ -173,8 +173,10 @@ public class RoomSessionRegistry {
 		private final Map<UUID, ConnectionEntry> connections = new LinkedHashMap<>();
 
 		/** subject별로 예정된 퇴장 통보 하나. 같은 사람이 유예 안에 재연결하면 여기서 꺼내 dispose해
-		 * 통보를 무산시킨다(이슈 #198). */
-		private final Map<String, Disposable> pendingLeaves = new HashMap<>();
+		 * 통보를 무산시킨다(이슈 #198). connections에서는 연결이 끊기는 즉시 빠지므로, 유예 중인
+		 * 사람을 {@link #participants}에서도 보여주려면 참가자 값을 따로 들고 있어야 한다 — 안
+		 * 그러면 그 사이에 들어온 사람의 스냅샷에서만 이 사람이 사라져, 기존 참여자 화면과 어긋난다. */
+		private final Map<String, PendingDeparture> pendingLeaves = new HashMap<>();
 
 		private final UUID generation = UUID.randomUUID();
 
@@ -201,9 +203,9 @@ public class RoomSessionRegistry {
 			boolean userIsNew = !hasSubject(participant.subject());
 			connections.put(connectionId, new ConnectionEntry(participant, kicked));
 			if (userIsNew) {
-				Disposable pendingLeave = pendingLeaves.remove(participant.subject());
+				PendingDeparture pendingLeave = pendingLeaves.remove(participant.subject());
 				if (pendingLeave != null) {
-					pendingLeave.dispose();
+					pendingLeave.schedule().dispose();
 					return false;
 				}
 			}
@@ -214,12 +216,19 @@ public class RoomSessionRegistry {
 			return generation;
 		}
 
-		/** 지금 방에 있는 사용자를 입장 순서대로. 같은 사람의 연결이 여럿이어도 한 번만 센다 —
-		 * 표시 이름이 달라도 subject가 같으면 한 사람이므로 먼저 들어온 쪽을 남긴다. */
+		/**
+		 * 지금 방에 있는 사용자를 입장 순서대로. 같은 사람의 연결이 여럿이어도 한 번만 센다 —
+		 * 표시 이름이 달라도 subject가 같으면 한 사람이므로 먼저 들어온 쪽을 남긴다. 퇴장 유예
+		 * 중인 사람도 아직 나간 것으로 확정되지 않았으므로 포함한다(이슈 #198) — 빼면 그 유예
+		 * 동안 새로 들어온 사람만 그 사람을 못 보는 채로 남는다.
+		 */
 		synchronized List<PresenceParticipant> participants() {
 			Map<String, PresenceParticipant> bySubject = new LinkedHashMap<>();
 			for (ConnectionEntry entry : connections.values()) {
 				bySubject.putIfAbsent(entry.participant().subject(), entry.participant());
+			}
+			for (PendingDeparture pending : pendingLeaves.values()) {
+				bySubject.putIfAbsent(pending.participant().subject(), pending.participant());
 			}
 			return List.copyOf(bySubject.values());
 		}
@@ -238,7 +247,7 @@ public class RoomSessionRegistry {
 			if (connections.isEmpty()) {
 				active = false;
 				frames.tryEmitComplete();
-				pendingLeaves.values().forEach(Disposable::dispose);
+				pendingLeaves.values().forEach(pending -> pending.schedule().dispose());
 				pendingLeaves.clear();
 				return Departure.ROOM_EMPTY;
 			}
@@ -255,20 +264,26 @@ public class RoomSessionRegistry {
 		 */
 		synchronized void scheduleDeparture(UUID threadId, PresenceParticipant participant) {
 			String subject = participant.subject();
-			Disposable previous = pendingLeaves.remove(subject);
+			PendingDeparture previous = pendingLeaves.remove(subject);
 			if (previous != null) {
-				previous.dispose();
+				previous.schedule().dispose();
 			}
 			Disposable scheduled = Mono.delay(leaveDebounce)
-					.subscribe(ignored -> confirmDeparture(threadId, subject, participant));
-			pendingLeaves.put(subject, scheduled);
+					.subscribe(ignored -> confirmDeparture(threadId, subject));
+			pendingLeaves.put(subject, new PendingDeparture(scheduled, participant));
 		}
 
-		private synchronized void confirmDeparture(UUID threadId, String subject, PresenceParticipant participant) {
-			if (pendingLeaves.remove(subject) == null || !active) {
+		private synchronized void confirmDeparture(UUID threadId, String subject) {
+			PendingDeparture pending = pendingLeaves.remove(subject);
+			if (pending == null || !active) {
 				return;
 			}
-			emitPresence(new PresenceLeaveFrame(threadId, subject, participant.displayName()));
+			emitPresence(new PresenceLeaveFrame(threadId, subject, pending.participant().displayName()));
+		}
+
+		/** 유예 중인 퇴장 하나 — 취소용 스케줄과, 그동안 {@link #participants}가 계속 보여줘야
+		 * 할 참가자 값을 함께 들고 있는다. */
+		private record PendingDeparture(Disposable schedule, PresenceParticipant participant) {
 		}
 
 		/**

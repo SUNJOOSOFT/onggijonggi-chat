@@ -283,6 +283,27 @@ class RoomSessionRegistryTest {
 		reconnected.dispose();
 	}
 
+	/**
+	 * 유예 중에도 그 사람은 아직 방을 나간 게 아니므로, 그사이 새로 들어온 사람의 스냅샷에도
+	 * 보여야 한다 — 안 그러면 기존 참여자 화면과 어긋난 채로, 그것도 재연결이 성공하면 입장
+	 * 방송조차 나가지 않아(위 취소 테스트) 새로 들어온 사람만 영영 그 사람을 모르게 된다.
+	 */
+	@Test
+	void includesAUserWithAPendingDepartureInANewJoinersSnapshot() {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant staying = participant("staying");
+		PresenceParticipant flapping = participant("flapping");
+		UUID flappingConnectionId = UUID.randomUUID();
+
+		registry.join(roomId, UUID.randomUUID(), staying).frames().subscribe();
+		registry.join(roomId, flappingConnectionId, flapping).frames().subscribe();
+
+		registry.leave(roomId, flappingConnectionId, flapping);
+
+		RoomSessionRegistry.RoomMembership lateJoiner = registry.join(roomId, UUID.randomUUID(), anyone());
+		assertThat(lateJoiner.snapshot().participants()).contains(flapping);
+	}
+
 	/** 유예 안에 재연결이 없으면 그대로 퇴장이 방송된다 — 취소 로직이 진짜로 지연시킬 뿐 억누르지 않는지 확인한다. */
 	@Test
 	void announcesLeaveAfterTheDebounceElapsesWithoutReconnect() throws Exception {
@@ -488,8 +509,14 @@ class RoomSessionRegistryTest {
 		assertThat(watcher.snapshot().participants()).containsExactly(twoTabUser, watcherUser);
 	}
 
+	/**
+	 * 퇴장 유예(이슈 #198)가 끝나 그 사람이 정말로 나갔다고 확정된 뒤의 얘기다 — 유예 중에는
+	 * 아직 나간 게 아니라서 늦게 온 사람의 명단에도 보인다(별도로
+	 * includesAUserWithAPendingDepartureInANewJoinersSnapshot이 검증한다). 그래서 유예가
+	 * 지나가길 기다린 뒤에 늦게 join한다.
+	 */
 	@Test
-	void snapshotLeavesOutWhoeverAlreadyWent() {
+	void snapshotLeavesOutWhoeverAlreadyWent() throws Exception {
 		UUID roomId = UUID.randomUUID();
 		PresenceParticipant stayingUser = participant("staying");
 		PresenceParticipant leavingUser = participant("leaving");
@@ -498,6 +525,7 @@ class RoomSessionRegistryTest {
 		registry.join(roomId, leavingConnectionId, leavingUser);
 
 		registry.leave(roomId, leavingConnectionId, leavingUser);
+		Thread.sleep(TEST_LEAVE_DEBOUNCE.toMillis() * 4);
 		RoomSessionRegistry.RoomMembership late = registry.join(roomId, UUID.randomUUID(), anyone());
 
 		// 늦게 온 사람은 이미 나간 사람의 퇴장 통보를 받을 수 없다. 명단에서도 빠져 있어야
