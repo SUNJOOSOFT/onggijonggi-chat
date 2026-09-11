@@ -529,6 +529,110 @@ class CollabMessageDispatcherTest {
 		verify(msgPersistenceService, never()).failBlocking(pending.getId(), MsgStatus.CANCELLED);
 	}
 
+	/** 부른 사람이 활성 턴을 멈추면 AGENT 행이 CANCELLED로 닫히고, 화면이 스트림을 닫을 수 있게
+	 * done 프레임이 한 번 나간다(이슈 #160). */
+	@Test
+	void cancelsOwnActiveTurnAndClosesTheStream() {
+		TestRoom room = new TestRoom();
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.never());
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(pending);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI 오래 걸리는 질문"), room.membership.generation());
+		awaitFrameCount(room.frames, 1);
+		verify(llm, timeout(1000)).streamChat(any());
+		UUID requestMsgId = ((ChatMessageFrame) room.frames.get(0)).msgId();
+
+		CollabMessageDispatcher.CancelOutcome outcome = dispatcher.cancel(room.threadId,
+				room.membership.generation(), requestMsgId, room.participant.subject());
+
+		assertThat(outcome).isEqualTo(CollabMessageDispatcher.CancelOutcome.CANCELLED);
+		verify(msgPersistenceService, timeout(1000)).failBlocking(pending.getId(), MsgStatus.CANCELLED);
+		awaitFrameCount(room.frames, 2);
+		ChatAnswerFrame done = (ChatAnswerFrame) room.frames.get(1);
+		assertThat(done.status()).isEqualTo(ChatAnswerStatus.DONE);
+		assertThat(done.delta()).isEmpty();
+	}
+
+	/** 협업방의 AI 답변은 모두가 보지만 끊는 것은 부른 사람만 할 수 있다 — 남이 지목하면
+	 * 턴은 그대로 살아 있고 FORBIDDEN만 돌아간다. */
+	@Test
+	void refusesToCancelSomeoneElsesTurn() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.never());
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@AI 내 질문"), room.membership.generation());
+		awaitFrameCount(room.frames, 1);
+		verify(llm, timeout(1000)).streamChat(any());
+		UUID requestMsgId = ((ChatMessageFrame) room.frames.get(0)).msgId();
+
+		CollabMessageDispatcher.CancelOutcome outcome = dispatcher.cancel(room.threadId,
+				room.membership.generation(), requestMsgId, "someone-else");
+
+		assertThat(outcome).isEqualTo(CollabMessageDispatcher.CancelOutcome.FORBIDDEN);
+		assertThat(room.frames).hasSize(1);
+	}
+
+	/** 아직 시작되지 않은 대기 턴도 멈출 수 있다 — 지목이 AGENT id가 아니라 사람 메시지 id인
+	 * 이유가 이것이다(InboundChatCancel). 앞 턴이 끝나도 취소된 턴은 시작되지 않는다. */
+	@Test
+	void cancelsQueuedTurnBeforeItStarts() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		Sinks.Many<String> first = Sinks.many().multicast().onBackpressureBuffer();
+		when(llm.streamChat(any())).thenReturn(first.asFlux(), Flux.just("두 번째"));
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@AI 첫째"), room.membership.generation());
+		verify(llm, timeout(1000)).streamChat(any());
+		dispatcher.dispatch(command(room, "@AI 둘째"), room.membership.generation());
+		awaitFrameCount(room.frames, 2);
+		UUID queuedRequestMsgId = ((ChatMessageFrame) room.frames.get(1)).msgId();
+
+		CollabMessageDispatcher.CancelOutcome outcome = dispatcher.cancel(room.threadId,
+				room.membership.generation(), queuedRequestMsgId, room.participant.subject());
+		first.tryEmitComplete();
+
+		assertThat(outcome).isEqualTo(CollabMessageDispatcher.CancelOutcome.CANCELLED);
+		verify(llm, timeout(1000).times(1)).streamChat(any());
+	}
+
+	/** 끝났거나 없는 턴을 지목하면 아무 일도 일어나지 않는다 — 스트림이 막 끝난 직후의 취소는
+	 * 흔한 경합이라 오류로 다루지 않는다. */
+	@Test
+	void reportsNotFoundForAnUnknownTurn() {
+		TestRoom room = new TestRoom();
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, mock(LlmChatStreamService.class));
+
+		assertThat(dispatcher.cancel(room.threadId, room.membership.generation(), UUID.randomUUID(),
+				room.participant.subject()))
+				.isEqualTo(CollabMessageDispatcher.CancelOutcome.NOT_FOUND);
+	}
+
+	/** 발화가 모델을 지정하면 그 값으로 게이트웨이를 부르고, 지정하지 않으면 서버 기본값으로
+	 * 돌아간다(이슈 #160). */
+	@Test
+	void usesPerTurnModelIdAndFallsBackToTheServerDefault() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"), Flux.just("답"));
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@AI 골라서", "gemma"), room.membership.generation());
+		dispatcher.dispatch(command(room, "@AI 기본으로", null), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> captor = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(2000).times(2)).streamChat(captor.capture());
+		assertThat(captor.getAllValues()).extracting(ChatStreamRequest::modelId)
+				.containsExactly("gemma", "test-model");
+	}
+
 	@Test
 	void rejectsInvalidAiSettingsAtStartup() {
 		RoomSessionRegistry registry = new RoomSessionRegistry();
@@ -567,8 +671,13 @@ class CollabMessageDispatcherTest {
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
+		return command(room, content, null);
+	}
+
+	/** modelId를 지정하는 변형(이슈 #160). null이면 디스패처가 서버 기본값으로 돌아간다. */
+	private static ChatMessageCommand command(TestRoom room, String content, String modelId) {
 		return new ChatMessageCommand(room.threadId, room.userId, room.participant.subject(),
-				room.participant.displayName(), content, "trace");
+				room.participant.displayName(), content, modelId, "trace");
 	}
 
 	/**

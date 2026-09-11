@@ -256,6 +256,12 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 				});
 	}
 
+	/**
+	* 인바운드 프레임 하나를 처리한다. 파싱은 두 걸음이다 — 먼저 봉투에서 type만 꺼내 서버 전용
+	* 타입을 조용히 걸러내고(이슈 #157: 위조해 보내도 오류를 되돌려주지 않는 것이 기존 동작이다),
+	* 그다음 InboundFrame 화이트리스트로 다시 읽는다. 한 걸음으로 합치면 서버 전용 타입이
+	* 화이트리스트에 없다는 이유로 MALFORMED_REQUEST를 받게 돼 그 동작이 뒤집힌다.
+	*/
 	private Mono<WsFrame> handleInbound(WebSocketMessage message, UUID threadId, UUID userId,
 			PresenceParticipant actor, UUID roomGeneration) {
 		String traceId = newTraceId();
@@ -264,17 +270,40 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 			return Mono.just(malformed(threadId, traceId));
 		}
 
-		InboundMessage inbound;
+		InboundFrame inbound;
 		try {
-			inbound = objectMapper.readValue(payload, InboundMessage.class);
+			if (SERVER_ONLY_TYPES.contains(objectMapper.readValue(payload, InboundEnvelope.class).type())) {
+				return Mono.empty();
+			}
+			inbound = objectMapper.readValue(payload, InboundFrame.class);
 		} catch (Exception error) {
 			log.debug("Malformed WebSocket frame threadId={} traceId={}", threadId, traceId, error);
 			return Mono.just(malformed(threadId, traceId));
 		}
-		if (SERVER_ONLY_TYPES.contains(inbound.type())) {
-			return Mono.empty();
+
+		// Java 17이라 switch 패턴 매칭(프리뷰)을 쓸 수 없어 instanceof 패턴으로 가른다.
+		// InboundFrame이 sealed이므로 분기를 빠뜨리면 여기 마지막 malformed로 떨어진다 —
+		// 컴파일러가 잡아주지 못하는 자리라, 타입을 더할 때 이 메서드를 함께 봐야 한다.
+		if (inbound instanceof InboundChatMessage chatMessage) {
+			return handleChatMessage(chatMessage, threadId, userId, actor, roomGeneration, traceId);
 		}
-		if (!"chat.message".equals(inbound.type()) || inbound.content() == null || inbound.content().isBlank()) {
+		if (inbound instanceof InboundChatCancel cancel) {
+			return handleCancel(cancel, threadId, actor, roomGeneration, traceId);
+		}
+		if (inbound instanceof InboundRoomSubscribe subscribe) {
+			return handleRoomScopeChange(subscribe.threadId(), threadId, traceId,
+					"아직 이 연결로는 다른 방을 구독할 수 없습니다.");
+		}
+		if (inbound instanceof InboundRoomUnsubscribe unsubscribe) {
+			return handleRoomScopeChange(unsubscribe.threadId(), threadId, traceId,
+					"이 연결의 방은 해지할 수 없습니다. 연결을 닫아 주세요.");
+		}
+		return Mono.just(malformed(threadId, traceId));
+	}
+
+	private Mono<WsFrame> handleChatMessage(InboundChatMessage inbound, UUID threadId, UUID userId,
+			PresenceParticipant actor, UUID roomGeneration, String traceId) {
+		if (inbound.content() == null || inbound.content().isBlank()) {
 			return Mono.just(malformed(threadId, traceId));
 		}
 
@@ -288,7 +317,7 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		}
 
 		ChatMessageCommand command = new ChatMessageCommand(threadId, userId, actor.subject(),
-				actor.displayName(), inbound.content(), traceId);
+				actor.displayName(), inbound.content(), inbound.modelId(), traceId);
 		return threadMembershipService.isActiveParticipant(threadId, userId)
 				.flatMap(participant -> participant
 						? rejectIfLocked(command, roomGeneration, traceId)
@@ -300,6 +329,42 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 					return Mono.just(new ErrorFrame(threadId, "INTERNAL_ERROR",
 							"메시지를 처리하지 못했습니다.", traceId));
 				});
+	}
+
+	/**
+	* 취소는 DB를 보지 않는다 — 멈출 대상이 메모리에 있는 실행 중(또는 대기 중) 턴이고, 그 턴을
+	* 누가 불렀는지도 디스패처가 이미 들고 있다. 참가자 자격 재확인(handleChatMessage가 하는 것)을
+	* 여기서 하지 않는 이유도 같다: 방에서 빠진 사람이 자기가 띄운 턴을 거두는 것은 막을 이유가 없다.
+	*
+	* 지목한 턴이 없으면(이미 끝났거나 남의 방 id를 보냈거나) 조용히 넘어간다 — 스트림이 막
+	* 끝난 직후의 취소는 흔한 경합이고, 그때마다 오류를 돌려주면 화면이 이유 없이 시끄러워진다.
+	*/
+	private Mono<WsFrame> handleCancel(InboundChatCancel inbound, UUID threadId, PresenceParticipant actor,
+			UUID roomGeneration, String traceId) {
+		if (inbound.requestMsgId() == null) {
+			return Mono.just(malformed(threadId, traceId));
+		}
+		CollabMessageDispatcher.CancelOutcome outcome = collabMessageDispatcher.cancel(threadId, roomGeneration,
+				inbound.requestMsgId(), actor.subject());
+		if (outcome == CollabMessageDispatcher.CancelOutcome.FORBIDDEN) {
+			log.debug("WebSocket cancel denied threadId={} traceId={}", threadId, traceId);
+			return Mono.just(new ErrorFrame(threadId, "FORBIDDEN",
+					"자신이 요청한 AI 응답만 중단할 수 있습니다.", traceId));
+		}
+		return Mono.empty();
+	}
+
+	/**
+	* 구독·해지는 이번 범위에서 계약과 파싱까지다(이슈 #160). 이 연결이 이미 든 방을 가리키는
+	* 구독은 할 일이 없어 조용히 넘어가고, 그 밖은 아직 받아줄 수 없어 사유를 돌려준다 — 실제
+	* 멀티플렉싱은 #161이 붙인다.
+	*/
+	private Mono<WsFrame> handleRoomScopeChange(UUID requestedThreadId, UUID connectionThreadId, String traceId,
+			String rejectionMessage) {
+		if (connectionThreadId.equals(requestedThreadId)) {
+			return Mono.empty();
+		}
+		return Mono.just(new ErrorFrame(connectionThreadId, "FORBIDDEN", rejectionMessage, traceId));
 	}
 
 	/**
@@ -397,8 +462,9 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		return UUID.randomUUID().toString();
 	}
 
+	/** type만 먼저 읽기 위한 최소 봉투 — 서버 전용 타입 선별(handleInbound 주석 참조)에만 쓴다. */
 	@JsonIgnoreProperties(ignoreUnknown = true)
-	private record InboundMessage(String type, String content) {
+	private record InboundEnvelope(String type) {
 	}
 
 	private record SessionInfo(String subject, String displayName, Instant tokenExpiresAt) {

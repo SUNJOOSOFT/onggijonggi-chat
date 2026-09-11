@@ -178,7 +178,8 @@ public class CollabMessageDispatcher {
 		}
 
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
-				command.traceId(), persistHumanMessageAndFetchContextAsync(msgId, seq, command));
+				command.traceId(), msgId, command.fromSubject(), command.modelId(),
+				persistHumanMessageAndFetchContextAsync(msgId, seq, command));
 		ActiveTurn turnToStart;
 		synchronized (state) {
 			if (state.closed) {
@@ -217,6 +218,80 @@ public class CollabMessageDispatcher {
 		}
 	}
 
+	/**
+	* 진행 중이거나 대기 중인 턴 하나를 멈춘다(이슈 #160). 지목은 그 턴을 부른 <b>사람 메시지</b>의
+	* id로 한다 — 대기 중인 턴에는 AGENT id가 아직 없기 때문이며, 자세한 이유는 InboundChatCancel에 있다.
+	*
+	* 부른 사람만 멈출 수 있다. 협업방의 AI 답변은 모두가 보는 공용 출력이지만, 누구나 끊을 수 있게
+	* 하면 남이 요청한 답변을 가로채 끊는 마찰이 생긴다 — 그 판단이 필요해지면 OWNER 예외를 여기에
+	* 더하는 것이 다음 단계다.
+	*
+	* 활성 턴은 구독을 끊고 AGENT 행을 CANCELLED로 닫은 뒤, 스트림이 끝났음을 알리는 done 프레임을
+	* 한 번 보낸다 — 화면은 delta를 누적하다 done에서 닫으므로, 이 프레임이 없으면 중단한 답변이
+	* 영원히 "생성 중"으로 남는다. 대기 턴은 아직 시작 전이라 끊을 구독도 닫을 행도 없어 큐에서만 뺀다.
+	*
+	* @return 무엇을 했는지 — 호출부(CollabWebSocketHandler)가 사유를 돌려줄지 정한다
+	*/
+	public CancelOutcome cancel(UUID threadId, UUID roomGeneration, UUID requestMsgId, String requesterSubject) {
+		RoomKey key = new RoomKey(threadId, roomGeneration);
+		RoomAiState state = states.get(key);
+		if (state == null) {
+			return CancelOutcome.NOT_FOUND;
+		}
+
+		ActiveTurn activeTurn;
+		synchronized (state) {
+			if (state.closed) {
+				return CancelOutcome.NOT_FOUND;
+			}
+			if (state.active != null && requestMsgId.equals(state.active.turn.requestMsgId())) {
+				if (!requesterSubject.equals(state.active.turn.requesterSubject())) {
+					return CancelOutcome.FORBIDDEN;
+				}
+				// state.active를 여기서 비우지 않는다 — advance()가 "내가 알던 그 턴이 아직
+				// 활성인가"로 경합을 거르므로, 비우면 다음 대기 턴이 시작되지 않는다.
+				activeTurn = state.active;
+			} else {
+				PendingTurn queued = null;
+				for (PendingTurn candidate : state.pending) {
+					if (requestMsgId.equals(candidate.requestMsgId())) {
+						queued = candidate;
+						break;
+					}
+				}
+				if (queued == null) {
+					return CancelOutcome.NOT_FOUND;
+				}
+				if (!requesterSubject.equals(queued.requesterSubject())) {
+					return CancelOutcome.FORBIDDEN;
+				}
+				state.pending.remove(queued);
+				return CancelOutcome.CANCELLED;
+			}
+		}
+
+		activeTurn.subscription.dispose();
+		persistAgentFailure(activeTurn, MsgStatus.CANCELLED);
+		broadcastQuietly(key, new ChatAnswerFrame(threadId, activeTurn.msgId, activeTurn.seq, "",
+				List.of(), false, ChatAnswerStatus.DONE));
+		advance(key, state, activeTurn);
+		return CancelOutcome.CANCELLED;
+	}
+
+	/** 취소 요청 하나가 어떻게 처리됐는지. */
+	public enum CancelOutcome {
+
+		/** 활성 턴을 끊었거나 대기 턴을 큐에서 뺐다. */
+		CANCELLED,
+
+		/** 그 id로 멈출 턴이 없다 — 이미 끝났거나 애초에 없던 턴이다. */
+		NOT_FOUND,
+
+		/** 그 턴을 부른 사람이 아니다. */
+		FORBIDDEN
+
+	}
+
 	@PreDestroy
 	void closeAllGenerations() {
 		states.forEach(this::closeGeneration);
@@ -236,7 +311,7 @@ public class CollabMessageDispatcher {
 
 		Disposable subscription = activeTurn.turn.context()
 				.flatMapMany(context -> withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
-						new ChatStreamRequest(activeTurn.turn.threadId(), modelId,
+						new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
 								buildPromptMessages(context, activeTurn.turn.prompt()))))))
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
@@ -257,6 +332,11 @@ public class CollabMessageDispatcher {
 				subscription.dispose();
 			}
 		}
+	}
+
+	/** 턴이 모델을 지정하지 않았으면 서버 기본값(app.collab.ai.model)으로 돌아간다(이슈 #160). */
+	private String modelIdFor(PendingTurn turn) {
+		return turn.modelId() == null || turn.modelId().isBlank() ? modelId : turn.modelId();
 	}
 
 	/** 저장된 이력의 HUMAN/AGENT를 user/assistant로 매핑하고, 이번 멘션의 발화를 마지막에 붙인다. */
@@ -520,8 +600,15 @@ public class CollabMessageDispatcher {
 	private record QueuedMessage(ChatMessageCommand command, String prompt) {
 	}
 
+	/**
+	* requestMsgId·requesterSubject는 취소(이슈 #160)가 쓰는 값이다 — 무엇을 멈출지와 누가 멈출 수
+	* 있는지. AGENT 메시지 id가 아니라 이 턴을 부른 사람 메시지의 id를 드는 이유는
+	* InboundChatCancel 주석에 있다(대기 중인 턴에는 AGENT id가 아직 없다).
+	*
+	* modelId는 이 턴에 쓸 게이트웨이 별칭이고, null이면 서버 기본값을 쓴다.
+	*/
 	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId,
-			Mono<List<Msg>> context) {
+			UUID requestMsgId, String requesterSubject, String modelId, Mono<List<Msg>> context) {
 	}
 
 	private final class ActiveTurn {

@@ -161,6 +161,67 @@ class CollabWebSocketHandlerTest {
 		assertThat(frame.content()).isEqualTo("accepted");
 	}
 
+	/** 이 연결이 이미 든 방을 가리키는 구독은 할 일이 없어 조용히 넘어간다 — 계약만 열린
+	 * 단계라 응답이 없는 것이 정상이고, 뒤따르는 발화는 그대로 처리돼야 한다(이슈 #160). */
+	@Test
+	void ignoresSubscribeForTheConnectionsOwnRoom() throws Exception {
+		UUID threadId = rooms.openRoom("subscribe-self-user");
+		List<String> received = exchange("subscribe-self-user", threadId,
+				List.of("{\"type\":\"room.subscribe\",\"threadId\":\"" + threadId + "\"}",
+						"{\"type\":\"chat.message\",\"content\":\"accepted\"}"), 1);
+
+		ChatMessageFrame frame = (ChatMessageFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.content()).isEqualTo("accepted");
+	}
+
+	/** 다른 방 구독은 아직 받아줄 수 없다 — 멀티플렉싱은 #161이 붙인다. 사유를 돌려주되
+	 * 연결은 유지한다. */
+	@Test
+	void rejectsSubscribeForAnotherRoom() throws Exception {
+		UUID threadId = rooms.openRoom("subscribe-other-user");
+		List<String> received = exchange("subscribe-other-user", threadId,
+				List.of("{\"type\":\"room.subscribe\",\"threadId\":\"" + UUID.randomUUID() + "\"}"), 1);
+
+		ErrorFrame frame = (ErrorFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.code()).isEqualTo("FORBIDDEN");
+	}
+
+	/** 멈출 턴이 없는 취소는 조용히 넘어간다 — 스트림이 막 끝난 직후의 취소가 흔한 경합이라
+	 * 그때마다 오류를 돌려주면 화면이 이유 없이 시끄러워진다. */
+	@Test
+	void ignoresCancelForAnUnknownTurn() throws Exception {
+		UUID threadId = rooms.openRoom("cancel-unknown-user");
+		List<String> received = exchange("cancel-unknown-user", threadId,
+				List.of("{\"type\":\"chat.cancel\",\"requestMsgId\":\"" + UUID.randomUUID() + "\"}",
+						"{\"type\":\"chat.message\",\"content\":\"accepted\"}"), 1);
+
+		ChatMessageFrame frame = (ChatMessageFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.content()).isEqualTo("accepted");
+	}
+
+	/** requestMsgId가 UUID가 아니면 형식 오류다 — 연결은 유지한 채 사유만 돌려준다. */
+	@Test
+	void rejectsCancelWithoutAValidRequestMsgId() throws Exception {
+		UUID threadId = rooms.openRoom("cancel-malformed-user");
+		List<String> received = exchange("cancel-malformed-user", threadId,
+				List.of("{\"type\":\"chat.cancel\",\"requestMsgId\":\"not-a-uuid\"}"), 1);
+
+		ErrorFrame frame = (ErrorFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.code()).isEqualTo("MALFORMED_REQUEST");
+	}
+
+	/** modelId를 실어 보내도 발화는 그대로 처리된다 — 협업방 화면에는 아직 모델 선택이 없지만
+	 * 계약은 #162를 위해 먼저 열어둔다. */
+	@Test
+	void acceptsChatMessageCarryingAModelId() throws Exception {
+		UUID threadId = rooms.openRoom("model-id-user");
+		List<String> received = exchange("model-id-user", threadId,
+				List.of("{\"type\":\"chat.message\",\"content\":\"accepted\",\"modelId\":\"gemma\"}"), 1);
+
+		ChatMessageFrame frame = (ChatMessageFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.content()).isEqualTo("accepted");
+	}
+
 	@Test
 	void rejectsBinaryFramesWithoutClosingTheConnection() throws Exception {
 		UUID threadId = rooms.openRoom("binary-user");
