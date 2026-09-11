@@ -143,8 +143,18 @@ export function errorFrame(
   return { type: 'error', sessionId, code, message, traceId };
 }
 
+/** 목업 전용 seq 카운터. 실서버는 방마다 블록으로 예약하지만(이슈 #190), 목업은 순서만
+ * 맞으면 되므로 단조 증가만 보장한다. */
+let mockSeq = 0;
+
+export function nextMockSeq(): number {
+  return mockSeq++;
+}
+
 export function answerFrame(
   sessionId: string,
+  msgId: string,
+  seq: number,
   delta: string,
   status: 'streaming' | 'done',
   citations: Citation[] = [],
@@ -153,6 +163,8 @@ export function answerFrame(
   return {
     type: 'chat.answer',
     sessionId,
+    msgId,
+    seq,
     delta,
     citations,
     restrictedResultsOmitted,
@@ -186,13 +198,20 @@ export function aiTurnFrames(
   const reply = `「목업 응답」 ${prompt}`;
   const tokens = reply.split(/(\s+)/).filter((chunk) => chunk.length > 0);
   const frames: WsFrame[] = [];
+  // 한 턴의 모든 패킷은 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
+  const answerMsgId = crypto.randomUUID();
+  const answerSeq = nextMockSeq();
 
   if (scenario === 'normal') {
-    frames.push(answerFrame(threadId, '', 'streaming', [citation]));
+    frames.push(
+      answerFrame(threadId, answerMsgId, answerSeq, '', 'streaming', [citation]),
+    );
   }
 
   for (const [index, token] of tokens.entries()) {
-    frames.push(answerFrame(threadId, token, 'streaming'));
+    frames.push(
+      answerFrame(threadId, answerMsgId, answerSeq, token, 'streaming'),
+    );
     if (scenario === 'error-mid' && index === 0) {
       frames.push(
         errorFrame(
@@ -206,7 +225,7 @@ export function aiTurnFrames(
     }
   }
 
-  frames.push(answerFrame(threadId, '', 'done'));
+  frames.push(answerFrame(threadId, answerMsgId, answerSeq, '', 'done'));
   return frames;
 }
 

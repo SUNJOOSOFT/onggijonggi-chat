@@ -35,10 +35,16 @@ function snapshot(...subjects: string[]): WsFrame {
   };
 }
 
-function say(from: string, content: string): WsFrame {
+/** 프레임마다 새 msgId를 준다 — 서버가 메시지마다 다른 id를 싣는 것과 같다(이슈 #190). */
+let frameCounter = 0;
+
+function say(from: string, content: string, msgId?: string): WsFrame {
+  frameCounter += 1;
   return {
     type: 'chat.message',
     sessionId: THREAD,
+    msgId: msgId ?? `msg-${frameCounter}`,
+    seq: frameCounter,
     from,
     fromDisplayName: `${from} 님`,
     content,
@@ -66,11 +72,15 @@ function answer(
   metadata: {
     citations?: Citation[];
     restrictedResultsOmitted?: boolean;
+    /** 같은 턴의 패킷은 같은 msgId를 단다. 턴을 나누고 싶을 때만 다른 값을 준다. */
+    msgId?: string;
   } = {},
 ): WsFrame {
   return {
     type: 'chat.answer',
     sessionId: THREAD,
+    msgId: metadata.msgId ?? 'agent-msg-1',
+    seq: 1000,
     delta,
     citations: metadata.citations ?? [],
     restrictedResultsOmitted: metadata.restrictedResultsOmitted ?? false,
@@ -178,14 +188,16 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
     expect(state.messages).toEqual([
       { id: 'm1', event: 'join', participant: person('sujin') },
       {
-        id: 'm2',
+        id: expect.any(String),
+        seq: expect.any(Number),
         from: person('sujin'),
         content: '안녕하세요',
         streaming: false,
         citations: [],
         restrictedResultsOmitted: false,
       },
-      { id: 'm3', event: 'leave', participant: person('sujin') },
+      // 입퇴장 줄 번호는 서버 msgId를 쓰는 메시지와 카운터를 나눠 쓰지 않는다(이슈 #190).
+      { id: 'm2', event: 'leave', participant: person('sujin') },
     ]);
   });
 
@@ -212,7 +224,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
     expect(chats(state)).toHaveLength(1);
     expect(chats(state)[0].content).toBe('요약을 시작합니다');
     expect(state.messages[1]).toEqual({
-      id: 'm2',
+      id: 'm1',
       event: 'join',
       participant: person('minho'),
     });
@@ -221,10 +233,11 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
 
 describe('applyFrame - chat.message', () => {
   it('보낸 사람을 함께 남긴다', () => {
-    const state = fold([say('sujin', '이 계약서 확인 부탁해요')]);
+    const state = fold([say('sujin', '이 계약서 확인 부탁해요', 'msg-sujin-1')]);
     expect(state.messages).toEqual([
       {
-        id: 'm1',
+        id: 'msg-sujin-1',
+        seq: expect.any(Number),
         from: person('sujin'),
         content: '이 계약서 확인 부탁해요',
         streaming: false,
@@ -251,10 +264,12 @@ describe('applyFrame - chat.answer', () => {
     });
   });
 
-  it('답변이 끝난 뒤 오는 패킷은 새 말풍선이 된다', () => {
+  it('다른 턴의 답변은 새 말풍선이 된다', () => {
+    // 예전에는 "앞 답변이 끝났는지"로 갈랐다. 이제 프레임이 턴 식별자(msgId)를 들고 오므로
+    // 그 값으로 가른다(이슈 #190) — 턴이 겹쳐 도착해도 섞이지 않는다.
     const state = fold([
       answer('첫 답변', 'done'),
-      answer('두 번째 답변', 'done'),
+      answer('두 번째 답변', 'done', { msgId: 'agent-msg-2' }),
     ]);
     expect(chats(state).map((m) => m.content)).toEqual([
       '첫 답변',

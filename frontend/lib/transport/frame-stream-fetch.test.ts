@@ -145,6 +145,8 @@ describe('frameSourceToResponse — 손상된 프레임', () => {
       yield JSON.stringify({
         type: 'chat.answer',
         sessionId: 's1',
+        msgId: 'msg-1',
+        seq: 1,
         delta: '안',
         citations: [],
         restrictedResultsOmitted: false,
@@ -154,6 +156,8 @@ describe('frameSourceToResponse — 손상된 프레임', () => {
       yield JSON.stringify({
         type: 'chat.answer',
         sessionId: 's1',
+        msgId: 'msg-1',
+        seq: 1,
         delta: '녕',
         citations: [],
         restrictedResultsOmitted: false,
@@ -162,6 +166,8 @@ describe('frameSourceToResponse — 손상된 프레임', () => {
       yield JSON.stringify({
         type: 'chat.answer',
         sessionId: 's1',
+        msgId: 'msg-1',
+        seq: 1,
         delta: '',
         citations: [],
         restrictedResultsOmitted: false,

@@ -16,6 +16,8 @@ describe('routeFrame', () => {
     const frame: ChatAnswerFrame = {
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '안녕',
       citations: [],
       restrictedResultsOmitted: false,
@@ -32,6 +34,8 @@ describe('routeFrame', () => {
     const frame: ChatMessageFrame = {
       type: 'chat.message',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       from: 'u1',
       fromDisplayName: '보낸 사람',
       content: '안녕하세요',
@@ -93,6 +97,8 @@ describe('routeFrame', () => {
     const frame: ChatAnswerFrame = {
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: 'x',
       citations: [],
       restrictedResultsOmitted: false,
@@ -105,6 +111,8 @@ describe('routeFrame', () => {
     const frame: ChatAnswerFrame = {
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '',
       citations: [],
       restrictedResultsOmitted: false,

@@ -22,6 +22,8 @@ const citationSchema = z.object({
 const chatAnswerFrameSchema = z.object({
   type: z.literal('chat.answer'),
   sessionId: z.string(),
+  msgId: z.string(),
+  seq: z.number(),
   delta: z.string(),
   citations: z.array(citationSchema),
   restrictedResultsOmitted: z.boolean(),
@@ -31,6 +33,8 @@ const chatAnswerFrameSchema = z.object({
 const chatMessageFrameSchema = z.object({
   type: z.literal('chat.message'),
   sessionId: z.string(),
+  msgId: z.string(),
+  seq: z.number(),
   from: z.string(),
   fromDisplayName: z.string(),
   content: z.string(),

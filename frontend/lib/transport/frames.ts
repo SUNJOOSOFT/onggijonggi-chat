@@ -29,6 +29,12 @@ import type { Citation } from '@/lib/api/chat';
 export interface ChatAnswerFrame {
   type: 'chat.answer';
   sessionId: string;
+  /** 이 턴의 AGENT 메시지 id. 같은 턴의 delta·done 패킷이 모두 같은 값을 단다(이슈 #190).
+   * 한 턴이 저장되는 msg 행 하나와 1:1이라 턴 식별자 역할을 겸한다. */
+  msgId: string;
+  /** 방 안에서의 순서. 턴이 시작되는 순간 정해져, 스트리밍 도중 도착한 사람 메시지가
+   * 이 답변 앞으로 끼어들지 않는다. */
+  seq: number;
   delta: string;
   citations: Citation[];
   restrictedResultsOmitted: boolean;
@@ -39,6 +45,12 @@ export interface ChatAnswerFrame {
 export interface ChatMessageFrame {
   type: 'chat.message';
   sessionId: string;
+  /** 서버가 저장하는 msg 행의 id와 같은 값이다(이슈 #190). REST 이력(MsgItem.id)과 이 값으로
+   * 같은 메시지를 알아본다. */
+  msgId: string;
+  /** 방 안에서의 순서이자 따라잡기 커서(이슈 #190). 방송 순서와 일치한다. 다만 블록 예약이
+   * 쓰지 않은 번호를 남기므로 연속성은 가정하지 않는다 — 빠진 번호를 기다리면 안 된다. */
+  seq: number;
   /** 작성자의 Keycloak subject. 참여자 관리 API가 쓰는 값과 같다(이슈 #130). */
   from: string;
   /** 작성자의 표시 이름. 서버가 발신 시점의 JWT claim에서 읽어 실어 보낸다. */

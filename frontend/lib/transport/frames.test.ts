@@ -7,6 +7,8 @@ describe('WsFrame 유니온', () => {
     const frame: WsFrame = {
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: 'hi',
       citations: [],
       restrictedResultsOmitted: false,

@@ -6,6 +6,8 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '안녕',
       citations: [],
       restrictedResultsOmitted: false,
@@ -14,6 +16,8 @@ describe('parseFrame', () => {
     expect(frame).toEqual({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '안녕',
       citations: [],
       restrictedResultsOmitted: false,
@@ -25,6 +29,8 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '',
       citations: [{ docId: 'd1', title: '제목', snippet: '발췌', score: 0.9 }],
       restrictedResultsOmitted: false,
@@ -41,6 +47,8 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '',
       citations: [],
       restrictedResultsOmitted: true,
@@ -57,6 +65,8 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '',
       citations: [],
       restrictedResultsOmitted: false,
@@ -65,6 +75,8 @@ describe('parseFrame', () => {
     expect(frame).toEqual({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '',
       citations: [],
       restrictedResultsOmitted: false,
@@ -77,6 +89,8 @@ describe('parseFrame', () => {
       parseFrame({
         type: 'chat.answer',
         sessionId: 's1',
+        msgId: 'msg-1',
+        seq: 1,
         delta: '',
         citations: [],
         restrictedResultsOmitted: false,
@@ -90,6 +104,8 @@ describe('parseFrame', () => {
       parseFrame({
         type: 'chat.answer',
         sessionId: 's1',
+        msgId: 'msg-1',
+        seq: 1,
         delta: '',
         citations: [],
         status: 'streaming',
@@ -101,6 +117,8 @@ describe('parseFrame', () => {
     const frame = parseFrame({
       type: 'chat.message',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       from: 'u1',
       fromDisplayName: '주성민',
       content: '안녕하세요',
@@ -108,6 +126,8 @@ describe('parseFrame', () => {
     expect(frame).toEqual({
       type: 'chat.message',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       from: 'u1',
       fromDisplayName: '주성민',
       content: '안녕하세요',
@@ -219,6 +239,8 @@ describe('parseFrame', () => {
       parseFrame({
         type: 'chat.answer',
         sessionId: 's1',
+        msgId: 'msg-1',
+        seq: 1,
         delta: 123,
         citations: [],
         restrictedResultsOmitted: false,
@@ -243,11 +265,13 @@ describe('parseFrame', () => {
 describe('parseFrameFromText', () => {
   it('유효한 JSON 문자열을 파싱한다', () => {
     const frame = parseFrameFromText(
-      '{"type":"chat.answer","sessionId":"s1","delta":"","citations":[],"restrictedResultsOmitted":false,"status":"done"}',
+      '{"type":"chat.answer","sessionId":"s1","msgId":"msg-1","seq":1,"delta":"","citations":[],"restrictedResultsOmitted":false,"status":"done"}',
     );
     expect(frame).toEqual({
       type: 'chat.answer',
       sessionId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
       delta: '',
       citations: [],
       restrictedResultsOmitted: false,

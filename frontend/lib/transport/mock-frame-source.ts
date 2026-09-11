@@ -25,6 +25,8 @@ export async function* mockFrameSource(
 
 function answerFrame(
   sessionId: string,
+  msgId: string,
+  seq: number,
   partial: Partial<
     Pick<
       ChatAnswerFrame,
@@ -35,6 +37,8 @@ function answerFrame(
   return {
     type: 'chat.answer',
     sessionId,
+    msgId,
+    seq,
     delta: partial.delta ?? '',
     citations: partial.citations ?? [],
     restrictedResultsOmitted: partial.restrictedResultsOmitted ?? false,
@@ -53,20 +57,23 @@ export function goldenPathFrames(params?: {
   restrictedResultsOmitted?: boolean;
 }): WsFrame[] {
   const sessionId = params?.sessionId ?? 's1';
+  // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
+  const answerMsgId = crypto.randomUUID();
+  const answerSeq = 0;
   const tokens = params?.tokens ?? ['안녕', '하세요'];
   const citations = params?.citations ?? [
     { docId: 'd1', title: '문서 제목', snippet: '발췌 내용', score: 0.87 },
   ];
   return [
-    answerFrame(sessionId, {
+    answerFrame(sessionId, answerMsgId, answerSeq, {
       citations,
       restrictedResultsOmitted: params?.restrictedResultsOmitted ?? false,
       status: 'streaming',
     }),
     ...tokens.map((delta) =>
-      answerFrame(sessionId, { delta, status: 'streaming' }),
+      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
-    answerFrame(sessionId, { status: 'done' }),
+    answerFrame(sessionId, answerMsgId, answerSeq, { status: 'done' }),
   ];
 }
 
@@ -77,17 +84,20 @@ export function restrictedCitationsFrames(params?: {
   tokens?: string[];
 }): WsFrame[] {
   const sessionId = params?.sessionId ?? 's1';
+  // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
+  const answerMsgId = crypto.randomUUID();
+  const answerSeq = 0;
   const tokens = params?.tokens ?? ['안녕', '하세요'];
   return [
-    answerFrame(sessionId, {
+    answerFrame(sessionId, answerMsgId, answerSeq, {
       citations: [],
       restrictedResultsOmitted: true,
       status: 'streaming',
     }),
     ...tokens.map((delta) =>
-      answerFrame(sessionId, { delta, status: 'streaming' }),
+      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
-    answerFrame(sessionId, { status: 'done' }),
+    answerFrame(sessionId, answerMsgId, answerSeq, { status: 'done' }),
   ];
 }
 
@@ -97,12 +107,15 @@ export function tokensOnlyFrames(params?: {
   tokens?: string[];
 }): WsFrame[] {
   const sessionId = params?.sessionId ?? 's1';
+  // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
+  const answerMsgId = crypto.randomUUID();
+  const answerSeq = 0;
   const tokens = params?.tokens ?? ['안녕', '하세요'];
   return [
     ...tokens.map((delta) =>
-      answerFrame(sessionId, { delta, status: 'streaming' }),
+      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
-    answerFrame(sessionId, { status: 'done' }),
+    answerFrame(sessionId, answerMsgId, answerSeq, { status: 'done' }),
   ];
 }
 
@@ -116,10 +129,13 @@ export function errorMidStreamFrames(params?: {
   traceId?: string;
 }): WsFrame[] {
   const sessionId = params?.sessionId ?? 's1';
+  // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
+  const answerMsgId = crypto.randomUUID();
+  const answerSeq = 0;
   const tokensBeforeError = params?.tokensBeforeError ?? ['안녕'];
   return [
     ...tokensBeforeError.map((delta) =>
-      answerFrame(sessionId, { delta, status: 'streaming' }),
+      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
     {
       type: 'error',

@@ -24,6 +24,7 @@ import {
   roomAccess,
   type RoomMember,
   scenarioForRoom,
+  nextMockSeq,
 } from './rooms';
 
 const PORT = Number(process.env.MOCK_WS_PORT ?? 4001);
@@ -288,6 +289,8 @@ const server = Bun.serve<SocketData>({
       registry.broadcastIfCurrent(threadId, generation, {
         type: 'chat.message',
         sessionId: threadId,
+        msgId: crypto.randomUUID(),
+        seq: nextMockSeq(),
         from: subject,
         fromDisplayName: displayName,
         content: parsed.message.content,

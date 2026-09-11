@@ -33,7 +33,10 @@ const TERMINAL_AI_ERROR_CODES = new Set([
 
 /** 메시지 하나. 사람과 AI를 role이 아니라 보낸 사람 유무로 가른다 — 협업방에는 보낸 사람이 여럿이다. */
 export interface CollabMessage {
+  /** 서버가 준 msgId(이슈 #190). 이력과 실시간이 같은 메시지를 가리키는 근거다. */
   id: string;
+  /** 방 안에서의 순서. 정렬과 따라잡기 커서로만 쓰고 연속성은 가정하지 않는다. */
+  seq: number;
   /** 사람이 보낸 것이면 그 사람, AI 답변이면 null. */
   from: PresenceParticipant | null;
   content: string;
@@ -158,6 +161,8 @@ function upsertNotice(state: RoomState, frame: SystemNoticeFrame): RoomState {
 /** 메시지 하나를 덧붙인다. */
 function appendMessage(
   state: RoomState,
+  id: string,
+  seq: number,
   from: PresenceParticipant | null,
   content: string,
   streaming: boolean,
@@ -167,7 +172,8 @@ function appendMessage(
     messages: [
       ...state.messages,
       {
-        id: `m${state.nextMessageId}`,
+        id,
+        seq,
         from,
         content,
         streaming,
@@ -175,8 +181,15 @@ function appendMessage(
         restrictedResultsOmitted: false,
       },
     ],
-    nextMessageId: state.nextMessageId + 1,
   };
+}
+
+/** 같은 msgId가 이미 흐름에 있는지. 이력과 실시간이 겹칠 때 한 번만 남기는 근거다(#190). */
+function messageIndexById(state: RoomState, id: string): number | null {
+  const index = state.messages.findIndex(
+    (entry) => !isPresenceNotice(entry) && entry.id === id,
+  );
+  return index === -1 ? null : index;
 }
 
 /** 명단에 이미 있는 사람인지. 같은 사람인지는 subject로만 가른다 — 표시 이름은 바뀔 수 있다. */
@@ -234,13 +247,8 @@ function mergeCitations(current: Citation[], incoming: Citation[]): Citation[] {
 }
 
 /**
- * 흐르는 중인 AI 답변의 자리를 돌려준다. 없으면 null.
- *
- * 맨 끝만 보면 안 된다 — 답변이 흐르는 도중 다른 참여자가 말하면 그 메시지가 끝에 붙고, 이어지는
- * delta가 이 답변을 못 찾아 말풍선이 둘로 갈린다. 여러 명이 있는 방에서는 흔한 순서다(PR #80 리뷰).
- *
- * 흐르는 답변이 둘 이상이면 가장 최근 것에 잇는다. 프레임에 스트림 식별자가 없어(#8) 어느 답변의
- * delta인지 가릴 수 없기 때문이고, `@AI` 호출이 동시에 여러 개 흐를 수 있는지는 #17이 정한다.
+ * 흐르는 중인 AI 답변의 자리. chat.answer는 이제 msgId로 직접 찾지만(이슈 #190), error
+ * 프레임에는 msgId가 없어 "지금 흐르는 답변"을 뒤에서 찾는 이 방식이 아직 필요하다.
  */
 function streamingAnswerIndex(state: RoomState): number | null {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
@@ -322,8 +330,12 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       return state;
 
     case 'chat.message':
+      // 같은 메시지가 이력으로도 실시간으로도 올 수 있다 — msgId로 한 번만 남긴다(이슈 #190).
+      if (messageIndexById(state, frame.msgId) !== null) return state;
       return appendMessage(
         state,
+        frame.msgId,
+        frame.seq,
         { subject: frame.from, displayName: frame.fromDisplayName },
         frame.content,
         false,
@@ -331,7 +343,9 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
 
     case 'chat.answer': {
       const done = frame.status === 'done';
-      const index = streamingAnswerIndex(state);
+      // 이전에는 "흐르는 중인 답변"을 뒤에서 찾았다. 이제 프레임이 자기 msgId를 들고 오므로
+      // 그 값으로 직접 찾는다(이슈 #190) — 턴이 겹쳐도 어느 답변의 delta인지 분명하다.
+      const index = messageIndexById(state, frame.msgId);
       if (index !== null) {
         return extendAnswer(
           state,
@@ -351,7 +365,14 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       ) {
         return state;
       }
-      const appended = appendMessage(state, null, frame.delta, !done);
+      const appended = appendMessage(
+        state,
+        frame.msgId,
+        frame.seq,
+        null,
+        frame.delta,
+        !done,
+      );
       return extendAnswer(
         appended,
         appended.messages.length - 1,
