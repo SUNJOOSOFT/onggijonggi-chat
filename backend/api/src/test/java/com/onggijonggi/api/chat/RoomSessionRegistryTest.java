@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import java.time.Duration;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -30,11 +31,15 @@ import static org.assertj.core.api.Assertions.assertThat;
  *               방송이 들어가지 않는지도 확인한다(이슈 #102). 참가자 제거 시 그 사람의 연결(탭이
  *               여럿이어도 전부)에만 강제 종료 신호가 가고 다른 연결은 영향받지 않는지, 그리고
  *               evict가 같은 연결의 leave와 동시에 실행돼도 방 상태가 깨지지 않는지도
- *               확인한다(이슈 #135).
+ *               확인한다(이슈 #135). 퇴장 통보가 유예 시간만큼 미뤄지고, 그 안에 재연결하면
+ *               퇴장·입장이 둘 다 무산되는지도 확인한다(이슈 #198) — 실제 운영 유예(수 초)를
+ *               기다리지 않도록 테스트는 짧은 유예로 생성한 registry를 쓴다.
  */
 class RoomSessionRegistryTest {
 
-	private final RoomSessionRegistry registry = new RoomSessionRegistry();
+	private static final Duration TEST_LEAVE_DEBOUNCE = Duration.ofMillis(50);
+
+	private final RoomSessionRegistry registry = new RoomSessionRegistry(TEST_LEAVE_DEBOUNCE);
 
 	/** 사람을 subject로 가리키게 되면서(이슈 #130) 테스트도 subject·표시 이름 쌍을 다룬다. */
 	private static PresenceParticipant participant(String subject) {
@@ -223,24 +228,107 @@ class RoomSessionRegistryTest {
 		registry.leave(roomId, secondConnectionId, secondUser);
 	}
 
+	/** 퇴장 통보는 유예(이슈 #198) 뒤에 도착하므로 리스트를 바로 보지 않고 도착을 기다린다. */
 	@Test
-	void announcesLeaveToTheRemainingMembers() {
+	void announcesLeaveToTheRemainingMembers() throws Exception {
 		UUID roomId = UUID.randomUUID();
 		UUID stayingConnectionId = UUID.randomUUID();
 		UUID leavingConnectionId = UUID.randomUUID();
 		PresenceParticipant leavingUser = participant("leaving");
 		List<WsFrame> staying = new CopyOnWriteArrayList<>();
+		CountDownLatch leaveReceived = new CountDownLatch(1);
 
 		Disposable stayingSubscription = registry.join(roomId, stayingConnectionId, anyone())
-				.frames().subscribe(staying::add);
+				.frames().subscribe(frame -> {
+					staying.add(frame);
+					if (frame instanceof PresenceLeaveFrame) {
+						leaveReceived.countDown();
+					}
+				});
 		registry.join(roomId, leavingConnectionId, leavingUser).frames().subscribe();
 		staying.clear();
 
 		registry.leave(roomId, leavingConnectionId, leavingUser);
 
+		assertThat(leaveReceived.await(1, TimeUnit.SECONDS)).isTrue();
 		assertThat(staying).containsExactly(new PresenceLeaveFrame(roomId, leavingUser.subject(), leavingUser.displayName()));
 
 		stayingSubscription.dispose();
+	}
+
+	/**
+	 * 유예 시간 안에 같은 사람이 재연결하면 퇴장도 입장도 방송되지 않는다 — 화면에 아무것도
+	 * 보이지 않아야 한다는 이슈 #198의 핵심 요구사항. 유예가 지나고도 한참 더 기다려 스케줄이
+	 * 실제로 dispose됐는지(타이밍 우연이 아닌지) 확인한다.
+	 */
+	@Test
+	void cancelsTheLeaveAndJoinAnnouncementsWhenTheSameUserReconnectsWithinTheDebounce() throws Exception {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant flappingUser = participant("flapping");
+		UUID oldConnectionId = UUID.randomUUID();
+		List<WsFrame> watcher = new CopyOnWriteArrayList<>();
+
+		Disposable watcherSubscription = registry.join(roomId, UUID.randomUUID(), anyone())
+				.frames().subscribe(watcher::add);
+		registry.join(roomId, oldConnectionId, flappingUser).frames().subscribe();
+		watcher.clear();
+
+		registry.leave(roomId, oldConnectionId, flappingUser);
+		Disposable reconnected = registry.join(roomId, UUID.randomUUID(), flappingUser).frames().subscribe();
+
+		Thread.sleep(TEST_LEAVE_DEBOUNCE.toMillis() * 4);
+		assertThat(watcher).isEmpty();
+
+		watcherSubscription.dispose();
+		reconnected.dispose();
+	}
+
+	/**
+	 * 유예 중에도 그 사람은 아직 방을 나간 게 아니므로, 그사이 새로 들어온 사람의 스냅샷에도
+	 * 보여야 한다 — 안 그러면 기존 참여자 화면과 어긋난 채로, 그것도 재연결이 성공하면 입장
+	 * 방송조차 나가지 않아(위 취소 테스트) 새로 들어온 사람만 영영 그 사람을 모르게 된다.
+	 */
+	@Test
+	void includesAUserWithAPendingDepartureInANewJoinersSnapshot() {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant staying = participant("staying");
+		PresenceParticipant flapping = participant("flapping");
+		UUID flappingConnectionId = UUID.randomUUID();
+
+		registry.join(roomId, UUID.randomUUID(), staying).frames().subscribe();
+		registry.join(roomId, flappingConnectionId, flapping).frames().subscribe();
+
+		registry.leave(roomId, flappingConnectionId, flapping);
+
+		RoomSessionRegistry.RoomMembership lateJoiner = registry.join(roomId, UUID.randomUUID(), anyone());
+		assertThat(lateJoiner.snapshot().participants()).contains(flapping);
+	}
+
+	/** 유예 안에 재연결이 없으면 그대로 퇴장이 방송된다 — 취소 로직이 진짜로 지연시킬 뿐 억누르지 않는지 확인한다. */
+	@Test
+	void announcesLeaveAfterTheDebounceElapsesWithoutReconnect() throws Exception {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant leavingUser = participant("no-return");
+		UUID connectionId = UUID.randomUUID();
+		List<WsFrame> watcher = new CopyOnWriteArrayList<>();
+		CountDownLatch leaveReceived = new CountDownLatch(1);
+
+		Disposable watcherSubscription = registry.join(roomId, UUID.randomUUID(), anyone())
+				.frames().subscribe(frame -> {
+					watcher.add(frame);
+					if (frame instanceof PresenceLeaveFrame) {
+						leaveReceived.countDown();
+					}
+				});
+		registry.join(roomId, connectionId, leavingUser).frames().subscribe();
+		watcher.clear();
+
+		registry.leave(roomId, connectionId, leavingUser);
+
+		assertThat(leaveReceived.await(1, TimeUnit.SECONDS)).isTrue();
+		assertThat(watcher).containsExactly(new PresenceLeaveFrame(roomId, leavingUser.subject(), leavingUser.displayName()));
+
+		watcherSubscription.dispose();
 	}
 
 	@Test
@@ -283,15 +371,21 @@ class RoomSessionRegistryTest {
 	}
 
 	@Test
-	void announcesLeaveOnlyWhenTheSameUsersLastConnectionGoes() {
+	void announcesLeaveOnlyWhenTheSameUsersLastConnectionGoes() throws Exception {
 		UUID roomId = UUID.randomUUID();
 		PresenceParticipant twoTabUser = participant("twoTab");
 		UUID firstTabId = UUID.randomUUID();
 		UUID secondTabId = UUID.randomUUID();
 		List<WsFrame> watcher = new CopyOnWriteArrayList<>();
+		CountDownLatch leaveReceived = new CountDownLatch(1);
 
 		Disposable watcherSubscription = registry.join(roomId, UUID.randomUUID(), anyone())
-				.frames().subscribe(watcher::add);
+				.frames().subscribe(frame -> {
+					watcher.add(frame);
+					if (frame instanceof PresenceLeaveFrame) {
+						leaveReceived.countDown();
+					}
+				});
 		Disposable firstTab = registry.join(roomId, firstTabId, twoTabUser).frames().subscribe();
 		Disposable secondTab = registry.join(roomId, secondTabId, twoTabUser).frames().subscribe();
 		watcher.clear();
@@ -305,6 +399,7 @@ class RoomSessionRegistryTest {
 
 		registry.leave(roomId, firstTabId, twoTabUser);
 
+		assertThat(leaveReceived.await(1, TimeUnit.SECONDS)).isTrue();
 		assertThat(watcher).containsExactly(new PresenceLeaveFrame(roomId, twoTabUser.subject(), twoTabUser.displayName()));
 
 		watcherSubscription.dispose();
@@ -414,8 +509,14 @@ class RoomSessionRegistryTest {
 		assertThat(watcher.snapshot().participants()).containsExactly(twoTabUser, watcherUser);
 	}
 
+	/**
+	 * 퇴장 유예(이슈 #198)가 끝나 그 사람이 정말로 나갔다고 확정된 뒤의 얘기다 — 유예 중에는
+	 * 아직 나간 게 아니라서 늦게 온 사람의 명단에도 보인다(별도로
+	 * includesAUserWithAPendingDepartureInANewJoinersSnapshot이 검증한다). 그래서 유예가
+	 * 지나가길 기다린 뒤에 늦게 join한다.
+	 */
 	@Test
-	void snapshotLeavesOutWhoeverAlreadyWent() {
+	void snapshotLeavesOutWhoeverAlreadyWent() throws Exception {
 		UUID roomId = UUID.randomUUID();
 		PresenceParticipant stayingUser = participant("staying");
 		PresenceParticipant leavingUser = participant("leaving");
@@ -424,6 +525,7 @@ class RoomSessionRegistryTest {
 		registry.join(roomId, leavingConnectionId, leavingUser);
 
 		registry.leave(roomId, leavingConnectionId, leavingUser);
+		Thread.sleep(TEST_LEAVE_DEBOUNCE.toMillis() * 4);
 		RoomSessionRegistry.RoomMembership late = registry.join(roomId, UUID.randomUUID(), anyone());
 
 		// 늦게 온 사람은 이미 나간 사람의 퇴장 통보를 받을 수 없다. 명단에서도 빠져 있어야
