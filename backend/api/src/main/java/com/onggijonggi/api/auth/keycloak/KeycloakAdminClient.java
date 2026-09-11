@@ -4,7 +4,9 @@ import com.fasterxml.jackson.annotation.JsonProperty;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicReference;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -23,11 +25,23 @@ import reactor.core.publisher.Mono;
  *               호출자 본인의 claim만 담고 있어, 협업 스레드의 다른 참가자 이름은 이 경로로만 얻을 수
  *               있다. 로그인에 쓰는 것과 같은 클라이언트의 서비스 계정(client_credentials)으로 admin
  *               토큰을 받고, 만료 30초 전까지는 재사용한다.
+ *
+ *               표시 이름도 짧은 TTL로 캐시한다(이슈 #200). 호출부(협업 스레드 목록·참여자 관리·
+ *               메시지 이력)가 화면을 그릴 때마다 사람 수만큼 Admin API를 두드리던 것을 줄이기
+ *               위함이다. 정본은 그대로 Keycloak이고 DB에 미러하지 않는다 — TTL이 지나면 다시
+ *               묻는다.
  */
 @Component
 public class KeycloakAdminClient {
 
 	private static final Duration EXPIRY_SAFETY_MARGIN = Duration.ofSeconds(30);
+
+	/**
+	* 캐시가 무한히 자라지 않게 하는 상한. realm의 사용자 수가 자연스러운 경계지만, 그 수를
+	* 신뢰해 상한을 두지 않으면 오래 뜬 서버에서 조용히 새는 자리가 된다. 넘치면 만료된 것을
+	* 먼저 버리고, 그래도 넘치면 통째로 비운다 — 비워도 다음 조회가 다시 채우므로 안전하다.
+	*/
+	private static final int MAX_CACHED_NAMES = 10_000;
 
 	private final WebClient webClient;
 	private final String realm;
@@ -35,15 +49,21 @@ public class KeycloakAdminClient {
 	private final String clientSecret;
 	private final AtomicReference<CachedToken> cachedToken = new AtomicReference<>();
 
+	private final Map<String, CachedName> cachedNames = new ConcurrentHashMap<>();
+
+	private final Duration displayNameTtl;
+
 	public KeycloakAdminClient(WebClient.Builder webClientBuilder,
 			@Value("${app.keycloak.internal-url}") String internalUrl,
 			@Value("${app.keycloak.realm}") String realm,
 			@Value("${app.keycloak.admin.client-id}") String clientId,
-			@Value("${app.keycloak.admin.client-secret}") String clientSecret) {
+			@Value("${app.keycloak.admin.client-secret}") String clientSecret,
+			@Value("${app.keycloak.admin.display-name-ttl:5m}") Duration displayNameTtl) {
 		this.webClient = webClientBuilder.baseUrl(internalUrl).build();
 		this.realm = realm;
 		this.clientId = clientId;
 		this.clientSecret = clientSecret;
+		this.displayNameTtl = displayNameTtl;
 	}
 
 	/**
@@ -51,11 +71,38 @@ public class KeycloakAdminClient {
 	 * UUID)와는 다른 값이라 호출부가 미리 keycloakSubj로 바꿔서 넘겨야 한다. 탈퇴로 못 찾은 경우뿐
 	 * 아니라 토큰 발급 실패·타임아웃·5xx 등 Admin API 쪽 오류 전부를 빈 Optional로 삼킨다 — 표시
 	 * 이름 하나 못 가져온 것 때문에 호출부의 스레드 목록 조회 전체가 죽으면 안 된다.
+	 *
+	 * 결과는 displayNameTtl 동안 캐시한다(이슈 #200). 다만 <b>답이 확정된 것만</b> 담는다 —
+	 * 조회 성공과 404(탈퇴 등 그 subject가 없음)는 다시 물어도 답이 같으므로 캐시하고, 토큰 발급
+	 * 실패·타임아웃·5xx는 캐시하지 않는다. 장애까지 캐시하면 Keycloak이 잠깐 흔들린 것이 TTL 내내
+	 * "이름 없음"으로 굳는다.
 	 */
 	public Mono<Optional<String>> displayName(String subject) {
+		CachedName cached = cachedNames.get(subject);
+		if (cached != null && cached.isValidAt(Instant.now())) {
+			return Mono.just(cached.value());
+		}
 		return adminToken()
 				.flatMap(token -> lookupUser(subject, token))
+				.doOnNext(name -> cacheName(subject, name))
+				.onErrorResume(WebClientResponseException.NotFound.class, ignored -> {
+					// 탈퇴처럼 확정적인 "없음"은 캐시해도 된다 — 장애와 달리 다시 물어도 답이 같고,
+					// 캐시하지 않으면 떠난 사람의 옛 메시지가 볼 때마다 조회를 한 번씩 더 부른다.
+					cacheName(subject, Optional.empty());
+					return Mono.just(Optional.empty());
+				})
 				.onErrorResume(WebClientException.class, ignored -> Mono.just(Optional.empty()));
+	}
+
+	private void cacheName(String subject, Optional<String> name) {
+		if (cachedNames.size() >= MAX_CACHED_NAMES) {
+			Instant now = Instant.now();
+			cachedNames.values().removeIf(entry -> !entry.isValidAt(now));
+			if (cachedNames.size() >= MAX_CACHED_NAMES) {
+				cachedNames.clear();
+			}
+		}
+		cachedNames.put(subject, new CachedName(name, Instant.now().plus(displayNameTtl)));
 	}
 
 	/**
@@ -143,6 +190,12 @@ public class KeycloakAdminClient {
 				.bodyToMono(TokenResponse.class)
 				.map(response -> new CachedToken(response.accessToken(),
 						Instant.now().plusSeconds(response.expiresIn()).minus(EXPIRY_SAFETY_MARGIN)));
+	}
+
+	private record CachedName(Optional<String> value, Instant expiresAt) {
+		boolean isValidAt(Instant now) {
+			return now.isBefore(expiresAt);
+		}
 	}
 
 	private record CachedToken(String value, Instant expiresAt) {

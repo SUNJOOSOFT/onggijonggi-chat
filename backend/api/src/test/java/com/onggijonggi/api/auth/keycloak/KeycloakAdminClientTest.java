@@ -1,5 +1,6 @@
 package com.onggijonggi.api.auth.keycloak;
 
+import java.time.Duration;
 import java.util.Optional;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicReference;
@@ -36,12 +37,20 @@ class KeycloakAdminClientTest {
 
 	private final AtomicReference<ClientRequest> lastUserRequest = new AtomicReference<>();
 
+	/** 캐시가 실제로 HTTP를 아꼈는지 보려면 조회 횟수를 세야 한다(이슈 #200). */
+	private final AtomicInteger userRequests = new AtomicInteger();
+
 	private KeycloakAdminClient clientReturning(String username, long expiresInSeconds) {
 		return clientRespondingWith(HttpStatus.NOT_FOUND, username, expiresInSeconds);
 	}
 
 	private KeycloakAdminClient clientRespondingWith(HttpStatus userLookupFailureStatus, String username,
 			long expiresInSeconds) {
+		return clientRespondingWith(userLookupFailureStatus, username, expiresInSeconds, Duration.ofMinutes(5));
+	}
+
+	private KeycloakAdminClient clientRespondingWith(HttpStatus userLookupFailureStatus, String username,
+			long expiresInSeconds, Duration displayNameTtl) {
 		WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
 			if (request.url().toString().endsWith("/protocol/openid-connect/token")) {
 				tokenRequests.incrementAndGet();
@@ -50,6 +59,7 @@ class KeycloakAdminClientTest {
 						""".formatted(expiresInSeconds)));
 			}
 			lastUserRequest.set(request);
+			userRequests.incrementAndGet();
 			if (username == null) {
 				return Mono.just(ClientResponse.create(userLookupFailureStatus).build());
 			}
@@ -57,7 +67,8 @@ class KeycloakAdminClientTest {
 					{ "id": "%s", "username": "%s", "firstName": "무시됨" }
 					""".formatted(SUBJECT, username)));
 		});
-		return new KeycloakAdminClient(builder, INTERNAL_URL, REALM, CLIENT_ID, CLIENT_SECRET);
+		return new KeycloakAdminClient(builder, INTERNAL_URL, REALM, CLIENT_ID, CLIENT_SECRET,
+				displayNameTtl);
 	}
 
 	private ClientResponse jsonResponse(String body) {
@@ -65,6 +76,56 @@ class KeycloakAdminClientTest {
 				.header("Content-Type", MediaType.APPLICATION_JSON_VALUE)
 				.body(body)
 				.build();
+	}
+
+	/** 같은 사람을 다시 물으면 Admin API를 타지 않는다 — 이 캐시의 목적 자체다(이슈 #200). */
+	@Test
+	void reusesCachedDisplayNameWithoutCallingAdminApiAgain() {
+		KeycloakAdminClient client = clientReturning("sujin", 60);
+
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.of("sujin")).verifyComplete();
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.of("sujin")).verifyComplete();
+
+		assertThat(userRequests.get()).isEqualTo(1);
+	}
+
+	/** TTL이 지나면 다시 묻는다 — 정본은 Keycloak이고 DB에 미러하지 않는다는 방침 그대로다. */
+	@Test
+	void asksAgainAfterTheTtlHasPassed() {
+		KeycloakAdminClient client = clientRespondingWith(HttpStatus.NOT_FOUND, "sujin", 60, Duration.ZERO);
+
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.of("sujin")).verifyComplete();
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.of("sujin")).verifyComplete();
+
+		assertThat(userRequests.get()).isEqualTo(2);
+	}
+
+	/**
+	* 장애로 비어버린 결과는 캐시하지 않는다. 캐시하면 Keycloak이 잠깐 흔들린 것이 TTL 내내
+	* "이름 없음"으로 굳는다 — 다음 호출이 다시 시도해야 한다(이슈 #200).
+	*/
+	@Test
+	void doesNotCacheEmptyResultsThatCameFromAnOutage() {
+		KeycloakAdminClient client = clientRespondingWith(HttpStatus.INTERNAL_SERVER_ERROR, null, 60);
+
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.empty()).verifyComplete();
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.empty()).verifyComplete();
+
+		assertThat(userRequests.get()).isEqualTo(2);
+	}
+
+	/**
+	* 404는 반대다 — 탈퇴처럼 답이 확정된 경우라 다시 물어도 같다. 캐시하지 않으면 떠난 사람의
+	* 옛 메시지를 볼 때마다 조회가 한 번씩 더 나간다.
+	*/
+	@Test
+	void cachesTheDefinitiveAbsenceOfAUser() {
+		KeycloakAdminClient client = clientReturning(null, 60);
+
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.empty()).verifyComplete();
+		StepVerifier.create(client.displayName(SUBJECT)).expectNext(Optional.empty()).verifyComplete();
+
+		assertThat(userRequests.get()).isEqualTo(1);
 	}
 
 	@Test

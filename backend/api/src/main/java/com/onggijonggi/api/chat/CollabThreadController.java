@@ -56,6 +56,14 @@ import reactor.core.scheduler.Schedulers;
 @RestController
 public class CollabThreadController {
 
+	/**
+	* 표시 이름 조회를 한 번에 이만큼만 내보낸다(이슈 #200). flatMap의 기본 상한은 256이라, 캐시가
+	* 비어 있을 때 방·참가자가 많으면 Keycloak Admin API로 한꺼번에 몰려 나간다 — 이 엔드포인트엔
+	* WS 핸드셰이크(#6)와 달리 레이트리밋도 없다. 캐시(KeycloakAdminClient)가 평소 호출을 줄이고,
+	* 이 상한이 캐시 미스가 몰리는 순간을 눌러 준다.
+	*/
+	private static final int DISPLAY_NAME_LOOKUP_CONCURRENCY = 8;
+
 	/** 후보 검색 최소 글자 수. 한 글자로는 realm을 통째로 훑는 꼴이라 서버에서 막는다(#172). */
 	private static final int CANDIDATE_QUERY_MIN = 2;
 
@@ -277,7 +285,8 @@ public class CollabThreadController {
 				.collect(Collectors.toSet());
 		return Flux.fromIterable(subjects)
 				.flatMap(subject -> keycloakAdminClient.displayName(subject)
-						.map(displayName -> Map.entry(subject, displayName.orElse(subject))))
+						.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
+						DISPLAY_NAME_LOOKUP_CONCURRENCY)
 				.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 				.map(displayNamesBySubject -> threads.stream()
 						.map(thread -> CollabThreadSummary.from(thread.thr(),
@@ -299,7 +308,8 @@ public class CollabThreadController {
 		Set<String> subjects = participants.stream().map(ThreadParticipant::subject).collect(Collectors.toSet());
 		return Flux.fromIterable(subjects)
 				.flatMap(subject -> keycloakAdminClient.displayName(subject)
-						.map(displayName -> Map.entry(subject, displayName.orElse(subject))))
+						.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
+						DISPLAY_NAME_LOOKUP_CONCURRENCY)
 				.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 				.map(displayNamesBySubject -> participants.stream()
 						.map(participant -> new ParticipantView(participant.subject(), participant.role(),
@@ -345,7 +355,8 @@ public class CollabThreadController {
 					Set<String> subjects = Set.copyOf(subjectByThrMbrId.values());
 					return Flux.fromIterable(subjects)
 							.flatMap(subject -> keycloakAdminClient.displayName(subject)
-									.map(displayName -> Map.entry(subject, displayName.orElse(subject))))
+									.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
+									DISPLAY_NAME_LOOKUP_CONCURRENCY)
 							.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 							.map(displayNameBySubject -> messages.stream()
 									.map(msg -> MsgItem.from(msg, subjectByThrMbrId.get(msg.getThrMbrId()),

@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import java.time.Duration;
 import java.util.Optional;
 import org.springframework.boot.test.context.TestConfiguration;
 import org.springframework.context.annotation.Bean;
@@ -20,7 +21,8 @@ class FakeKeycloakAdminConfig {
 	@Bean
 	@Primary
 	KeycloakAdminClient fakeKeycloakAdminClient() {
-		return new KeycloakAdminClient(WebClient.builder(), "http://unused", "app-realm", "ogjg-client", "unused") {
+		return new KeycloakAdminClient(WebClient.builder(), "http://unused", "app-realm", "ogjg-client",
+				"unused", Duration.ZERO) {
 			@Override
 			public Mono<Optional<String>> displayName(String subject) {
 				return Mono.just(Optional.of(subject));
