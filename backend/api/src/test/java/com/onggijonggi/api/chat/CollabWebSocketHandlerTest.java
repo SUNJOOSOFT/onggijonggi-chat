@@ -186,6 +186,32 @@ class CollabWebSocketHandlerTest {
 		assertThat(frame.code()).isEqualTo("FORBIDDEN");
 	}
 
+	/** 이 연결이 든 방을 해지하는 것은 곧 연결 종료와 같은 뜻이라 받아주지 않는다 — 구독과 판정
+	 * 방향이 반대인 자리다(PR #201 리뷰). 조용히 넘어가면 클라이언트는 끊었다고 믿는데 프레임은
+	 * 계속 온다. */
+	@Test
+	void rejectsUnsubscribeForTheConnectionsOwnRoom() throws Exception {
+		UUID threadId = rooms.openRoom("unsubscribe-self-user");
+		List<String> received = exchange("unsubscribe-self-user", threadId,
+				List.of("{\"type\":\"room.unsubscribe\",\"threadId\":\"" + threadId + "\"}"), 1);
+
+		ErrorFrame frame = (ErrorFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.code()).isEqualTo("FORBIDDEN");
+	}
+
+	/** 듣고 있지도 않은 방을 해지하는 것은 할 일이 없다 — 멱등하게 조용히 넘어가고 뒤따르는
+	 * 발화는 그대로 처리된다. */
+	@Test
+	void ignoresUnsubscribeForAnotherRoom() throws Exception {
+		UUID threadId = rooms.openRoom("unsubscribe-other-user");
+		List<String> received = exchange("unsubscribe-other-user", threadId,
+				List.of("{\"type\":\"room.unsubscribe\",\"threadId\":\"" + UUID.randomUUID() + "\"}",
+						"{\"type\":\"chat.message\",\"content\":\"accepted\"}"), 1);
+
+		ChatMessageFrame frame = (ChatMessageFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		assertThat(frame.content()).isEqualTo("accepted");
+	}
+
 	/** 멈출 턴이 없는 취소는 조용히 넘어간다 — 스트림이 막 끝난 직후의 취소가 흔한 경합이라
 	 * 그때마다 오류를 돌려주면 화면이 이유 없이 시끄러워진다. */
 	@Test

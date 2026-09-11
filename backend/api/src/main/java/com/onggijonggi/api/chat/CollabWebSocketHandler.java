@@ -291,12 +291,10 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 			return handleCancel(cancel, threadId, actor, roomGeneration, traceId);
 		}
 		if (inbound instanceof InboundRoomSubscribe subscribe) {
-			return handleRoomScopeChange(subscribe.threadId(), threadId, traceId,
-					"아직 이 연결로는 다른 방을 구독할 수 없습니다.");
+			return handleSubscribe(subscribe.threadId(), threadId, traceId);
 		}
 		if (inbound instanceof InboundRoomUnsubscribe unsubscribe) {
-			return handleRoomScopeChange(unsubscribe.threadId(), threadId, traceId,
-					"이 연결의 방은 해지할 수 없습니다. 연결을 닫아 주세요.");
+			return handleUnsubscribe(unsubscribe.threadId(), threadId, traceId);
 		}
 		return Mono.just(malformed(threadId, traceId));
 	}
@@ -355,16 +353,33 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	}
 
 	/**
-	* 구독·해지는 이번 범위에서 계약과 파싱까지다(이슈 #160). 이 연결이 이미 든 방을 가리키는
-	* 구독은 할 일이 없어 조용히 넘어가고, 그 밖은 아직 받아줄 수 없어 사유를 돌려준다 — 실제
-	* 멀티플렉싱은 #161이 붙인다.
+	* 구독·해지는 이번 범위에서 계약과 파싱까지다(이슈 #160) — 실제 멀티플렉싱은 #161이 붙인다.
+	*
+	* 두 프레임이 "이 연결의 방인가"를 같은 방향으로 읽지 않는다. 지금 이 연결은 경로가 고정한 방
+	* 하나만 듣고 있으므로, 그 방을 가리키는 구독은 이미 이뤄진 상태라 할 일이 없고(조용히 넘어간다)
+	* 그 방을 가리키는 해지는 곧 연결 종료와 같은 뜻이라 받아줄 수 없다. 반대로 다른 방은 구독을
+	* 아직 못 받고, 해지는 애초에 듣고 있지 않으니 할 일이 없다.
+	*
+	* 처음에는 한 헬퍼에 거절 문구만 바꿔 넘겼는데, 그러면 해지 쪽 판정이 통째로 뒤집힌다 —
+	* 자기 방 해지가 조용히 성공한 것처럼 보이고(클라이언트는 끊었다고 믿지만 프레임은 계속 온다),
+	* 다른 방 해지에 "이 연결의 방은 해지할 수 없습니다"라는 엉뚱한 사유가 나갔다. 두 프레임의
+	* 판정 방향이 반대라 공유할 수 있는 것은 모양뿐이고 의미가 아니었다.
 	*/
-	private Mono<WsFrame> handleRoomScopeChange(UUID requestedThreadId, UUID connectionThreadId, String traceId,
-			String rejectionMessage) {
+	private Mono<WsFrame> handleSubscribe(UUID requestedThreadId, UUID connectionThreadId, String traceId) {
 		if (connectionThreadId.equals(requestedThreadId)) {
 			return Mono.empty();
 		}
-		return Mono.just(new ErrorFrame(connectionThreadId, "FORBIDDEN", rejectionMessage, traceId));
+		return Mono.just(new ErrorFrame(connectionThreadId, "FORBIDDEN",
+				"아직 이 연결로는 다른 방을 구독할 수 없습니다.", traceId));
+	}
+
+	/** {@link #handleSubscribe}와 판정 방향이 반대인 이유는 그쪽 주석에 있다. */
+	private Mono<WsFrame> handleUnsubscribe(UUID requestedThreadId, UUID connectionThreadId, String traceId) {
+		if (connectionThreadId.equals(requestedThreadId)) {
+			return Mono.just(new ErrorFrame(connectionThreadId, "FORBIDDEN",
+					"이 연결의 방은 해지할 수 없습니다. 연결을 닫아 주세요.", traceId));
+		}
+		return Mono.empty();
 	}
 
 	/**
