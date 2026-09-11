@@ -212,20 +212,50 @@ export function openWsConnection(
   deps: WsConnectionDeps = defaultDeps,
 ): WsConnection {
   let closedByCaller = false;
+  // close() 등 "지금 붙어 있는 소켓"이 필요한 자리가 참조하는 값 — 선제 갱신(#188)의 새 소켓이
+  // 아직 핸드셰이크 중이어도 곧바로 여기로 온다(생성 시점에 onSocket이 부른다).
   let socket: SocketLike | null = null;
+  // send()가 실제로 write할 수 있는 소켓. isOpen과 함께 아래 scopedOptions()가 갱신한다 —
+  // socket과 분리한 이유는 바로 아래 scopedOptions() 설명 참고.
+  let authoritativeSocket: SocketLike | null = null;
   // send()가 봐야 하는 상태. 소켓 객체만으로는 지금 열려 있는지 알 수 없다 — SocketLike에
   // readyState를 넣지 않았다(테스트용 가짜 소켓이 그것까지 흉내 내야 하는 부담을 피한 선택이다).
   let isOpen = false;
   const path = collabWsPath(threadId);
 
-  // 열림 여부를 이 계층도 알아야 하므로 화면에 알리는 콜백을 가로채 함께 갱신한다.
-  const trackedOptions: WsConnectionOptions = {
-    ...options,
-    onOpenChange: (open) => {
-      isOpen = open;
-      options.onOpenChange?.(open);
-    },
-  };
+  /**
+   * connectOnce 한 번 호출마다 이 함수로 만든 전용 options를 넘긴다(이슈 #188 버그 수정).
+   * 예전엔 모든 소켓이 같은 trackedOptions 객체 하나를 공유해서, 선제 갱신이 새 소켓으로
+   * 갈아탄 뒤 옛 소켓이 뒤늦게(비동기로) close 이벤트를 내면 그 이벤트의 onOpenChange(false)가
+   * 이미 새 소켓이 true로 만들어 둔 isOpen을 되돌려 버렸다 — 연결은 멀쩡한데 send()가 실패로
+   * 보고하고 화면도 "끊김"을 깜빡였다.
+   *
+   * 규칙은 하나다: **열리는 쪽은 무조건 반영하고 그 소켓을 authoritativeSocket으로 승격시킨다.
+   * 닫히는 쪽은 자신이 여전히 authoritativeSocket일 때만 반영한다.** 새 소켓이 열리는 순간
+   * authoritativeSocket이 새 소켓으로 바뀌므로, 그 뒤에 도착하는 옛 소켓의 close는 자동으로
+   * 무시된다 — 그 소켓은 더 이상 "지금의 연결"이 아니기 때문이다.
+   */
+  function scopedOptions(): { options: WsConnectionOptions; ref: { current: SocketLike | null } } {
+    const ref: { current: SocketLike | null } = { current: null };
+    return {
+      ref,
+      options: {
+        ...options,
+        onOpenChange: (open) => {
+          if (open) {
+            authoritativeSocket = ref.current;
+            isOpen = true;
+            options.onOpenChange?.(true);
+            return;
+          }
+          if (ref.current !== authoritativeSocket) return;
+          authoritativeSocket = null;
+          isOpen = false;
+          options.onOpenChange?.(false);
+        },
+      },
+    };
+  }
 
   const forceReauth = async () => {
     options.onForcedReauth?.();
@@ -284,8 +314,10 @@ export function openWsConnection(
     initialToken: string,
     onTokenSwapped: (token: string) => void,
   ): Promise<{ opened: boolean; code: number }> => {
-    const pending = connectOnce(initialToken, path, trackedOptions, deps, (s) => {
+    const { options: initialOptions, ref: initialRef } = scopedOptions();
+    const pending = connectOnce(initialToken, path, initialOptions, deps, (s) => {
       socket = s;
+      initialRef.current = s;
     });
 
     const times = decodeJwtTimes(initialToken);
@@ -329,14 +361,17 @@ export function openWsConnection(
     });
     // 새 소켓을 먼저 열어 옛 소켓과 겹친다(RoomSessionRegistry.add()가 "이미 다른 연결이
     // 있다"로 보고 presence.join을 쏘지 않게 하려는 것 — 위 connectAndProactivelyRefresh
-    // 설명 참고).
+    // 설명 참고). scopedOptions()로 별도 options를 받는 이유는 그 함수 설명 참고 — 옛 소켓의
+    // 뒤늦은 close가 이 소켓이 이미 연 isOpen을 되돌리지 못하게 한다.
+    const { options: swapOptions, ref: swapRef } = scopedOptions();
     const swapPending = connectOnce(
       newToken,
       path,
-      trackedOptions,
+      swapOptions,
       deps,
       (s) => {
         socket = s;
+        swapRef.current = s;
       },
       () => {
         swapOpened = true;
@@ -422,8 +457,12 @@ export function openWsConnection(
       socket?.close(CLOSE_NORMAL);
     },
     send: (data) => {
-      if (!isOpen || socket === null) return false;
-      socket.send(data);
+      // socket이 아니라 authoritativeSocket을 쓴다 — 선제 갱신(#188)의 새 소켓은 핸드셰이크
+      // 중에도 socket에 미리 배정되지만(close() 등이 최신 시도를 취소할 수 있어야 해서),
+      // 아직 열리지 않았을 수 있다. 그 소켓에 바로 write하면 실제 WebSocket에서는
+      // InvalidStateError가 난다.
+      if (!isOpen || authoritativeSocket === null) return false;
+      authoritativeSocket.send(data);
       return true;
     },
   };

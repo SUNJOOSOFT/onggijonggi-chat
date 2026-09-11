@@ -476,6 +476,11 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     await vi.waitFor(() => expect(first.closedWith).toBe(1000));
     expect(h.sockets).toHaveLength(2);
 
+    // 옛 소켓의 close 이벤트가 (비동기로) 뒤늦게 와도, 새 소켓이 이미 authoritative가 됐으므로
+    // isOpen이 false로 되돌아가면 안 된다 — 한때 실제로 되돌아가던 회귀다.
+    expect(h.connection.send('after-swap')).toBe(true);
+    expect(second.sent).toEqual(['after-swap']);
+
     h.connection.close();
   });
 
