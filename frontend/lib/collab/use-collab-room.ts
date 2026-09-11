@@ -12,11 +12,13 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { fetchCollabMessages } from '@/lib/api/collab';
 import { type WsConnection, openWsConnection } from '@/lib/api/ws-connection';
 import { parseFrameFromText } from '@/lib/transport/parse-frame';
 import {
   type RoomState,
   applyFrame,
+  applyHistory,
   clearRoomError,
   dismissNotice as dismissNoticeIn,
   initialRoomState,
@@ -60,6 +62,27 @@ export function useCollabRoom(threadId: string): CollabRoom {
   const [connection, setConnection] = useState<RoomConnection>('connecting');
   const connectionRef = useRef<WsConnection | null>(null);
   const [participantsRevision, setParticipantsRevision] = useState(0);
+
+  /**
+   * 과거 대화는 진입할 때 REST로 한 번만 불러온다(이슈 #190). 이후의 실시간은 아래 WS가 맡는다.
+   *
+   * WS 연결을 기다리지 않고 나란히 시작한다 — 둘이 겹쳐 도착해도 applyHistory가 msgId로 걸러
+   * 한 번만 남기므로 한쪽을 늦출 이유가 없다. 이력을 못 얻는 것은 방을 못 열 이유가 아니라,
+   * 실패해도 빈 흐름으로 계속 간다.
+   */
+  useEffect(() => {
+    let alive = true;
+    fetchCollabMessages(threadId)
+      .then((items) => {
+        if (alive) setState((current) => applyHistory(current, items));
+      })
+      .catch((error) => {
+        console.error('[collab] 이력을 불러오지 못했습니다', error);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [threadId]);
 
   useEffect(() => {
     const ws = openWsConnection(threadId, {

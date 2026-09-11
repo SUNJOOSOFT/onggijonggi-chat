@@ -8,7 +8,7 @@
  "Failed to parse URL from /api/collab/threads"로 죽는 것을 보고 옮겼다.
  *********************************************************/
 
-import { COLLAB_THREADS_PATH, bffUrl } from './config';
+import { COLLAB_THREADS_PATH, bffUrl, collabThreadMessagesPath } from './config';
 import { authFetch } from './http';
 
 /**
@@ -184,4 +184,35 @@ export async function revokeInvitation(
   if (!res.ok) {
     throw new Error(await res.text());
   }
+}
+
+/**
+ * GET /api/collab/threads/{id}/messages 응답 항목(백엔드 MsgItem과 짝, 이슈 #190).
+ *
+ * seq는 방 안의 순서이자 따라잡기 커서다. 다만 서버가 seq를 블록으로 예약해 쓰지 않은 번호가
+ * 구멍으로 남으므로 연속성은 가정하지 않는다 — 빠진 번호를 기다리면 안 된다.
+ */
+export interface CollabMessageItem {
+  id: string;
+  seq: number;
+  athKind: 'HUMAN' | 'AGENT' | 'SYSTEM';
+  status: 'PENDING' | 'COMPLETE' | 'DENIED' | 'FAILED' | 'CANCELLED';
+  content: string;
+  /** HUMAN 작성자의 Keycloak subject. WS 프레임의 from과 같은 값이다. AGENT·SYSTEM은 null. */
+  authorSubject: string | null;
+  /** HUMAN 메시지 작성자의 표시 이름. AGENT·SYSTEM은 작성자가 없어 null이다. */
+  authorDisplayName: string | null;
+  createdAt: string;
+  completedAt: string | null;
+}
+
+/** 방의 과거 대화. 실패하면 예외를 던져 호출부가 정한다 — 이력을 못 얻었다고 방을 못 열 이유는 없다. */
+export async function fetchCollabMessages(
+  threadId: string,
+): Promise<CollabMessageItem[]> {
+  const res = await authFetch(bffUrl(collabThreadMessagesPath(threadId)));
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<CollabMessageItem[]>;
 }

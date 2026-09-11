@@ -1,3 +1,4 @@
+import type { CollabMessageItem } from '@/lib/api/collab';
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
 import type { PresenceParticipant, WsFrame } from '@/lib/transport/frames';
@@ -5,6 +6,7 @@ import {
   type CollabMessage,
   type RoomState,
   applyFrame,
+  applyHistory,
   clearRoomError,
   dismissNotice,
   initialRoomState,
@@ -501,4 +503,83 @@ describe('system.notice(#29)', () => {
     expect(after).toBe(before);
   });
 
+});
+describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
+  const historyItem = (
+    id: string,
+    seq: number,
+    content: string,
+    overrides: Partial<CollabMessageItem> = {},
+  ): CollabMessageItem => ({
+    id,
+    seq,
+    athKind: 'HUMAN',
+    status: 'COMPLETE',
+    content,
+    authorSubject: 'sujin',
+    authorDisplayName: 'sujin 님',
+    createdAt: '2026-09-10T01:00:00Z',
+    completedAt: '2026-09-10T01:00:00Z',
+    ...overrides,
+  });
+
+  it('seq 순서로 흐름 앞에 붙인다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('b', 5, '나중'),
+      historyItem('a', 1, '먼저'),
+    ]);
+    expect(chats(state).map((m) => m.content)).toEqual(['먼저', '나중']);
+  });
+
+  it('seq가 띄엄띄엄해도 그대로 받는다 — 블록 예약이 남긴 구멍이다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 0, '하나'),
+      historyItem('b', 97, '둘'),
+    ]);
+    expect(chats(state).map((m) => m.seq)).toEqual([0, 97]);
+  });
+
+  it('이미 WS로 받은 메시지는 msgId로 걸러 두 번 그리지 않는다', () => {
+    const live = fold([say('sujin', '실시간으로 먼저 왔다', 'dup-1')]);
+    const state = applyHistory(live, [historyItem('dup-1', 3, '실시간으로 먼저 왔다')]);
+    expect(chats(state)).toHaveLength(1);
+  });
+
+  it('이력이 실시간보다 앞에 온다', () => {
+    const live = fold([say('sujin', '방금 말', 'live-1')]);
+    const state = applyHistory(live, [historyItem('old-1', 0, '예전 말')]);
+    expect(chats(state).map((m) => m.content)).toEqual(['예전 말', '방금 말']);
+  });
+
+  it('AGENT는 보낸 사람 없이 AI 답변으로 남는다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 0, '답변입니다', {
+        athKind: 'AGENT',
+        authorSubject: null,
+        authorDisplayName: null,
+      }),
+    ]);
+    expect(chats(state)[0].from).toBeNull();
+  });
+
+  it('본문이 빈 행(PENDING·CANCELLED)은 빈 말풍선을 만들지 않는다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 0, '', { athKind: 'AGENT', status: 'CANCELLED' }),
+    ]);
+    expect(state.messages).toEqual([]);
+  });
+
+  it('SYSTEM은 그리지 않는다 — 사람도 AI도 아닌 줄을 이 화면이 표현하지 못한다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 0, '위험 표현이 감지되었습니다', { athKind: 'SYSTEM' }),
+    ]);
+    expect(state.messages).toEqual([]);
+  });
+
+  it('입퇴장 줄은 제자리에 남는다 — seq가 없어 정렬 대상이 아니다', () => {
+    const live = fold([join('minho')]);
+    const state = applyHistory(live, [historyItem('old-1', 0, '예전 말')]);
+    expect(state.messages).toHaveLength(2);
+    expect(isPresenceNotice(state.messages[1])).toBe(true);
+  });
 });

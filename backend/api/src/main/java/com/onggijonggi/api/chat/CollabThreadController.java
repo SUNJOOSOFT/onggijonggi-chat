@@ -340,7 +340,8 @@ public class CollabThreadController {
 									.map(displayName -> Map.entry(subject, displayName.orElse(subject))))
 							.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 							.map(displayNameBySubject -> messages.stream()
-									.map(msg -> MsgItem.from(msg, displayNameFor(msg, subjectByThrMbrId, displayNameBySubject)))
+									.map(msg -> MsgItem.from(msg, subjectByThrMbrId.get(msg.getThrMbrId()),
+											displayNameFor(msg, subjectByThrMbrId, displayNameBySubject)))
 									.toList());
 				});
 	}

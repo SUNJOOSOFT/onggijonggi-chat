@@ -42,6 +42,16 @@ export const CHAT_SESSIONS_PATH = '/api/chat/sessions';
 /** 협업 채널(방) 목록 조회 경로(이슈 #19). 목록 필터링은 서버 몫이라 프론트는 표시만 한다. */
 export const COLLAB_THREADS_PATH = '/api/collab/threads';
 
+/**
+ * 방 진입 시 과거 대화를 한 번 불러오는 경로(이슈 #190). 이후의 실시간은 WS가 맡는다 —
+ * 역할이 "채팅 종류"가 아니라 "시점"으로 갈린다.
+ *
+ * 1:1(server-history.ts)과 달리 클라이언트에서 부른다. WS 연결 수명과 맞물려 커서를 주고받아야
+ * 해서 서버사이드 prefetch로는 조율되지 않는다(#189 코멘트).
+ */
+export const collabThreadMessagesPath = (threadId: string): string =>
+  `${COLLAB_THREADS_PATH}/${encodeURIComponent(threadId)}/messages`;
+
 /** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3). */
 export const WS_PATH = '/api/ws';
 

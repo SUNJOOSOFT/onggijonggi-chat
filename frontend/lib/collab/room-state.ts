@@ -17,6 +17,7 @@
  *********************************************************/
 
 import type { Citation } from '@/lib/api/chat';
+import type { CollabMessageItem } from '@/lib/api/collab';
 import { friendlyMessageForCode } from '@/lib/api/errors';
 import type {
   PresenceParticipant,
@@ -190,6 +191,57 @@ function messageIndexById(state: RoomState, id: string): number | null {
     (entry) => !isPresenceNotice(entry) && entry.id === id,
   );
   return index === -1 ? null : index;
+}
+
+/**
+ * 방 진입 시 한 번 불러온 과거 대화를 흐름 앞에 붙인다(이슈 #190).
+ *
+ * 이미 있는 msgId는 건너뛴다 — 이력을 받기 전에 WS로 먼저 도착한 메시지가 있을 수 있고,
+ * 그때 같은 말이 두 번 보이면 안 된다. 남는 것들은 seq로 정렬해 앞에 통째로 붙인다: 이력은
+ * 진입 시점의 과거이고 지금 흐름에 있는 것은 그보다 새것이라, 둘을 섞어 정렬할 이유가 없다.
+ * 입퇴장 줄(seq가 없다)이 제자리에 남는 것도 같은 이유다.
+ *
+ * PENDING·CANCELLED처럼 본문이 빈 행은 그리지 않는다 — 빈 말풍선은 아무것도 알리지 못하면서
+ * 자리만 차지한다(chat.answer의 빈 패킷을 버리는 것과 같은 결).
+ *
+ * SYSTEM도 그리지 않는다. 사람도 AI도 아닌 줄을 이 화면이 표현할 방법이 아직 없어서다 —
+ * from이 null이면 AI 답변으로 보인다. 위험 알림은 system.notice 배너가 따로 전한다(#29).
+ */
+export function applyHistory(
+  state: RoomState,
+  items: CollabMessageItem[],
+): RoomState {
+  const known = new Set(
+    state.messages.filter((entry) => !isPresenceNotice(entry)).map((entry) => entry.id),
+  );
+  const restored = items
+    .filter((item) => !known.has(item.id))
+    .filter((item) => item.athKind !== 'SYSTEM')
+    .filter((item) => item.content !== '')
+    .sort((left, right) => left.seq - right.seq)
+    .map(toCollabMessage);
+
+  if (restored.length === 0) return state;
+  return { ...state, messages: [...restored, ...state.messages] };
+}
+
+/** 이력 한 줄을 화면이 아는 모양으로. subject는 WS 프레임의 from과 같은 값이다(이슈 #190). */
+function toCollabMessage(item: CollabMessageItem): CollabMessage {
+  return {
+    id: item.id,
+    seq: item.seq,
+    from:
+      item.athKind === 'HUMAN'
+        ? {
+            subject: item.authorSubject ?? '',
+            displayName: item.authorDisplayName ?? item.authorSubject ?? '',
+          }
+        : null,
+    content: item.content,
+    streaming: false,
+    citations: [],
+    restrictedResultsOmitted: false,
+  };
 }
 
 /** 명단에 이미 있는 사람인지. 같은 사람인지는 subject로만 가른다 — 표시 이름은 바뀔 수 있다. */
