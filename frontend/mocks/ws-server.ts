@@ -272,6 +272,10 @@ const server = Bun.serve<SocketData>({
 
       const parsed = parseInboundMessage(String(raw));
       if (parsed.kind === 'ignore') return;
+      // 목업 큐는 사람 메시지 id를 들고 있지 않아 지목한 턴을 골라 끊지 못한다 — 실서버의
+      // "이미 끝난 턴이면 조용히 넘어간다"와 같은 자리로 두고, 취소 동작 자체는 #161에서
+      // 큐가 msgId를 들게 될 때 붙인다.
+      if (parsed.kind === 'cancel') return;
       if (parsed.kind === 'malformed') {
         ws.send(
           JSON.stringify(
