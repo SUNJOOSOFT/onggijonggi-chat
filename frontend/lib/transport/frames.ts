@@ -182,3 +182,52 @@ export type WsFrame =
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */
 export type WsFrameType = WsFrame['type'];
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 클라이언트 → 서버 (이슈 #160)
+ *
+ * 위쪽 WsFrame이 서버가 내려보내는 것이라면 아래는 올려보내는 것이다. 유니온을 나누는 이유는
+ * 방향마다 허용 집합이 다르기 때문이다 — 한 유니온에 합치면 서버 전용 타입을 올려보낼 수
+ * 있는지가 타입만 봐서는 드러나지 않는다. 서버 계약은 InboundFrame.java가 미러링한다.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** 참여자 발화. modelId는 이 발화가 @AI 멘션일 때 쓸 게이트웨이 모델 별칭이고, 생략하면
+ * 서버 기본값(app.collab.ai.model)을 쓴다. 협업방 화면에는 아직 모델 선택이 없어 지금은
+ * 늘 생략되지만, 1:1을 이 프레임으로 옮길 때(#162) 모델 선택을 잃지 않으려면 자리가 필요하다. */
+export interface ClientChatMessageFrame {
+  type: 'chat.message';
+  content: string;
+  modelId?: string;
+}
+
+/** 진행 중이거나 대기 중인 @AI 턴을 멈춘다. 지목하는 값이 AGENT 메시지 id가 아니라 그 턴을
+ * 부른 사람 메시지의 id(ChatMessageFrame.msgId)인 이유는, 큐에서 차례를 기다리는 턴에는
+ * AGENT id가 아직 없어서다 — 그 값으로만 취소하면 기다리는 동안에는 멈출 수 없다.
+ *
+ * 부른 사람만 멈출 수 있다. 남의 턴을 지목하면 서버가 FORBIDDEN error 프레임을 돌려준다. */
+export interface ClientChatCancelFrame {
+  type: 'chat.cancel';
+  requestMsgId: string;
+}
+
+/** 이 커넥션으로 그 방을 듣기 시작한다/그만 듣는다. 계약만 열려 있고 실제 멀티플렉싱은 #161이
+ * 붙인다 — 지금은 경로가 커넥션의 방을 고정하므로 다른 방을 가리키면 서버가 거절한다. */
+export interface ClientRoomSubscribeFrame {
+  type: 'room.subscribe';
+  threadId: string;
+}
+
+export interface ClientRoomUnsubscribeFrame {
+  type: 'room.unsubscribe';
+  threadId: string;
+}
+
+/** 서버 InboundFrame과 대응하는 전체 유니온. */
+export type ClientFrame =
+  | ClientChatMessageFrame
+  | ClientChatCancelFrame
+  | ClientRoomSubscribeFrame
+  | ClientRoomUnsubscribeFrame;
+
+/** ClientFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. */
+export type ClientFrameType = ClientFrame['type'];

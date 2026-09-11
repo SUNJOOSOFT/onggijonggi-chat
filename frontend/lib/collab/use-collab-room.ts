@@ -14,6 +14,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchCollabMessages } from '@/lib/api/collab';
 import { type WsConnection, openWsConnection } from '@/lib/api/ws-connection';
+import type { ClientFrame } from '@/lib/transport/frames';
 import { parseFrameFromText } from '@/lib/transport/parse-frame';
 import {
   type RoomState,
@@ -43,8 +44,12 @@ export type RoomConnection =
 export interface CollabRoom {
   state: RoomState;
   connection: RoomConnection;
-  /** 메시지를 올려보낸다. 끊겨 있으면 보내지 않고 false — 화면이 그 자리에서 안내한다. */
-  send: (content: string) => boolean;
+  /** 메시지를 올려보낸다. 끊겨 있으면 보내지 않고 false — 화면이 그 자리에서 안내한다.
+   * modelId를 주면 그 발화가 @AI 멘션일 때 그 모델로 답한다(이슈 #160). 생략하면 서버 기본값. */
+  send: (content: string, modelId?: string) => boolean;
+  /** 진행 중이거나 대기 중인 @AI 턴을 멈춘다(이슈 #160). 지목은 그 턴을 부른 사람 메시지의
+   * msgId로 한다. 자기가 부른 턴만 멈출 수 있고, 남의 턴이면 서버가 error 프레임을 돌려준다. */
+  cancel: (requestMsgId: string) => boolean;
   /** 방을 막지 않는 최신 오류 알림을 닫는다. */
   dismissError: () => void;
   /** 방 위에 얹힌 시스템 알림(#29) 하나를 닫는다. */
@@ -163,13 +168,22 @@ export function useCollabRoom(threadId: string): CollabRoom {
     return () => clearTimeout(timer);
   }, [connection]);
 
-  const send = useCallback((content: string) => {
-    const frame = {
-      type: 'chat.message',
-      content,
-    };
+  const sendFrame = useCallback((frame: ClientFrame) => {
     return connectionRef.current?.send(JSON.stringify(frame)) ?? false;
   }, []);
+
+  const send = useCallback(
+    (content: string, modelId?: string) =>
+      sendFrame({ type: 'chat.message', content, modelId }),
+    [sendFrame],
+  );
+
+  // 취소는 보냈다는 사실만 돌려준다 — 실제로 멈췄는지는 이 자리에서 알 수 없고, 서버가
+  // 스트림을 닫는 chat.answer(done)로 알린다. 멈출 턴이 이미 끝났으면 서버는 조용히 넘어간다.
+  const cancel = useCallback(
+    (requestMsgId: string) => sendFrame({ type: 'chat.cancel', requestMsgId }),
+    [sendFrame],
+  );
 
   const dismissError = useCallback(
     () => setState((current) => clearRoomError(current)),
@@ -185,6 +199,7 @@ export function useCollabRoom(threadId: string): CollabRoom {
     state,
     connection,
     send,
+    cancel,
     dismissError,
     dismissNotice,
     participantsRevision,

@@ -90,10 +90,11 @@ export type InboundChatMessage = {
 
 export type InboundParseResult =
   | { kind: 'message'; message: InboundChatMessage }
+  | { kind: 'cancel'; requestMsgId: string }
   | { kind: 'ignore' }
   | { kind: 'malformed' };
 
-/** 서버 전용 타입은 무시하고, 그 밖에는 최소 chat.message DTO만 허용한다. */
+/** 서버 전용 타입은 무시하고, 그 밖에는 클라이언트가 올려보낼 수 있는 타입(#160)만 허용한다. */
 export function parseInboundMessage(raw: string): InboundParseResult {
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
@@ -111,6 +112,16 @@ export function parseInboundMessage(raw: string): InboundParseResult {
     ) {
       return { kind: 'ignore' };
     }
+    // 방 구독·해지는 계약만 열려 있고 실제 멀티플렉싱은 #161이 붙인다. 목업은 커넥션 하나가
+    // 방 하나를 보는 구조라 지금은 할 일이 없다 — 거절하면 정상 프레임이 malformed로 보인다.
+    if (value.type === 'room.subscribe' || value.type === 'room.unsubscribe') {
+      return { kind: 'ignore' };
+    }
+    if (value.type === 'chat.cancel') {
+      return typeof value.requestMsgId === 'string' && value.requestMsgId !== ''
+        ? { kind: 'cancel', requestMsgId: value.requestMsgId }
+        : { kind: 'malformed' };
+    }
     if (
       value.type !== 'chat.message' ||
       typeof value.content !== 'string' ||
@@ -118,6 +129,8 @@ export function parseInboundMessage(raw: string): InboundParseResult {
     ) {
       return { kind: 'malformed' };
     }
+    // modelId는 목업이 해석하지 않는다 — 모델이 하나뿐이라 고를 것이 없다. 다만 실어 보내도
+    // malformed가 되지 않아야 해서 여기서 걸러내지 않고 그냥 흘린다.
     return {
       kind: 'message',
       message: { type: 'chat.message', content: value.content },

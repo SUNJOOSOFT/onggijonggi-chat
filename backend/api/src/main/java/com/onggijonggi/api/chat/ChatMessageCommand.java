@@ -13,7 +13,8 @@ import java.util.UUID;
  * @param from 작성자의 내부 app_user.id. 저장 경로에서만 쓰고 밖으로 내보내지 않는다
  * @param fromSubject 작성자의 Keycloak subject. 프레임이 사람을 가리키는 값
  * @param fromDisplayName 작성자의 표시 이름
+ * @param modelId 이 발화가 @AI 멘션일 때 쓸 게이트웨이 모델 별칭. null이면 서버 기본값(이슈 #160)
  */
 record ChatMessageCommand(UUID threadId, UUID from, String fromSubject, String fromDisplayName,
-		String content, String traceId) {
+		String content, String modelId, String traceId) {
 }
