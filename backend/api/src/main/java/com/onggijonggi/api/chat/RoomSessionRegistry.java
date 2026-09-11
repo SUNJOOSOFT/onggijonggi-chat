@@ -2,7 +2,6 @@ package com.onggijonggi.api.chat;
 
 import java.time.Duration;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
@@ -176,7 +175,7 @@ public class RoomSessionRegistry {
 		 * 통보를 무산시킨다(이슈 #198). connections에서는 연결이 끊기는 즉시 빠지므로, 유예 중인
 		 * 사람을 {@link #participants}에서도 보여주려면 참가자 값을 따로 들고 있어야 한다 — 안
 		 * 그러면 그 사이에 들어온 사람의 스냅샷에서만 이 사람이 사라져, 기존 참여자 화면과 어긋난다. */
-		private final Map<String, PendingDeparture> pendingLeaves = new HashMap<>();
+		private final Map<String, PendingDeparture> pendingLeaves = new LinkedHashMap<>();
 
 		private final UUID generation = UUID.randomUUID();
 
