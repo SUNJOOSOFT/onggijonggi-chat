@@ -21,8 +21,10 @@ import org.springframework.transaction.annotation.Transactional;
  * Description : msg(V11__message.sql) 저장 로직(03·CORE, 이슈 #18). 전부 블로킹 JPA 호출이라
  *               메서드 이름에 Blocking을 붙인다 — 호출부(CollabMessageDispatcher)가
  *               Mono.fromCallable(...).subscribeOn(boundedElastic())로 감싸야 함을 이름으로
- *               드러내기 위함이다. seq 채번과 msg 저장은 한 트랜잭션으로 묶어, 중간에 실패해도
- *               next_seq만 헛돌지 않게 한다.
+ *               드러내기 위함이다. 협업방 경로의 seq는 호출부(CollabMessageDispatcher)가 블록으로
+ *               미리 예약해 넘긴다(이슈 #190) — 방송 프레임에 seq를 실어야 해서 저장을 기다릴 수
+ *               없기 때문이다. 그래서 이 클래스는 협업 메시지의 채번을 더 이상 하지 않고,
+ *               예약해놓고 쓰지 않은 번호가 구멍으로 남는 것을 전제한다.
  */
 @Service
 public class MsgPersistenceService {
@@ -39,18 +41,34 @@ public class MsgPersistenceService {
 	}
 
 	/**
+	* seq를 n개 한 번에 예약한다(이슈 #190). 돌려주는 값은 블록의 첫 seq다.
+	*
+	* 방 워커만 부르므로 방 단위로 직렬이고, 예약한 번호를 메모리에서 하나씩 꺼내 쓰는 동안에는
+	* DB를 다시 부르지 않는다 — 방송 전에 DB를 기다리지 않게 하려는 것이 이 메서드의 존재 이유다.
+	*/
+	@Transactional
+	public long allocateSeqBlockBlocking(UUID thrId, int size) {
+		return thrRepository.findByIdForSeqUpdate(thrId)
+				.orElseThrow(() -> new IllegalStateException("thr not found: " + thrId))
+				.reserveSeqBlock(size);
+	}
+
+	/**
 	* 호출자가 이미 방을 나갔거나 참가자가 아니면(참여 상태가 그 사이 바뀐 경우) 조용히 건너뛴다 —
 	* 방송은 이미 끝난 뒤라 저장을 막을 이유가 없고, thr_mbr_id 없이는 msg_human_has_participant를
 	* 지킬 수 없기 때문이다.
+	*
+	* id·seq는 호출부가 방송 프레임에 실은 값 그대로여야 한다 — 화면에 보인 것과 이력이 같은
+	* 메시지를 가리켜야 하기 때문이다(이슈 #190).
 	*/
 	@Transactional
-	public Optional<Msg> persistHumanMessageBlocking(UUID thrId, UUID userId, String content) {
+	public Optional<Msg> persistHumanMessageBlocking(UUID msgId, long seq, UUID thrId, UUID userId,
+			String content) {
 		Optional<ThrMbr> member = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, userId, ThrMbrStatus.ACTIVE);
 		if (member.isEmpty()) {
 			return Optional.empty();
 		}
-		long seq = thrRepository.allocateNextSeq(thrId);
-		return Optional.of(msgRepository.save(Msg.human(thrId, seq, member.get().getId(), content)));
+		return Optional.of(msgRepository.save(Msg.human(msgId, thrId, seq, member.get().getId(), content)));
 	}
 
 	/**
@@ -59,10 +77,10 @@ public class MsgPersistenceService {
 	* 별개의 두 호출로 나누면 그 사이에 순서가 뒤집힐 수 있다.
 	*/
 	@Transactional
-	public List<Msg> persistHumanMessageAndFetchContextBlocking(UUID thrId, UUID userId, String content,
-			int contextLimit) {
+	public List<Msg> persistHumanMessageAndFetchContextBlocking(UUID msgId, long seq, UUID thrId, UUID userId,
+			String content, int contextLimit) {
 		List<Msg> priorContext = recentCompleteContextBlocking(thrId, contextLimit);
-		persistHumanMessageBlocking(thrId, userId, content);
+		persistHumanMessageBlocking(msgId, seq, thrId, userId, content);
 		return priorContext;
 	}
 
@@ -83,9 +101,8 @@ public class MsgPersistenceService {
 	}
 
 	@Transactional
-	public Msg createPendingAgentMessageBlocking(UUID thrId) {
-		long seq = thrRepository.allocateNextSeq(thrId);
-		return msgRepository.save(Msg.pendingAgent(thrId, seq));
+	public Msg createPendingAgentMessageBlocking(UUID msgId, long seq, UUID thrId) {
+		return msgRepository.save(Msg.pendingAgent(msgId, thrId, seq));
 	}
 
 	/** msgId 행이 이미 없거나(DB 문제로 저장이 안 됐던 경우) 다른 이유로 못 찾으면 조용히 넘어간다. */

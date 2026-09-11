@@ -18,7 +18,7 @@ class MsgTest {
 
 	@Test
 	void humanMessageIsCompleteWithParticipantAndCompletedAt() {
-		Msg msg = Msg.human(thrId, 0, thrMbrId, "안녕하세요");
+		Msg msg = Msg.human(UUID.randomUUID(), thrId, 0, thrMbrId, "안녕하세요");
 
 		assertThat(msg.getThrId()).isEqualTo(thrId);
 		assertThat(msg.getSeq()).isZero();
@@ -31,7 +31,7 @@ class MsgTest {
 
 	@Test
 	void pendingAgentMessageHasNoParticipantAndNoCompletedAt() {
-		Msg msg = Msg.pendingAgent(thrId, 1);
+		Msg msg = Msg.pendingAgent(UUID.randomUUID(), thrId, 1);
 
 		assertThat(msg.getAthKind()).isEqualTo(AthKind.AGENT);
 		assertThat(msg.getThrMbrId()).isNull();
@@ -42,7 +42,7 @@ class MsgTest {
 
 	@Test
 	void completeFillsContentAndCompletedAt() {
-		Msg msg = Msg.pendingAgent(thrId, 1);
+		Msg msg = Msg.pendingAgent(UUID.randomUUID(), thrId, 1);
 
 		msg.complete("답변입니다");
 
@@ -53,7 +53,7 @@ class MsgTest {
 
 	@Test
 	void failSetsTerminalStatusAndCompletedAt() {
-		Msg msg = Msg.pendingAgent(thrId, 1);
+		Msg msg = Msg.pendingAgent(UUID.randomUUID(), thrId, 1);
 
 		msg.fail(MsgStatus.CANCELLED);
 

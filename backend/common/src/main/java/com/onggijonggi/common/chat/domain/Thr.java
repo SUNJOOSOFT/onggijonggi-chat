@@ -142,4 +142,16 @@ public class Thr {
 		this.updatedAt = Instant.now();
 	}
 
+
+	/**
+	* seq를 size개 예약하고 블록의 첫 seq를 돌려준다(이슈 #190). 호출부가 비관적 잠금으로 이 행을
+	* 잡은 트랜잭션 안에서만 불러야 한다 — UPDATE ... RETURNING을 쓰지 않는 이유는 H2가 그 문법을
+	* 지원하지 않아 통합 테스트가 실제 채번을 한 번도 실행하지 못하기 때문이다.
+	*/
+	public long reserveSeqBlock(int size) {
+		long first = this.nextSeq;
+		this.nextSeq += size;
+		return first;
+	}
+
 }

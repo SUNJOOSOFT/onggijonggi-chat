@@ -255,8 +255,8 @@ class CollabThreadControllerTest {
 		UUID ownerId = userIdentityService.resolveOrProvision("messages-owner").block();
 		ThrMbr ownerMembership = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, ownerId, ThrMbrStatus.ACTIVE)
 				.orElseThrow();
-		msgRepository.save(Msg.human(thrId, 0, ownerMembership.getId(), "안녕 AI야"));
-		Msg agentMsg = Msg.pendingAgent(thrId, 1);
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 0, ownerMembership.getId(), "안녕 AI야"));
+		Msg agentMsg = Msg.pendingAgent(UUID.randomUUID(), thrId, 1);
 		agentMsg.complete("안녕하세요! 무엇을 도와드릴까요?");
 		msgRepository.save(agentMsg);
 
@@ -286,8 +286,8 @@ class CollabThreadControllerTest {
 		UUID memberId = userIdentityService.resolveOrProvision("author-member").block();
 		ThrMbr memberMembership = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, memberId, ThrMbrStatus.ACTIVE)
 				.orElseThrow();
-		msgRepository.save(Msg.human(thrId, 0, memberMembership.getId(), "질문 있어요"));
-		Msg agentMsg = Msg.pendingAgent(thrId, 1);
+		msgRepository.save(Msg.human(UUID.randomUUID(), thrId, 0, memberMembership.getId(), "질문 있어요"));
+		Msg agentMsg = Msg.pendingAgent(UUID.randomUUID(), thrId, 1);
 		agentMsg.complete("답변입니다");
 		msgRepository.save(agentMsg);
 

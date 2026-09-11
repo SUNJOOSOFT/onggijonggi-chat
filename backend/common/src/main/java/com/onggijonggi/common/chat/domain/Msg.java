@@ -58,8 +58,13 @@ public class Msg {
 	protected Msg() {
 	}
 
-	private Msg(UUID thrId, long seq, AthKind athKind, UUID thrMbrId, MsgStatus status, String content) {
-		this.id = UUID.randomUUID();
+	/**
+	* id를 밖에서 받는다 — 방송 프레임이 저장보다 먼저 나가야 해서 호출부가 id를 미리 알아야
+	* 하는 경로가 있다(이슈 #190). id는 DB가 아니라 앱이 만드는 값이라 가능한 일이다.
+	*/
+	private Msg(UUID id, UUID thrId, long seq, AthKind athKind, UUID thrMbrId, MsgStatus status,
+			String content) {
+		this.id = id;
 		this.thrId = thrId;
 		this.seq = seq;
 		this.athKind = athKind;
@@ -73,18 +78,19 @@ public class Msg {
 	}
 
 	/** HUMAN 메시지는 쓰이는 순간 이미 완료된 메시지다 — thrMbrId는 작성 시점의 참여 기록을 가리킨다. */
-	public static Msg human(UUID thrId, long seq, UUID thrMbrId, String content) {
-		return new Msg(thrId, seq, AthKind.HUMAN, thrMbrId, MsgStatus.COMPLETE, content);
+	public static Msg human(UUID id, UUID thrId, long seq, UUID thrMbrId, String content) {
+		return new Msg(id, thrId, seq, AthKind.HUMAN, thrMbrId, MsgStatus.COMPLETE, content);
 	}
 
 	/** AGENT만 PENDING으로 시작할 수 있다 — 스트리밍이 끝나면 complete()/fail()로 전이한다. */
-	public static Msg pendingAgent(UUID thrId, long seq) {
-		return new Msg(thrId, seq, AthKind.AGENT, null, MsgStatus.PENDING, "");
+	/** 이 id가 곧 턴 식별자다 — AI 턴 하나는 PENDING 행 하나와 1:1이다(D5, 이슈 #190). */
+	public static Msg pendingAgent(UUID id, UUID thrId, long seq) {
+		return new Msg(id, thrId, seq, AthKind.AGENT, null, MsgStatus.PENDING, "");
 	}
 
 	/** SYSTEM 메시지는 HUMAN과 같이 쓰이는 순간 이미 완료된 메시지다 — 작성자가 없어 thrMbrId는 두지 않는다. */
 	public static Msg system(UUID thrId, long seq, String content) {
-		return new Msg(thrId, seq, AthKind.SYSTEM, null, MsgStatus.COMPLETE, content);
+		return new Msg(UUID.randomUUID(), thrId, seq, AthKind.SYSTEM, null, MsgStatus.COMPLETE, content);
 	}
 
 	public void complete(String content) {

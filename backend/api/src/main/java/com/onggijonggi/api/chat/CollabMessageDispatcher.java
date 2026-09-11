@@ -62,6 +62,13 @@ public class CollabMessageDispatcher {
 	*/
 	private static final int MAX_QUEUED_MESSAGES_PER_ROOM = 100;
 
+	/**
+	* 한 번에 예약하는 seq 개수(이슈 #190). 클수록 DB를 덜 부르지만 방이 닫힐 때 버려지는 구멍이
+	* 커진다. 구멍은 따라잡기 정의상 무해하므로(빠진 번호를 기다리지 않는다) 왕복을 줄이는 쪽에
+	* 무게를 둔다.
+	*/
+	private static final int SEQ_BLOCK_SIZE = 100;
+
 	private final ConcurrentMap<RoomKey, RoomAiState> states = new ConcurrentHashMap<>();
 
 	@Autowired
@@ -149,6 +156,10 @@ public class CollabMessageDispatcher {
 	*/
 	private void process(RoomKey key, RoomAiState state, QueuedMessage queued) {
 		ChatMessageCommand command = queued.command();
+		// 방송 전에 확정한다 — 둘 다 DB를 기다리지 않는다. id는 앱이 만들고(Msg.java), seq는
+		// 미리 예약해둔 블록에서 꺼낸다. 이 값이 프레임과 저장 양쪽에 같이 쓰인다(이슈 #190).
+		UUID msgId = UUID.randomUUID();
+		long seq = state.seqBlock.allocate();
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(key.threadId(), key.roomGeneration(),
 					new ChatMessageFrame(command.threadId(), command.fromSubject(),
@@ -162,12 +173,12 @@ public class CollabMessageDispatcher {
 		}
 
 		if (queued.prompt() == null) {
-			persistHumanMessageAsync(command);
+			persistHumanMessageAsync(msgId, seq, command);
 			return;
 		}
 
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
-				command.traceId(), persistHumanMessageAndFetchContextAsync(command));
+				command.traceId(), persistHumanMessageAndFetchContextAsync(msgId, seq, command));
 		ActiveTurn turnToStart;
 		synchronized (state) {
 			if (state.closed) {
@@ -182,7 +193,7 @@ public class CollabMessageDispatcher {
 				state.pending.addLast(pendingTurn);
 				return;
 			}
-			turnToStart = new ActiveTurn(pendingTurn);
+			turnToStart = new ActiveTurn(pendingTurn, state.seqBlock);
 			state.active = turnToStart;
 		}
 		startTurn(key, state, turnToStart);
@@ -360,7 +371,7 @@ public class CollabMessageDispatcher {
 				state.active = null;
 				return;
 			}
-			nextTurn = new ActiveTurn(next);
+			nextTurn = new ActiveTurn(next, state.seqBlock);
 			state.active = nextTurn;
 		}
 		startTurn(key, state, nextTurn);
@@ -412,9 +423,9 @@ public class CollabMessageDispatcher {
 	* 스케줄만 하고 즉시 반환되므로, 이 메서드를 synchronized(state) 블록 안에서 불러도 락을
 	* 블로킹하지 않는다. 저장 실패는 로그만 남기고 삼킨다(채팅 자체를 막지 않는다).
 	*/
-	private void persistHumanMessageAsync(ChatMessageCommand command) {
-		Mono.fromCallable(() -> msgPersistenceService.persistHumanMessageBlocking(command.threadId(),
-					command.from(), command.content()))
+	private void persistHumanMessageAsync(UUID msgId, long seq, ChatMessageCommand command) {
+		Mono.fromCallable(() -> msgPersistenceService.persistHumanMessageBlocking(msgId, seq,
+					command.threadId(), command.from(), command.content()))
 				.subscribeOn(Schedulers.boundedElastic())
 				.doOnError(e -> log.error("HUMAN 메시지 저장 실패 threadId={} traceId={}", command.threadId(),
 						command.traceId(), e))
@@ -428,10 +439,11 @@ public class CollabMessageDispatcher {
 	* 순서는 MsgPersistenceService 쪽에서 한 트랜잭션으로 보장한다 — 이 발화 자신이 문맥에 중복으로
 	* 끼지 않도록.
 	*/
-	private Mono<List<Msg>> persistHumanMessageAndFetchContextAsync(ChatMessageCommand command) {
+	private Mono<List<Msg>> persistHumanMessageAndFetchContextAsync(UUID msgId, long seq,
+			ChatMessageCommand command) {
 		Mono<List<Msg>> context = Mono
 				.fromCallable(() -> msgPersistenceService.persistHumanMessageAndFetchContextBlocking(
-						command.threadId(), command.from(), command.content(), maxContextMessages))
+						msgId, seq, command.threadId(), command.from(), command.content(), maxContextMessages))
 				.subscribeOn(Schedulers.boundedElastic())
 				.onErrorResume(e -> {
 					log.error("문맥 조회 및 HUMAN 메시지 저장 실패 threadId={} traceId={}", command.threadId(),
@@ -475,6 +487,34 @@ public class CollabMessageDispatcher {
 	private record RoomKey(UUID threadId, UUID roomGeneration) {
 	}
 
+	/**
+	* 방 하나의 seq 공급원. 블록을 예약해두고 메모리에서 꺼내 쓰다가, 다 쓰면 그때만 DB를 부른다.
+	*
+	* 워커(사람 메시지)와 턴 시작(AI 답변) 두 경로가 부르므로 잠근다 — 다만 정상 경로는 메모리
+	* 연산뿐이라 잡는 시간이 거의 없고, DB를 부르는 것은 SEQ_BLOCK_SIZE건에 한 번이다.
+	*/
+	private final class SeqBlock {
+
+		private final UUID threadId;
+
+		private long next;
+
+		private int remaining;
+
+		SeqBlock(UUID threadId) {
+			this.threadId = threadId;
+		}
+
+		synchronized long allocate() {
+			if (remaining == 0) {
+				next = msgPersistenceService.allocateSeqBlockBlocking(threadId, SEQ_BLOCK_SIZE);
+				remaining = SEQ_BLOCK_SIZE;
+			}
+			remaining--;
+			return next++;
+		}
+	}
+
 	/** 워커가 꺼내 처리할 한 건. prompt가 null이면 AI 턴을 만들지 않는다(일반 발화·빈 프롬프트). */
 	private record QueuedMessage(ChatMessageCommand command, String prompt) {
 	}
@@ -500,13 +540,21 @@ public class CollabMessageDispatcher {
 		*/
 		private final Mono<UUID> pendingMsgId;
 
+		/** 이 턴의 AGENT 메시지 id·seq. 턴이 시작되는 순간 확정되므로 답변이 대화에서 차지할
+		 * 자리도 그때 정해진다 — 뒤따라 도착한 사람 메시지가 이 답변 앞으로 끼어들지 않는다. */
+		private final UUID msgId;
+
+		private final long seq;
+
 		/** 완료/실패 저장이 이 턴에 대해 이미 한 번 시도됐는지 — 두 번째 시도는 조용히 건너뛴다. */
 		private final AtomicBoolean terminalPersisted = new AtomicBoolean();
 
-		ActiveTurn(PendingTurn turn) {
+		ActiveTurn(PendingTurn turn, SeqBlock seqBlock) {
 			this.turn = turn;
+			this.msgId = UUID.randomUUID();
+			this.seq = seqBlock.allocate();
 			this.pendingMsgId = Mono.fromCallable(() -> msgPersistenceService.createPendingAgentMessageBlocking(
-						turn.threadId()))
+						this.msgId, this.seq, turn.threadId()))
 					.subscribeOn(Schedulers.boundedElastic())
 					.map(Msg::getId)
 					.onErrorResume(e -> {
@@ -531,6 +579,8 @@ public class CollabMessageDispatcher {
 
 		private final Deque<PendingTurn> pending = new ArrayDeque<>();
 
+		private final SeqBlock seqBlock;
+
 		/**
 		* 이 방의 유일한 워커. prefetch 1로 두어 한 번에 한 건만 꺼내 처리한다 — 방송 순서가
 		* 여기서 확정된다. 한 건이 실패해도 방 전체를 죽이지 않도록 예외를 삼킨다.
@@ -542,6 +592,7 @@ public class CollabMessageDispatcher {
 		private boolean closed;
 
 		RoomAiState(RoomKey key) {
+			this.seqBlock = new SeqBlock(key.threadId());
 			this.worker = inbox.asFlux()
 					.publishOn(Schedulers.boundedElastic(), 1)
 					.subscribe(queued -> {

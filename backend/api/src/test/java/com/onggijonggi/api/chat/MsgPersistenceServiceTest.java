@@ -57,22 +57,21 @@ class MsgPersistenceServiceTest {
 				.thenReturn(Optional.of(new ThrMbr(thrId, userId, ThrMbrRole.MEMBER, userId)));
 		when(msgRepository.findByThrIdAndStatusOrderBySeqDesc(eq(thrId), eq(MsgStatus.COMPLETE), any(Pageable.class)))
 				.thenReturn(List.of());
-		when(thrRepository.allocateNextSeq(thrId)).thenReturn(5L);
 		when(msgRepository.save(any(Msg.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-		service.persistHumanMessageAndFetchContextBlocking(thrId, userId, "hi", 20);
+		// seq는 호출부가 블록에서 미리 꺼내 넘긴다 — 이 서비스는 더 이상 채번하지 않는다(이슈 #190).
+		service.persistHumanMessageAndFetchContextBlocking(UUID.randomUUID(), 5L, thrId, userId, "hi", 20);
 
-		InOrder order = inOrder(msgRepository, thrRepository);
+		InOrder order = inOrder(msgRepository);
 		order.verify(msgRepository).findByThrIdAndStatusOrderBySeqDesc(eq(thrId), eq(MsgStatus.COMPLETE),
 				any(Pageable.class));
-		order.verify(thrRepository).allocateNextSeq(thrId);
 		order.verify(msgRepository).save(any(Msg.class));
 	}
 
 	@Test
 	void reversesRecentMessagesIntoChronologicalOrder() {
-		Msg newest = Msg.human(thrId, 2, UUID.randomUUID(), "newest");
-		Msg oldest = Msg.human(thrId, 0, UUID.randomUUID(), "oldest");
+		Msg newest = Msg.human(UUID.randomUUID(), thrId, 2, UUID.randomUUID(), "newest");
+		Msg oldest = Msg.human(UUID.randomUUID(), thrId, 0, UUID.randomUUID(), "oldest");
 		when(msgRepository.findByThrIdAndStatusOrderBySeqDesc(eq(thrId), eq(MsgStatus.COMPLETE), any(Pageable.class)))
 				.thenReturn(List.of(newest, oldest));
 
@@ -94,7 +93,7 @@ class MsgPersistenceServiceTest {
 		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, userId, ThrMbrStatus.ACTIVE))
 				.thenReturn(Optional.empty());
 
-		Optional<Msg> saved = service.persistHumanMessageBlocking(thrId, userId, "hi");
+		Optional<Msg> saved = service.persistHumanMessageBlocking(UUID.randomUUID(), 5L, thrId, userId, "hi");
 
 		assertThat(saved).isEmpty();
 	}

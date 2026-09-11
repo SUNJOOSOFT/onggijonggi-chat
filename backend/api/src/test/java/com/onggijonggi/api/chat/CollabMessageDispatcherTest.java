@@ -24,6 +24,7 @@ import reactor.test.scheduler.VirtualTimeScheduler;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
@@ -318,7 +319,7 @@ class CollabMessageDispatcherTest {
 			return Flux.never();
 		}));
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(eq(room.threadId), eq(room.userId),
+		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(any(), anyLong(), eq(room.threadId), eq(room.userId),
 				eq("@AI first"), anyInt())).thenAnswer(invocation -> {
 			contextStarted.countDown();
 			releaseContext.await(1, TimeUnit.SECONDS);
@@ -365,8 +366,8 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "일반 발화"), room.membership.generation());
 
-		verify(msgPersistenceService, timeout(1000)).persistHumanMessageBlocking(room.threadId, room.userId,
-				"일반 발화");
+		verify(msgPersistenceService, timeout(1000)).persistHumanMessageBlocking(any(), anyLong(),
+				eq(room.threadId), eq(room.userId), eq("일반 발화"));
 	}
 
 	@Test
@@ -380,17 +381,17 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "일반 발화"), room.membership.generation());
 
-		verify(msgPersistenceService, never()).persistHumanMessageBlocking(any(), any(), any());
+		verify(msgPersistenceService, never()).persistHumanMessageBlocking(any(), anyLong(), any(), any(), any());
 	}
 
 	@Test
 	void createsPendingAgentMessageThenCompletesItWithFullContentOnSuccess() {
 		TestRoom room = new TestRoom();
-		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.just("hello", " world"));
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(command(room, "@AI hi"), room.membership.generation());
@@ -401,16 +402,16 @@ class CollabMessageDispatcherTest {
 	@Test
 	void includesStoredHistoryAsContextBeforeTheCurrentMention() {
 		TestRoom room = new TestRoom();
-		Msg humanHistory = Msg.human(room.threadId, 0, UUID.randomUUID(), "이전 질문");
-		Msg agentHistory = Msg.pendingAgent(room.threadId, 1);
+		Msg humanHistory = Msg.human(UUID.randomUUID(), room.threadId, 0, UUID.randomUUID(), "이전 질문");
+		Msg agentHistory = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
 		agentHistory.complete("이전 답변");
-		Msg pending = Msg.pendingAgent(room.threadId, 2);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 2);
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.just("답변"));
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(eq(room.threadId), eq(room.userId),
+		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(any(), anyLong(), eq(room.threadId), eq(room.userId),
 				eq("@AI 이어서"), anyInt())).thenReturn(List.of(humanHistory, agentHistory));
-		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(command(room, "@AI 이어서"), room.membership.generation());
@@ -426,12 +427,12 @@ class CollabMessageDispatcherTest {
 	@Test
 	void marksAgentMessageFailedWhenTurnErrors() {
 		TestRoom room = new TestRoom();
-		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
 		Sinks.One<String> firstResponse = Sinks.one();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(firstResponse.asMono().flux());
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
@@ -443,11 +444,11 @@ class CollabMessageDispatcherTest {
 	@Test
 	void marksAgentMessageCancelledWhenRoomClosesDuringActiveTurn() {
 		TestRoom room = new TestRoom();
-		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
@@ -463,13 +464,13 @@ class CollabMessageDispatcherTest {
 	void completesWithGeneratedContentEvenWhenTheDoneFrameBroadcastFails() throws InterruptedException {
 		FailingRoomSessionRegistry registry = new FailingRoomSessionRegistry();
 		TestRoom room = new TestRoom(registry);
-		Msg pending = Msg.pendingAgent(room.threadId, 0);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
 		CountDownLatch subscribed = new CountDownLatch(1);
 		Sinks.Many<String> source = Sinks.many().unicast().onBackpressureBuffer();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(source.asFlux().doOnSubscribe(ignored -> subscribed.countDown()));
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(room.threadId)).thenReturn(pending);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
 		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());

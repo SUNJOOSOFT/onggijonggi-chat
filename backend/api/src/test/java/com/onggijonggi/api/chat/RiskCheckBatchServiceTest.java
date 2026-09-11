@@ -61,7 +61,7 @@ class RiskCheckBatchServiceTest {
 	@Test
 	void createsASystemMessageWhenARiskyMessageIsFound() {
 		Thr thr = Thr.collab(UUID.randomUUID(), "room");
-		Msg risky = Msg.human(thr.getId(), 1, UUID.randomUUID(), "위험해 보이는 발화");
+		Msg risky = Msg.human(UUID.randomUUID(), thr.getId(), 1, UUID.randomUUID(), "위험해 보이는 발화");
 
 		when(thrRiskCursorRepository.findById(thr.getId())).thenReturn(Optional.empty());
 		when(msgRepository.findByThrIdAndAthKindAndSeqGreaterThanOrderBySeqAsc(thr.getId(), AthKind.HUMAN, 0L))
@@ -89,7 +89,7 @@ class RiskCheckBatchServiceTest {
 	@Test
 	void doesNotCreateASystemMessageWhenNothingIsRisky() {
 		Thr thr = Thr.collab(UUID.randomUUID(), "room");
-		Msg safe = Msg.human(thr.getId(), 1, UUID.randomUUID(), "평범한 발화");
+		Msg safe = Msg.human(UUID.randomUUID(), thr.getId(), 1, UUID.randomUUID(), "평범한 발화");
 
 		when(thrRiskCursorRepository.findById(thr.getId())).thenReturn(Optional.empty());
 		when(msgRepository.findByThrIdAndAthKindAndSeqGreaterThanOrderBySeqAsc(thr.getId(), AthKind.HUMAN, 0L))
@@ -123,8 +123,8 @@ class RiskCheckBatchServiceTest {
 	@Test
 	void classifiesEveryNewMessageEvenAfterARiskyOne() {
 		Thr thr = Thr.collab(UUID.randomUUID(), "room");
-		Msg first = Msg.human(thr.getId(), 1, UUID.randomUUID(), "위험한 발화");
-		Msg second = Msg.human(thr.getId(), 2, UUID.randomUUID(), "평범한 발화");
+		Msg first = Msg.human(UUID.randomUUID(), thr.getId(), 1, UUID.randomUUID(), "위험한 발화");
+		Msg second = Msg.human(UUID.randomUUID(), thr.getId(), 2, UUID.randomUUID(), "평범한 발화");
 
 		when(thrRiskCursorRepository.findById(thr.getId())).thenReturn(Optional.empty());
 		when(msgRepository.findByThrIdAndAthKindAndSeqGreaterThanOrderBySeqAsc(thr.getId(), AthKind.HUMAN, 0L))
