@@ -455,6 +455,13 @@ export function openWsConnection(
     close: () => {
       closedByCaller = true;
       socket?.close(CLOSE_NORMAL);
+      // 선제 갱신(#188)의 새 소켓이 아직 핸드셰이크 중이면 socket이 그 소켓을 가리키고,
+      // 실제로 살아있는 연결은 authoritativeSocket(옛 소켓) 쪽이다 — 위 close()가 새 소켓만
+      // 닫고 옛 소켓은 안 닫혀 남는 걸 막는다. socket과 같으면(평소 상태) 이미 닫았으니
+      // 다시 안 닫는다.
+      if (authoritativeSocket && authoritativeSocket !== socket) {
+        authoritativeSocket.close(CLOSE_NORMAL);
+      }
     },
     send: (data) => {
       // socket이 아니라 authoritativeSocket을 쓴다 — 선제 갱신(#188)의 새 소켓은 핸드셰이크

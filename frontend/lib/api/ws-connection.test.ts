@@ -508,6 +508,29 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     h.connection.close();
   });
 
+  it('스왑이 진행 중일 때 close()를 부르면 새 소켓뿐 아니라 아직 살아있는 옛 소켓도 닫는다', async () => {
+    // 두 번째 세션도 수명이 넉넉해야 한다 — 위 테스트와 같은 이유(#181 근-만료 판정 회피).
+    const h = harness([
+      { accessToken: jwtDueInMs(150) },
+      { accessToken: jwtWithLife(300) },
+    ]);
+
+    const first = await h.waitForSocket(1);
+    first.open();
+
+    // 새 소켓이 생겼다는 건 스왑이 시작됐다는 뜻이다 — 아직 second.open()을 안 불렀으므로
+    // 핸드셰이크 중이고, 이 시점의 진짜 연결은 여전히 first다.
+    const second = await h.waitForSocket(2);
+    expect(first.closedWith).toBeNull();
+
+    h.connection.close();
+
+    // 새 소켓(아직 안 열렸던 것)뿐 아니라, 실제로 살아있던 옛 소켓도 닫혀야 한다 — 하나만
+    // 닫히면 다른 하나는 연결이 샌 채로 남는다(한때 first가 안 닫히던 회귀).
+    expect(second.closedWith).toBe(1000);
+    expect(first.closedWith).toBe(1000);
+  });
+
   it('exp를 모르는 토큰(JWT 아님)은 선제 갱신을 시도하지 않는다', async () => {
     const h = harness([{ accessToken: 't1' }]);
     const first = await h.waitForSocket(1);
