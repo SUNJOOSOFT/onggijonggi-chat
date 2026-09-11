@@ -441,3 +441,76 @@ describe('openWsConnection - 협업방(이슈 #19)', () => {
     h.connection.close();
   });
 });
+
+describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
+  /** 선제 갱신이 delayMs 뒤에 걸리도록 exp를 ms 단위로 정확히 역산한다. 공유 헬퍼
+   * jwtWithTimes()는 초 단위로 내림해 최대 1초까지 오차가 생겨(이 테스트가 필요한 수백 ms
+   * 지연에는 너무 크다), 여기서는 직접 ms로 계산한다. margin이 고정 하한(1000ms)에 걸리도록
+   * 수명(lifespanMs)을 10초 미만으로 짧게 잡는다. */
+  function jwtDueInMs(delayMs: number): string {
+    const nowMs = Date.now();
+    const lifespanMs = 6_000;
+    const expiresAtMs = nowMs + 1_000 + delayMs;
+    const issuedAtMs = expiresAtMs - lifespanMs;
+    const payload = btoa(
+      JSON.stringify({ iat: issuedAtMs / 1000, exp: expiresAtMs / 1000 }),
+    );
+    return `h.${payload}.s`;
+  }
+
+  it('만료 마진에 도달하면 새 소켓을 먼저 열어 옛 소켓과 겹친 뒤에야 닫는다', async () => {
+    const healthy = jwtWithLife(300);
+    const h = harness([{ accessToken: jwtDueInMs(150) }, { accessToken: healthy }]);
+
+    const first = await h.waitForSocket(1);
+    first.open();
+
+    const second = await h.waitForSocket(2);
+    // 새 소켓이 생긴 시점에 옛 소켓이 아직 안 닫혀 있어야 한다 — 이 겹침이 없으면
+    // RoomSessionRegistry가 입장·퇴장을 각각 방송한다(ws-connection.ts의
+    // connectAndProactivelyRefresh 설명 참고).
+    expect(first.closedWith).toBeNull();
+    expect(second.protocols).toEqual(['access_token', healthy]);
+
+    second.open();
+    await vi.waitFor(() => expect(first.closedWith).toBe(1000));
+    expect(h.sockets).toHaveLength(2);
+
+    h.connection.close();
+  });
+
+  it('새 소켓이 핸드셰이크에서 거부되면 기존 연결을 그대로 쓴다', async () => {
+    // 두 번째 세션(갱신 결과로 오는 토큰)은 수명이 넉넉해야 한다 — jwtDueInMs처럼 또 근-만료면
+    // freshToken()의 #181 근-만료 판정(SHORT_LIVED_TOKENS_BEFORE_REAUTH)에 연속으로 걸려,
+    // 이 테스트가 검증하려는 것(핸드셰이크 거부 시 기존 연결 유지)과 무관하게 재로그인으로
+    // 끝나 버린다.
+    const h = harness([
+      { accessToken: jwtDueInMs(150) },
+      { accessToken: jwtWithLife(300) },
+    ]);
+
+    const first = await h.waitForSocket(1);
+    first.open();
+
+    const second = await h.waitForSocket(2);
+    second.serverClose(1006);
+
+    // 갱신 시도가 실패해도 기존 연결은 끊기지 않는다.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(first.closedWith).toBeNull();
+    expect(h.connection.send('still-alive')).toBe(true);
+
+    h.connection.close();
+  });
+
+  it('exp를 모르는 토큰(JWT 아님)은 선제 갱신을 시도하지 않는다', async () => {
+    const h = harness([{ accessToken: 't1' }]);
+    const first = await h.waitForSocket(1);
+    first.open();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(h.sockets).toHaveLength(1);
+
+    h.connection.close();
+  });
+});
