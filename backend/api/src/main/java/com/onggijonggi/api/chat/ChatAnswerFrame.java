@@ -18,9 +18,16 @@ import java.util.UUID;
  *               있던 RBAC 소프트 필터링 신호를 그대로 옮긴 것이다. citations와는 서로 독립적인
  *               필드다 — citations가 빈 배열이어도(전부 걸러진 경우) true일 수 있으므로, citations가
  *               비었다고 해서 자동으로 false로 취급하면 안 된다(PR #50 리뷰).
+ *
+ *               msgId는 이 턴의 AGENT 메시지 id다(이슈 #190). 한 턴이 PENDING msg 행 하나와
+ *               1:1이라 이 값이 곧 턴 식별자 역할을 한다(D5) — 같은 턴의 delta들은 모두 같은
+ *               msgId·seq를 달고 온다. seq는 턴이 시작되는 순간 확정되므로, 스트리밍 도중
+ *               도착한 사람 메시지가 이 답변 앞으로 끼어들지 않는다.
  */
 public record ChatAnswerFrame(
 		UUID sessionId,
+		UUID msgId,
+		long seq,
 		String delta,
 		List<Citation> citations,
 		boolean restrictedResultsOmitted,

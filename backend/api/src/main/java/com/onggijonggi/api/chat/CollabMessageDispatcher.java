@@ -162,7 +162,7 @@ public class CollabMessageDispatcher {
 		long seq = state.seqBlock.allocate();
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(key.threadId(), key.roomGeneration(),
-					new ChatMessageFrame(command.threadId(), command.fromSubject(),
+					new ChatMessageFrame(command.threadId(), msgId, seq, command.fromSubject(),
 							command.fromDisplayName(), command.content()))) {
 				closeGeneration(key, state);
 				return;
@@ -298,8 +298,8 @@ public class CollabMessageDispatcher {
 	private void broadcastStreamingFrame(ActiveTurn activeTurn, String delta) {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
-					new ChatAnswerFrame(activeTurn.turn.threadId(), delta, List.of(), false,
-							ChatAnswerStatus.STREAMING))) {
+					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.seq,
+							delta, List.of(), false, ChatAnswerStatus.STREAMING))) {
 				throw new StaleGenerationException();
 			}
 		} catch (StaleGenerationException error) {
@@ -318,7 +318,8 @@ public class CollabMessageDispatcher {
 	private void handleTurnComplete(RoomKey key, RoomAiState state, ActiveTurn activeTurn, String content) {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
-					new ChatAnswerFrame(activeTurn.turn.threadId(), "", List.of(), false, ChatAnswerStatus.DONE))) {
+					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.seq, "",
+							List.of(), false, ChatAnswerStatus.DONE))) {
 				persistAgentCompletion(activeTurn, content);
 				closeGeneration(key, state);
 				return;

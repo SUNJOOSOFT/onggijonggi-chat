@@ -199,7 +199,7 @@ class CollabWebSocketHandlerUnitTest {
 			assertThat(sendSubscribed.await(1, TimeUnit.SECONDS)).isTrue();
 			for (int i = 0; i <= 512 && closed.getCount() > 0; i++) {
 				registry.broadcastIfCurrent(threadId, observer.generation(),
-						new ChatMessageFrame(threadId, "slow-user", "느린 소비자", "message-" + i));
+						new ChatMessageFrame(threadId, UUID.randomUUID(), 0L, "slow-user", "느린 소비자", "message-" + i));
 			}
 
 			assertThat(closed.await(1, TimeUnit.SECONDS)).isTrue();
