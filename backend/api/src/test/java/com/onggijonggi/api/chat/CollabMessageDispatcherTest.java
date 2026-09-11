@@ -531,7 +531,7 @@ class CollabMessageDispatcherTest {
 
 	@Test
 	void rejectsInvalidAiSettingsAtStartup() {
-		RoomSessionRegistry registry = new RoomSessionRegistry();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
 
@@ -637,7 +637,7 @@ class CollabMessageDispatcherTest {
 		private final Disposable subscription;
 
 		TestRoom() {
-			this(new RoomSessionRegistry());
+			this(new RoomSessionRegistry(Duration.ofMillis(50)));
 		}
 
 		TestRoom(RoomSessionRegistry registry) {
@@ -652,6 +652,10 @@ class CollabMessageDispatcherTest {
 		private final List<WsFrame> attemptedFrames = new CopyOnWriteArrayList<>();
 
 		private boolean failBroadcasts;
+
+		FailingRoomSessionRegistry() {
+			super(Duration.ofMillis(50));
+		}
 
 		@Override
 		public boolean broadcastIfCurrent(UUID threadId, UUID roomGeneration, WsFrame frame) {

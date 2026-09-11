@@ -55,7 +55,7 @@ class CollabWebSocketHandlerUnitTest {
 		UUID threadId = UUID.randomUUID();
 		UUID userId = UUID.randomUUID();
 		AtomicInteger receiveSubscriptions = new AtomicInteger();
-		RoomSessionRegistry registry = new RoomSessionRegistry();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -89,7 +89,7 @@ class CollabWebSocketHandlerUnitTest {
 	@Test
 	void sendsInternalErrorAndClosesNormallyWhenUserProvisioningFails() {
 		UUID threadId = UUID.randomUUID();
-		RoomSessionRegistry registry = new RoomSessionRegistry();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -121,7 +121,7 @@ class CollabWebSocketHandlerUnitTest {
 	void closesWithCode4000WhenTheJwtExpires() {
 		UUID threadId = UUID.randomUUID();
 		UUID userId = UUID.randomUUID();
-		RoomSessionRegistry registry = new RoomSessionRegistry();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -155,7 +155,7 @@ class CollabWebSocketHandlerUnitTest {
 	void closesTheSlowConsumerWithCode1011WhenItsOutboundBufferOverflows() throws Exception {
 		UUID threadId = UUID.randomUUID();
 		UUID userId = UUID.randomUUID();
-		RoomSessionRegistry registry = new RoomSessionRegistry();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -223,7 +223,7 @@ class CollabWebSocketHandlerUnitTest {
 	void answersRateLimitedAndKeepsTheConnectionWhenMessagesComeTooFast() {
 		UUID threadId = UUID.randomUUID();
 		UUID userId = UUID.randomUUID();
-		RoomSessionRegistry registry = new RoomSessionRegistry();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
