@@ -86,30 +86,58 @@ export function parseWsPath(pathname: string): WsPathResult | null {
 export type InboundChatMessage = {
   type: 'chat.message';
   content: string;
+  /** 클라이언트가 만든 임시 메시지 id(이슈 #160). 에코에 그대로 돌려준다. */
+  clientMsgId: string | null;
+  /** 클라이언트가 만든 턴 식별자(이슈 #160). 에코·답변·대기 프레임에 돌려주고 취소 지목에 쓴다. */
+  turnId: string | null;
 };
 
 export type InboundParseResult =
   | { kind: 'message'; message: InboundChatMessage }
+  | { kind: 'cancel'; threadId: string; turnId: string }
+  | { kind: 'ping' }
+  | { kind: 'subscribe'; threadId: string }
+  | { kind: 'unsubscribe'; threadId: string }
   | { kind: 'ignore' }
   | { kind: 'malformed' };
 
-/** 서버 전용 타입은 무시하고, 그 밖에는 최소 chat.message DTO만 허용한다. */
+/** 실서버 CollabWebSocketHandler.SERVER_ONLY_TYPES와 같은 목록 — 올려보내도 조용히 무시한다. */
+const SERVER_ONLY_TYPES = [
+  'chat.answer',
+  'presence.join',
+  'presence.leave',
+  'presence.snapshot',
+  'error',
+  'system.notice',
+  'chat.queued',
+  'pong',
+];
+
+function nonEmptyString(value: unknown): value is string {
+  return typeof value === 'string' && value !== '';
+}
+
+/** 서버 전용 타입은 무시하고, 그 밖에는 클라이언트가 올려보낼 수 있는 타입(InboundFrame.java)만 허용한다. */
 export function parseInboundMessage(raw: string): InboundParseResult {
   try {
     const value = JSON.parse(raw) as Record<string, unknown>;
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
       return { kind: 'malformed' };
     }
-    if (
-      [
-        'chat.answer',
-        'presence.join',
-        'presence.leave',
-        'presence.snapshot',
-        'error',
-      ].includes(String(value.type))
-    ) {
+    if (SERVER_ONLY_TYPES.includes(String(value.type))) {
       return { kind: 'ignore' };
+    }
+    if (value.type === 'ping') return { kind: 'ping' };
+    if (value.type === 'chat.cancel') {
+      return nonEmptyString(value.threadId) && nonEmptyString(value.turnId)
+        ? { kind: 'cancel', threadId: value.threadId, turnId: value.turnId }
+        : { kind: 'malformed' };
+    }
+    if (value.type === 'room.subscribe' || value.type === 'room.unsubscribe') {
+      if (!nonEmptyString(value.threadId)) return { kind: 'malformed' };
+      return value.type === 'room.subscribe'
+        ? { kind: 'subscribe', threadId: value.threadId }
+        : { kind: 'unsubscribe', threadId: value.threadId };
     }
     if (
       value.type !== 'chat.message' ||
@@ -118,9 +146,17 @@ export function parseInboundMessage(raw: string): InboundParseResult {
     ) {
       return { kind: 'malformed' };
     }
+    // model은 목업이 해석하지 않는다 — 모델이 하나뿐이다. 실어 보내도 malformed가 되지 않게 흘린다.
     return {
       kind: 'message',
-      message: { type: 'chat.message', content: value.content },
+      message: {
+        type: 'chat.message',
+        content: value.content,
+        clientMsgId: nonEmptyString(value.clientMsgId)
+          ? value.clientMsgId
+          : null,
+        turnId: nonEmptyString(value.turnId) ? value.turnId : null,
+      },
     };
   } catch {
     return { kind: 'malformed' };
@@ -151,9 +187,13 @@ export function nextMockSeq(): number {
   return mockSeq++;
 }
 
+/** 목업은 모델이 하나뿐이라 답변 프레임의 model을 이 값으로 채운다. */
+export const MOCK_MODEL = 'mock-model';
+
 export function answerFrame(
   threadId: string,
   msgId: string,
+  turnId: string | null,
   seq: number,
   delta: string,
   status: 'streaming' | 'done',
@@ -164,6 +204,8 @@ export function answerFrame(
     type: 'chat.answer',
     threadId,
     msgId,
+    turnId,
+    model: MOCK_MODEL,
     seq,
     delta,
     citations,
@@ -183,6 +225,7 @@ export function aiTurnFrames(
   prompt: string,
   scenario: MockRoomScenario,
   citation: Citation,
+  turnId: string | null = null,
 ): WsFrame[] {
   if (scenario === 'error-before') {
     return [
@@ -204,13 +247,15 @@ export function aiTurnFrames(
 
   if (scenario === 'normal') {
     frames.push(
-      answerFrame(threadId, answerMsgId, answerSeq, '', 'streaming', [citation]),
+      answerFrame(threadId, answerMsgId, turnId, answerSeq, '', 'streaming', [
+        citation,
+      ]),
     );
   }
 
   for (const [index, token] of tokens.entries()) {
     frames.push(
-      answerFrame(threadId, answerMsgId, answerSeq, token, 'streaming'),
+      answerFrame(threadId, answerMsgId, turnId, answerSeq, token, 'streaming'),
     );
     if (scenario === 'error-mid' && index === 0) {
       frames.push(
@@ -225,7 +270,9 @@ export function aiTurnFrames(
     }
   }
 
-  frames.push(answerFrame(threadId, answerMsgId, answerSeq, '', 'done'));
+  frames.push(
+    answerFrame(threadId, answerMsgId, turnId, answerSeq, '', 'done'),
+  );
   return frames;
 }
 
@@ -286,12 +333,25 @@ export interface MockAiJob {
   generation: string;
   prompt: string;
   traceId: string;
+  /** 취소는 (turnId, 발화가 들어온 커넥션) 짝으로 찾는다 — 실서버 CollabMessageDispatcher.cancel과 같다. */
+  turnId: string | null;
+  connectionId: string;
+  /** 실행 중에 취소됐는지. 스트리밍 루프가 프레임마다 확인한다. */
+  cancelled?: boolean;
 }
 
 interface QueueState {
-  active: boolean;
+  active: MockAiJob | null;
   pending: MockAiJob[];
 }
+
+export type EnqueueResult = 'started' | 'queued' | 'rejected';
+
+/** 취소한 결과 — 실행 중이던 턴은 루프가 done으로 닫고, 기다리던 턴은 호출부가 chat.queued로 알린다. */
+export type CancelResult =
+  | { kind: 'active'; job: MockAiJob }
+  | { kind: 'pending'; job: MockAiJob }
+  | { kind: 'none' };
 
 /** 방마다 AI 작업 하나만 실행하고 나머지는 기본 20개까지 FIFO로 보관한다. */
 export class MockAiQueue {
@@ -302,21 +362,37 @@ export class MockAiQueue {
     private readonly maxPending = 20,
   ) {}
 
-  enqueue(job: MockAiJob): boolean {
+  enqueue(job: MockAiJob): EnqueueResult {
     const key = this.key(job.threadId, job.generation);
-    const state = this.rooms.get(key) ?? {
-      active: false,
-      pending: [],
-    };
+    const state = this.rooms.get(key) ?? { active: null, pending: [] };
     this.rooms.set(key, state);
-    if (state.active) {
-      if (state.pending.length >= this.maxPending) return false;
+    if (state.active !== null) {
+      if (state.pending.length >= this.maxPending) return 'rejected';
       state.pending.push(job);
-      return true;
+      return 'queued';
     }
-    state.active = true;
     this.start(job, state);
-    return true;
+    return 'started';
+  }
+
+  cancel(
+    threadId: string,
+    generation: string,
+    turnId: string,
+    connectionId: string,
+  ): CancelResult {
+    const state = this.rooms.get(this.key(threadId, generation));
+    if (!state) return { kind: 'none' };
+    const matches = (job: MockAiJob) =>
+      job.turnId === turnId && job.connectionId === connectionId;
+    if (state.active !== null && matches(state.active)) {
+      state.active.cancelled = true;
+      return { kind: 'active', job: state.active };
+    }
+    const index = state.pending.findIndex(matches);
+    if (index === -1) return { kind: 'none' };
+    const [job] = state.pending.splice(index, 1);
+    return { kind: 'pending', job };
   }
 
   closeRoom(threadId: string, generation: string): void {
@@ -324,6 +400,7 @@ export class MockAiQueue {
   }
 
   private start(job: MockAiJob, state: QueueState): void {
+    state.active = job;
     void this.run(job).finally(() => {
       const key = this.key(job.threadId, job.generation);
       if (this.rooms.get(key) !== state) return;

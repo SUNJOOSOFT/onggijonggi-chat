@@ -8,6 +8,8 @@ describe('WsFrame 유니온', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: 'hi',
       citations: [],

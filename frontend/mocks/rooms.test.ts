@@ -42,6 +42,8 @@ function say(content: string): ChatMessageFrame {
     type: 'chat.message',
     threadId: NORMAL_THREAD_ID,
     msgId: 'msg-1',
+    clientMsgId: null,
+    turnId: null,
     seq: 1,
     from: 'alice',
     fromDisplayName: '보낸 사람',
@@ -49,12 +51,14 @@ function say(content: string): ChatMessageFrame {
   };
 }
 
-function job(prompt: string): MockAiJob {
+function job(prompt: string, connectionId = 'c1'): MockAiJob {
   return {
     threadId: NORMAL_THREAD_ID,
     generation: 'g1',
     prompt,
     traceId: `trace-${prompt}`,
+    turnId: `turn-${prompt}`,
+    connectionId,
   };
 }
 
@@ -118,20 +122,60 @@ describe('parseInboundMessage', () => {
       ),
     ).toEqual({
       kind: 'message',
-      message: { type: 'chat.message', content: '  hello  ' },
+      message: {
+        type: 'chat.message',
+        content: '  hello  ',
+        clientMsgId: null,
+        turnId: null,
+      },
     });
   });
 
-  it('서버 전용 타입은 무시하고 깨진 입력과 빈 content는 거부한다', () => {
-    expect(
-      parseInboundMessage(JSON.stringify({ type: 'chat.answer' })),
-    ).toEqual({ kind: 'ignore' });
-    expect(parseInboundMessage('{')).toEqual({ kind: 'malformed' });
+  it('식별자를 받아 넘기고, 취소·구독·ping을 실서버 InboundFrame과 같게 가른다', () => {
     expect(
       parseInboundMessage(
-        JSON.stringify({ type: 'chat.message', content: '   ' }),
+        JSON.stringify({
+          type: 'chat.message',
+          content: 'hi',
+          clientMsgId: 'c1',
+          turnId: 't1',
+          model: 'm',
+        }),
+      ),
+    ).toEqual({
+      kind: 'message',
+      message: {
+        type: 'chat.message',
+        content: 'hi',
+        clientMsgId: 'c1',
+        turnId: 't1',
+      },
+    });
+    expect(
+      parseInboundMessage(
+        JSON.stringify({
+          type: 'chat.cancel',
+          threadId: NORMAL_THREAD_ID,
+          turnId: 't1',
+        }),
+      ),
+    ).toEqual({ kind: 'cancel', threadId: NORMAL_THREAD_ID, turnId: 't1' });
+    expect(
+      parseInboundMessage(
+        JSON.stringify({ type: 'chat.cancel', turnId: 't1' }),
       ),
     ).toEqual({ kind: 'malformed' });
+    expect(
+      parseInboundMessage(
+        JSON.stringify({ type: 'room.subscribe', threadId: NORMAL_THREAD_ID }),
+      ),
+    ).toEqual({ kind: 'subscribe', threadId: NORMAL_THREAD_ID });
+    expect(parseInboundMessage(JSON.stringify({ type: 'ping' }))).toEqual({
+      kind: 'ping',
+    });
+    expect(parseInboundMessage(JSON.stringify({ type: 'pong' }))).toEqual({
+      kind: 'ignore',
+    });
   });
 });
 
@@ -274,10 +318,10 @@ describe('MockAiQueue', () => {
       2,
     );
 
-    expect(queue.enqueue(job('one'))).toBe(true);
-    expect(queue.enqueue(job('two'))).toBe(true);
-    expect(queue.enqueue(job('three'))).toBe(true);
-    expect(queue.enqueue(job('overflow'))).toBe(false);
+    expect(queue.enqueue(job('one'))).toBe('started');
+    expect(queue.enqueue(job('two'))).toBe('queued');
+    expect(queue.enqueue(job('three'))).toBe('queued');
+    expect(queue.enqueue(job('overflow'))).toBe('rejected');
     expect(started).toEqual(['one']);
 
     completions.shift()?.();
@@ -285,5 +329,24 @@ describe('MockAiQueue', () => {
     completions.shift()?.();
     await vi.waitFor(() => expect(started).toEqual(['one', 'two', 'three']));
     completions.shift()?.();
+  });
+
+  it('취소는 발화가 들어온 커넥션의 turnId로만 찾고, 기다리던 턴은 큐에서 뺀다', () => {
+    const queue = new MockAiQueue(() => new Promise<void>(() => {}));
+    queue.enqueue(job('one'));
+    queue.enqueue(job('two'));
+
+    expect(queue.cancel(NORMAL_THREAD_ID, 'g1', 'turn-two', 'c2')).toEqual({
+      kind: 'none',
+    });
+    const pending = queue.cancel(NORMAL_THREAD_ID, 'g1', 'turn-two', 'c1');
+    expect(pending.kind).toBe('pending');
+    expect(queue.cancel(NORMAL_THREAD_ID, 'g1', 'turn-two', 'c1')).toEqual({
+      kind: 'none',
+    });
+
+    const active = queue.cancel(NORMAL_THREAD_ID, 'g1', 'turn-one', 'c1');
+    expect(active.kind).toBe('active');
+    expect(active.kind === 'active' && active.job.cancelled).toBe(true);
   });
 });

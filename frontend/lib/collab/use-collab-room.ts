@@ -14,7 +14,9 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchCollabMessages } from '@/lib/api/collab';
 import { type WsConnection, openWsConnection } from '@/lib/api/ws-connection';
+import type { ClientFrame } from '@/lib/transport/frames';
 import { parseFrameFromText } from '@/lib/transport/parse-frame';
+import { generateUUID } from '@/lib/utils';
 import {
   type RoomState,
   applyFrame,
@@ -43,8 +45,22 @@ export type RoomConnection =
 export interface CollabRoom {
   state: RoomState;
   connection: RoomConnection;
-  /** 메시지를 올려보낸다. 끊겨 있으면 보내지 않고 false — 화면이 그 자리에서 안내한다. */
-  send: (content: string) => boolean;
+  /**
+   * 메시지를 올려보낸다. 보냈으면 이 발화에 붙인 식별자를, 끊겨 있어 보내지 못했으면 null을
+   * 돌려준다 — 화면이 그 자리에서 안내한다.
+   *
+   * clientMsgId는 서버가 에코에 돌려주는 임시 메시지 id이고, turnId는 이 발화가 부른 AI 턴의
+   * 답변·대기 프레임에 돌려주는 값이자 cancel로 그 턴을 멈출 때 쓰는 값이다(이슈 #160). model을 주면
+   * @AI 멘션일 때 그 모델로 답한다.
+   */
+  send: (
+    content: string,
+    model?: string,
+  ) => { clientMsgId: string; turnId: string } | null;
+  /** 이 화면(이 커넥션)에서 보낸 발화가 부른 @AI 턴을 멈춘다(이슈 #160). 실제로 멈췄는지는
+   * chat.answer(done)나 chat.queued(cancelled)로 온다 — 이미 끝난 턴이면 아무것도 오지 않는다.
+   * 끊겨 있으면 false. */
+  cancel: (turnId: string) => boolean;
   /** 방을 막지 않는 최신 오류 알림을 닫는다. */
   dismissError: () => void;
   /** 방 위에 얹힌 시스템 알림(#29) 하나를 닫는다. */
@@ -163,13 +179,26 @@ export function useCollabRoom(threadId: string): CollabRoom {
     return () => clearTimeout(timer);
   }, [connection]);
 
-  const send = useCallback((content: string) => {
-    const frame = {
-      type: 'chat.message',
-      content,
-    };
-    return connectionRef.current?.send(JSON.stringify(frame)) ?? false;
-  }, []);
+  const sendFrame = useCallback(
+    (frame: ClientFrame) =>
+      connectionRef.current?.send(JSON.stringify(frame)) ?? false,
+    [],
+  );
+
+  const send = useCallback(
+    (content: string, model?: string) => {
+      const ids = { clientMsgId: generateUUID(), turnId: generateUUID() };
+      return sendFrame({ type: 'chat.message', content, model, ...ids })
+        ? ids
+        : null;
+    },
+    [sendFrame],
+  );
+
+  const cancel = useCallback(
+    (turnId: string) => sendFrame({ type: 'chat.cancel', threadId, turnId }),
+    [sendFrame, threadId],
+  );
 
   const dismissError = useCallback(
     () => setState((current) => clearRoomError(current)),
@@ -185,6 +214,7 @@ export function useCollabRoom(threadId: string): CollabRoom {
     state,
     connection,
     send,
+    cancel,
     dismissError,
     dismissNotice,
     participantsRevision,

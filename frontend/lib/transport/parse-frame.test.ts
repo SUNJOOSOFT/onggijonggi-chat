@@ -7,6 +7,8 @@ describe('parseFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '안녕',
       citations: [],
@@ -17,6 +19,8 @@ describe('parseFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '안녕',
       citations: [],
@@ -30,6 +34,8 @@ describe('parseFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '',
       citations: [{ docId: 'd1', title: '제목', snippet: '발췌', score: 0.9 }],
@@ -48,6 +54,8 @@ describe('parseFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '',
       citations: [],
@@ -66,6 +74,8 @@ describe('parseFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '',
       citations: [],
@@ -76,6 +86,8 @@ describe('parseFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '',
       citations: [],
@@ -90,6 +102,8 @@ describe('parseFrame', () => {
         type: 'chat.answer',
         threadId: 's1',
         msgId: 'msg-1',
+        turnId: null,
+        model: 'm',
         seq: 1,
         delta: '',
         citations: [],
@@ -105,6 +119,8 @@ describe('parseFrame', () => {
         type: 'chat.answer',
         threadId: 's1',
         msgId: 'msg-1',
+        turnId: null,
+        model: 'm',
         seq: 1,
         delta: '',
         citations: [],
@@ -118,6 +134,8 @@ describe('parseFrame', () => {
       type: 'chat.message',
       threadId: 's1',
       msgId: 'msg-1',
+      clientMsgId: null,
+      turnId: null,
       seq: 1,
       from: 'u1',
       fromDisplayName: '주성민',
@@ -127,6 +145,8 @@ describe('parseFrame', () => {
       type: 'chat.message',
       threadId: 's1',
       msgId: 'msg-1',
+      clientMsgId: null,
+      turnId: null,
       seq: 1,
       from: 'u1',
       fromDisplayName: '주성민',
@@ -240,6 +260,8 @@ describe('parseFrame', () => {
         type: 'chat.answer',
         threadId: 's1',
         msgId: 'msg-1',
+        turnId: null,
+        model: 'm',
         seq: 1,
         delta: 123,
         citations: [],
@@ -265,12 +287,14 @@ describe('parseFrame', () => {
 describe('parseFrameFromText', () => {
   it('유효한 JSON 문자열을 파싱한다', () => {
     const frame = parseFrameFromText(
-      '{"type":"chat.answer","threadId":"s1","msgId":"msg-1","seq":1,"delta":"","citations":[],"restrictedResultsOmitted":false,"status":"done"}',
+      '{"type":"chat.answer","threadId":"s1","msgId":"msg-1","turnId":null,"model":"m","seq":1,"delta":"","citations":[],"restrictedResultsOmitted":false,"status":"done"}',
     );
     expect(frame).toEqual({
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '',
       citations: [],
@@ -396,6 +420,54 @@ describe('parseFrame — system.notice(#29)', () => {
     });
 
     expect(frame?.type).toBe('participant.changed');
+  });
+
+  it('chat.queued와 pong을 파싱한다(이슈 #160)', () => {
+    const queued = {
+      type: 'chat.queued',
+      threadId: 'room-1',
+      turnId: null,
+      status: 'cancelled',
+    };
+    expect(parseFrame(queued)).toEqual(queued);
+    expect(parseFrame({ type: 'pong' })).toEqual({ type: 'pong' });
+    expect(parseFrame({ ...queued, status: 'started' })).toBeNull();
+  });
+
+  it('chat.message는 clientMsgId·turnId를, chat.answer는 turnId·model을 요구한다 — 서버가 null이어도 늘 싣는다(이슈 #160)', () => {
+    const message = {
+      type: 'chat.message',
+      threadId: 's1',
+      msgId: 'msg-1',
+      seq: 1,
+      from: 'u1',
+      fromDisplayName: '주성민',
+      content: '안녕하세요',
+    };
+    expect(parseFrame({ ...message, clientMsgId: 'c1' })).toBeNull();
+    expect(parseFrame({ ...message, clientMsgId: 'c1', turnId: 't1' })).toEqual(
+      {
+        ...message,
+        clientMsgId: 'c1',
+        turnId: 't1',
+      },
+    );
+    const answer = {
+      type: 'chat.answer',
+      threadId: 's1',
+      msgId: 'msg-2',
+      turnId: 't1',
+      seq: 2,
+      delta: '',
+      citations: [],
+      restrictedResultsOmitted: false,
+      status: 'done',
+    };
+    expect(parseFrame(answer)).toBeNull();
+    expect(parseFrame({ ...answer, model: 'm' })).toEqual({
+      ...answer,
+      model: 'm',
+    });
   });
 
 });

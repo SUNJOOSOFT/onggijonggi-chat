@@ -259,7 +259,10 @@ export function CollabRoom({ threadId }: { threadId: string }) {
           </div>
 
           <div className="border-t p-4">
-            <CollabInput canSend={connection === 'open'} onSend={send} />
+            <CollabInput
+              canSend={connection === 'open'}
+              onSend={(content) => send(content) !== null}
+            />
           </div>
         </main>
 

@@ -104,12 +104,30 @@ async function streamAiAnswer(job: MockAiJob): Promise<void> {
     job.prompt,
     scenario,
     SAMPLE_CITATION,
+    job.turnId,
   );
 
   for (let i = 0; i < frames.length; i++) {
+    // 부른 사람이 멈췄으면 실서버처럼 빈 done 한 장으로 스트림을 닫는다(이슈 #160).
+    if (job.cancelled) {
+      const last = frames.at(-1);
+      if (last?.type === 'chat.answer') {
+        broadcast(job, { ...last, delta: '', citations: [], status: 'done' });
+      }
+      return;
+    }
     if (!broadcast(job, frames[i])) return;
     if (i < frames.length - 1) await sleep(TOKEN_INTERVAL_MS);
   }
+}
+
+function queuedFrame(job: MockAiJob, status: 'queued' | 'cancelled'): WsFrame {
+  return {
+    type: 'chat.queued',
+    threadId: job.threadId,
+    turnId: job.turnId,
+    status,
+  };
 }
 
 /**
@@ -267,11 +285,47 @@ const server = Bun.serve<SocketData>({
     },
 
     message(ws, raw) {
-      const { threadId, subject, displayName, generation } = ws.data;
+      const { connectionId, threadId, subject, displayName, generation } =
+        ws.data;
       if (generation === null) return;
 
       const parsed = parseInboundMessage(String(raw));
       if (parsed.kind === 'ignore') return;
+      if (parsed.kind === 'ping') {
+        ws.send(JSON.stringify({ type: 'pong' }));
+        return;
+      }
+      if (parsed.kind === 'cancel') {
+        // 멈출 턴이 없거나 다른 커넥션의 턴이면 실서버처럼 아무것도 보내지 않는다. 실행 중인
+        // 턴은 streamAiAnswer 루프가 done으로 닫는다. 이 연결의 방이 아니면 찾을 턴이 없다.
+        if (parsed.threadId !== threadId) return;
+        const result = aiQueue.cancel(
+          threadId,
+          generation,
+          parsed.turnId,
+          connectionId,
+        );
+        if (result.kind === 'pending') {
+          broadcast(result.job, queuedFrame(result.job, 'cancelled'));
+        }
+        return;
+      }
+      if (parsed.kind === 'subscribe' || parsed.kind === 'unsubscribe') {
+        // 실서버와 같은 판정 — 경로가 방을 고정하므로 자기 방 구독·다른 방 해지는 할 일이 없다.
+        const ownRoom = parsed.threadId === threadId;
+        if ((parsed.kind === 'subscribe') === ownRoom) return;
+        ws.send(
+          JSON.stringify(
+            errorFrame(
+              parsed.threadId,
+              'NOT_SUPPORTED',
+              '아직 지원하지 않는 요청입니다.',
+              `mock-unsupported-${++turnSequence}`,
+            ),
+          ),
+        );
+        return;
+      }
       if (parsed.kind === 'malformed') {
         ws.send(
           JSON.stringify(
@@ -286,10 +340,13 @@ const server = Bun.serve<SocketData>({
         return;
       }
 
+      const { clientMsgId, turnId } = parsed.message;
       registry.broadcastIfCurrent(threadId, generation, {
         type: 'chat.message',
         threadId: threadId,
         msgId: crypto.randomUUID(),
+        clientMsgId,
+        turnId,
         seq: nextMockSeq(),
         from: subject,
         fromDisplayName: displayName,
@@ -315,7 +372,18 @@ const server = Bun.serve<SocketData>({
         return;
       }
 
-      if (!aiQueue.enqueue({ threadId, generation, prompt, traceId })) {
+      const job: MockAiJob = {
+        threadId,
+        generation,
+        prompt,
+        traceId,
+        turnId,
+        connectionId,
+      };
+      const enqueued = aiQueue.enqueue(job);
+      if (enqueued === 'queued') {
+        broadcast(job, queuedFrame(job, 'queued'));
+      } else if (enqueued === 'rejected') {
         ws.send(
           JSON.stringify(
             errorFrame(

@@ -51,6 +51,8 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
   // 때문이다. 그래서 고르기 전에 막지 못하고 이 시점에 안내한다.
   MODEL_UNAVAILABLE:
     '이 모델을 사용할 수 없어요. API 키가 설정되어 있는지 확인하거나 다른 모델을 선택해 주세요.',
+  // 권한이 아니라 아직 없는 기능이다 — 한 연결로 다른 방 구독하기 등(이슈 #160, 멀티플렉싱은 #161).
+  NOT_SUPPORTED: '아직 지원하지 않는 요청이에요.',
 };
 
 const GENERIC_MESSAGE =

@@ -38,6 +38,8 @@ function answerFrame(
     type: 'chat.answer',
     threadId,
     msgId,
+    turnId: null,
+    model: 'mock-model',
     seq,
     delta: partial.delta ?? '',
     citations: partial.citations ?? [],

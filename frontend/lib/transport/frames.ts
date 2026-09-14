@@ -35,6 +35,12 @@ export interface ChatAnswerFrame {
   /** 이 턴의 AGENT 메시지 id. 같은 턴의 delta·done 패킷이 모두 같은 값을 단다(이슈 #190).
    * 한 턴이 저장되는 msg 행 하나와 1:1이라 턴 식별자 역할을 겸한다. */
   msgId: string;
+  /** 이 턴을 부른 발화에 클라이언트가 실어 보낸 턴 식별자(이슈 #160). 협업방에는 남이 부른 턴도
+   * 흐르므로, 요청한 화면은 이 값으로 "내 질문의 답"을 고르고 취소할 때도 이 값을 쓴다. 발화에
+   * 없었으면 null이다. */
+  turnId: string | null;
+  /** 이 턴에 실제로 쓴 게이트웨이 모델 별칭. 발화가 지정했으면 그 값, 비웠으면 서버 기본값이다. */
+  model: string;
   /** 방 안에서의 순서. 턴이 시작되는 순간 정해져, 스트리밍 도중 도착한 사람 메시지가
    * 이 답변 앞으로 끼어들지 않는다. */
   seq: number;
@@ -51,6 +57,12 @@ export interface ChatMessageFrame {
   /** 서버가 저장하는 msg 행의 id와 같은 값이다(이슈 #190). REST 이력(MsgItem.id)과 이 값으로
    * 같은 메시지를 알아본다. */
   msgId: string;
+  /** 보낸 사람이 발화에 실은 임시 메시지 id를 서버가 그대로 돌려준 것(이슈 #160). 보낸 화면은 먼저
+   * 그려둔 말풍선을 이 값으로 찾아 서버 msgId로 바꾼다. 저장하지 않아 REST 이력에는 없다. */
+  clientMsgId: string | null;
+  /** 보낸 사람이 발화에 실은 턴 식별자(이슈 #160). 방의 모든 화면이 이 값으로 이 발화와 그 턴의
+   * chat.answer·chat.queued를 잇는다. 없었으면 null이다. */
+  turnId: string | null;
   /** 방 안에서의 순서이자 따라잡기 커서(이슈 #190). 방송 순서와 일치한다. 다만 블록 예약이
    * 쓰지 않은 번호를 남기므로 연속성은 가정하지 않는다 — 빠진 번호를 기다리면 안 된다. */
   seq: number;
@@ -171,6 +183,32 @@ export interface ParticipantChangedFrame {
   displayName: string;
 }
 
+/**
+ * 아직 시작하지 않은 @AI 턴의 상태(이슈 #160). 방마다 AI 턴은 한 번에 하나라, 앞 턴이 있으면 뒤
+ * 턴은 기다린다 — 이 신호가 없으면 화면은 "느린 응답"과 "대기 중"을 구분하지 못한다.
+ *
+ * queued는 기다리기 시작했다는 뜻이다. 턴이 실제로 시작되면 따로 오지 않고, 같은 turnId를 단
+ * chat.answer가 오는 것이 곧 시작이다. cancelled는 시작하기 전에 취소됐다는 뜻이다(시작한 턴의
+ * 취소는 chat.answer done이 알린다).
+ *
+ * 방 전체에 온다. 턴을 부른 발화의 chat.message 에코에도 같은 turnId가 실려 있어 다른 참여자의
+ * 화면도 이 값으로 말풍선을 찾는다.
+ */
+export interface ChatQueuedFrame {
+  type: 'chat.queued';
+  threadId: string;
+  turnId: string | null;
+  status: 'queued' | 'cancelled';
+}
+
+/**
+ * 클라이언트 ping에 대한 서버의 응답(이슈 #160). 방에 속한 프레임이 아니라 threadId가 없다.
+ * 주기적으로 ping을 보내고 pong이 끊기면 다시 붙는 하트비트 동작은 #161이 붙인다.
+ */
+export interface PongFrame {
+  type: 'pong';
+}
+
 /** 서버 WsFrame과 대응하는 전체 유니온. 새 타입이 추가되면 여기 한 곳만 넓히면 되고,
  * frame-router.ts의 exhaustive switch가 미처리 케이스를 컴파일 타임에 잡아준다. */
 export type WsFrame =
@@ -181,7 +219,68 @@ export type WsFrame =
   | PresenceSnapshotFrame
   | ParticipantChangedFrame
   | SystemNoticeFrame
-  | WsErrorFrame;
+  | WsErrorFrame
+  | ChatQueuedFrame
+  | PongFrame;
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */
 export type WsFrameType = WsFrame['type'];
+
+/* ────────────────────────────────────────────────────────────────────────────
+ * 클라이언트 → 서버 (이슈 #160)
+ *
+ * 위쪽 WsFrame이 서버가 내려보내는 것이라면 아래는 올려보내는 것이다. 유니온을 나누는 이유는
+ * 방향마다 허용 집합이 다르기 때문이다 — 한 유니온에 합치면 서버 전용 타입을 올려보낼 수
+ * 있는지가 타입만 봐서는 드러나지 않는다. 서버 계약은 InboundFrame.java가 미러링한다.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/**
+ * 참여자 발화. 식별자 둘은 보내기 전에 클라이언트가 만든다.
+ * - clientMsgId: 이 메시지의 임시 id. 서버가 chat.message 에코에 돌려준다 — 먼저 그린 말풍선과
+ *   에코를 맞추는 키다.
+ * - turnId: 이 발화가 부를 수 있는 AI 턴의 id. 서버가 턴을 만들 때만 쓰고(협업방은 @AI 멘션),
+ *   에코와 그 턴의 chat.answer·chat.queued에 돌려준다. 에코 전에도 이 값으로 취소할 수 있다.
+ *   턴을 만들지는 서버가 정하므로 모든 발화에 싣는다.
+ * model은 턴에 쓸 게이트웨이 모델 별칭이고 생략하면 서버 기본값을 쓴다.
+ */
+export interface ClientChatMessageFrame {
+  type: 'chat.message';
+  content: string;
+  model?: string;
+  clientMsgId?: string;
+  turnId?: string;
+}
+
+/** 진행 중이거나 기다리는 @AI 턴을 멈춘다. 그 턴을 부른 발화의 turnId로 가리킨다. 서버는 이
+ * 커넥션이 보낸 발화의 턴만 찾으므로, 멈출 턴이 없으면(이미 끝났거나 다른 커넥션의 턴) 아무 응답도
+ * 오지 않는다. threadId는 커넥션이 여러 방을 나르게 되면(#161) 어느 방의 턴인지 가르는 값이다. */
+export interface ClientChatCancelFrame {
+  type: 'chat.cancel';
+  threadId: string;
+  turnId: string;
+}
+
+/** 이 커넥션으로 그 방을 듣기 시작한다/그만 듣는다. 계약만 열려 있고 실제 멀티플렉싱은 #161이
+ * 붙인다 — 지금은 경로가 커넥션의 방을 고정하므로 다른 방 구독·자기 방 해지는 NOT_SUPPORTED다. */
+export interface ClientRoomSubscribeFrame {
+  type: 'room.subscribe';
+  threadId: string;
+}
+
+export interface ClientRoomUnsubscribeFrame {
+  type: 'room.unsubscribe';
+  threadId: string;
+}
+
+/** 연결이 살아 있는지 묻는다. 서버는 곧바로 pong으로 답한다. */
+export interface ClientPingFrame {
+  type: 'ping';
+}
+
+/** 서버 InboundFrame과 대응하는 전체 유니온. */
+export type ClientFrame =
+  | ClientChatMessageFrame
+  | ClientChatCancelFrame
+  | ClientRoomSubscribeFrame
+  | ClientRoomUnsubscribeFrame
+  | ClientPingFrame;

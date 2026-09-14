@@ -23,6 +23,8 @@ const chatAnswerFrameSchema = z.object({
   type: z.literal('chat.answer'),
   threadId: z.string(),
   msgId: z.string(),
+  turnId: z.string().nullable(),
+  model: z.string(),
   seq: z.number(),
   delta: z.string(),
   citations: z.array(citationSchema),
@@ -34,6 +36,8 @@ const chatMessageFrameSchema = z.object({
   type: z.literal('chat.message'),
   threadId: z.string(),
   msgId: z.string(),
+  clientMsgId: z.string().nullable(),
+  turnId: z.string().nullable(),
   seq: z.number(),
   from: z.string(),
   fromDisplayName: z.string(),
@@ -92,6 +96,19 @@ const participantChangedFrameSchema = z.object({
   displayName: z.string(),
 });
 
+/** 시작 전 @AI 턴의 대기·취소(이슈 #160). */
+const chatQueuedFrameSchema = z.object({
+  type: z.literal('chat.queued'),
+  threadId: z.string(),
+  turnId: z.string().nullable(),
+  status: z.union([z.literal('queued'), z.literal('cancelled')]),
+});
+
+/** 클라이언트 ping에 대한 응답(이슈 #160). 필드가 없다. */
+const pongFrameSchema = z.object({
+  type: z.literal('pong'),
+});
+
 /** 연결 수립 자체가 실패하는 경우처럼 특정 방에 속하지 않는 오류는 threadId가 null일 수
  * 있다(ErrorFrame.java 주석과 동일 계약). */
 const wsErrorFrameSchema = z.object({
@@ -102,7 +119,7 @@ const wsErrorFrameSchema = z.object({
   traceId: z.string(),
 });
 
-/** type 필드로 판별하는 유니온. 알려진 8개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
+/** type 필드로 판별하는 유니온. 알려진 10개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
  * 포함) 파싱이 실패한다 — parseFrame이 그 실패를 null로 흡수한다. frames.ts의 WsFrame 유니온에
  * 타입을 더하면 여기 스키마도 함께 더해야 한다 — 빠뜨리면 컴파일은 통과하고 그 프레임만
  * 조용히 버려진다. */
@@ -115,6 +132,8 @@ const wsFrameSchema = z.discriminatedUnion('type', [
   participantChangedFrameSchema,
   systemNoticeFrameSchema,
   wsErrorFrameSchema,
+  chatQueuedFrameSchema,
+  pongFrameSchema,
 ]);
 
 /** 이미 JSON.parse된 값을 검증한다. 객체가 아니거나, type이 없거나, 알려지지 않은 type이거나,

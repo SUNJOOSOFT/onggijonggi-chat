@@ -17,6 +17,8 @@ describe('routeFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '안녕',
       citations: [],
@@ -35,6 +37,8 @@ describe('routeFrame', () => {
       type: 'chat.message',
       threadId: 's1',
       msgId: 'msg-1',
+      clientMsgId: null,
+      turnId: null,
       seq: 1,
       from: 'u1',
       fromDisplayName: '보낸 사람',
@@ -98,6 +102,8 @@ describe('routeFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: 'x',
       citations: [],
@@ -112,6 +118,8 @@ describe('routeFrame', () => {
       type: 'chat.answer',
       threadId: 's1',
       msgId: 'msg-1',
+      turnId: null,
+      model: 'm',
       seq: 1,
       delta: '',
       citations: [],
@@ -159,4 +167,22 @@ describe('routeFrame — system.notice(#29)', () => {
     expect(onParticipantChanged).toHaveBeenCalledWith(frame);
   });
 
+  it('chat.queued를 onChatQueued로, pong을 onPong으로 보낸다(이슈 #160)', () => {
+    const queued: WsFrame = {
+      type: 'chat.queued',
+      threadId: 'room-1',
+      turnId: 't1',
+      status: 'queued',
+    };
+    const onChatQueued = vi.fn();
+    const onPong = vi.fn();
+    const onError = vi.fn();
+
+    routeFrame(queued, { onChatQueued, onPong, onError });
+    routeFrame({ type: 'pong' }, { onChatQueued, onPong, onError });
+
+    expect(onChatQueued).toHaveBeenCalledExactlyOnceWith(queued);
+    expect(onPong).toHaveBeenCalledExactlyOnceWith({ type: 'pong' });
+    expect(onError).not.toHaveBeenCalled();
+  });
 });
