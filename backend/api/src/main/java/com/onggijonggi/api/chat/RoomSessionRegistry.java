@@ -2,10 +2,12 @@ package com.onggijonggi.api.chat;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
@@ -26,6 +28,9 @@ import reactor.core.publisher.Sinks;
  *               퇴장 통보는 즉시 나가지 않고 짧은 유예를 둔다 — 그 안에 같은 사람이 재연결하면
  *               퇴장·입장 모두 취소한다(이슈 #198). 토큰 만료로 인한 순간 재연결이 잦아 이 유예가
  *               없으면 다른 참여자 화면에 입퇴장이 매번 깜빡인다.
+ *
+ *               커넥션 하나가 여러 방에 들 수 있다(이슈 #161) — 방→커넥션 맵(rooms)과 함께
+ *               커넥션→방 역방향 인덱스를 들고, 연결이 끊길 때 그 커넥션이 든 모든 방에서 뺀다.
  */
 @Component
 public class RoomSessionRegistry {
@@ -33,6 +38,9 @@ public class RoomSessionRegistry {
 	private static final int WARMUP_BUFFER_SIZE = 1;
 
 	private final ConcurrentMap<UUID, RoomState> rooms = new ConcurrentHashMap<>();
+
+	/** 커넥션이 지금 든 방들(이슈 #161). 끊긴 커넥션을 모든 방에서 빼는 {@link #leaveAll}만 쓴다. */
+	private final ConcurrentMap<UUID, Set<UUID>> roomsByConnection = new ConcurrentHashMap<>();
 
 	private final Duration presenceLeaveDebounce;
 
@@ -56,23 +64,37 @@ public class RoomSessionRegistry {
 	public RoomMembership join(UUID threadId, UUID connectionId, PresenceParticipant participant) {
 		List<PresenceParticipant> participants = new ArrayList<>();
 		Sinks.One<Void> kicked = Sinks.one();
+		Sinks.One<Void> left = Sinks.one();
 		RoomState room = rooms.compute(threadId, (ignored, current) -> {
 			RoomState joined = current == null ? new RoomState(presenceLeaveDebounce) : current;
-			if (joined.add(connectionId, participant, kicked)) {
+			if (joined.add(connectionId, participant, kicked, left)) {
 				joined.emitPresence(
 						new PresenceJoinFrame(threadId, participant.subject(), participant.displayName()));
 			}
 			participants.addAll(joined.participants());
 			return joined;
 		});
+		roomsByConnection.computeIfAbsent(connectionId, ignored -> ConcurrentHashMap.newKeySet()).add(threadId);
 		return new RoomMembership(room.generation(),
-				new PresenceSnapshotFrame(threadId, List.copyOf(participants)), room.frames(), kicked.asMono());
+				new PresenceSnapshotFrame(threadId, List.copyOf(participants)), room.frames(), kicked.asMono(),
+				left.asMono());
+	}
+
+	/**
+	 * 이 커넥션이 그 방에 들어 있으면 방의 현재 세대를 돌려준다(이슈 #161). 발화·취소가 어느 세대로
+	 * 들어갈지를 여기서 정한다 — 경로가 방을 고정하던 때는 연결 수명 내내 한 값이었지만, 이제는 구독이
+	 * 해지됐다가 다시 걸리면 세대가 바뀔 수 있다.
+	 */
+	public Optional<UUID> generationFor(UUID threadId, UUID connectionId) {
+		RoomState room = rooms.get(threadId);
+		return room != null && room.contains(connectionId) ? Optional.of(room.generation()) : Optional.empty();
 	}
 
 	/**
 	 * 참가자 명단에서 그 subject를 빼는 일(#20의 remove·leaveSelf)이 이미 벌어진 뒤 호출된다 —
-	 * 여기서는 그 사람이 지금 들고 있는 연결(탭이 여럿이면 전부)에 강제 종료 신호만 보낸다.
-	 * 실제로 소켓을 닫는 것은 그 신호를 구독하는 {@link CollabWebSocketHandler} 몫이다(이슈 #135).
+	 * 여기서는 그 사람이 지금 이 방에 걸어 둔 구독(탭이 여럿이면 전부)에 강제 해지 신호만 보낸다.
+	 * 실제로 구독을 푸는 것은 그 신호를 구독하는 {@link CollabWebSocketHandler} 몫이다(이슈 #135).
+	 * 커넥션은 닫지 않는다 — 한 커넥션이 여러 방을 나르므로 다른 방까지 끊긴다(이슈 #161).
 	 *
 	 * @return 신호를 받은 연결이 하나라도 있으면 {@code true} — 이미 연결이 없던 사람(초대만
 	 * 받고 접속한 적 없는 등)이면 {@code false}
@@ -130,17 +152,42 @@ public class RoomSessionRegistry {
 			}
 			return current;
 		});
+		roomsByConnection.computeIfPresent(connectionId, (ignored, threadIds) -> {
+			threadIds.remove(threadId);
+			return threadIds.isEmpty() ? null : threadIds;
+		});
 		return Optional.ofNullable(emptiedGeneration[0]);
+	}
+
+	/**
+	 * 끊긴 커넥션을 그 커넥션이 든 모든 방에서 뺀다(이슈 #161). 방마다 {@link #leave}와 같은 판정을
+	 * 거친다 — 입퇴장 유예·방 비움이 방 단위로 따로 갈린다.
+	 *
+	 * @return 이 퇴장으로 완전히 빈 방의 threadId → 그 방 세대. 호출자가 그 세대의 AI 작업을 닫는다.
+	 */
+	public Map<UUID, UUID> leaveAll(UUID connectionId, PresenceParticipant participant) {
+		Set<UUID> threadIds = roomsByConnection.remove(connectionId);
+		if (threadIds == null) {
+			return Map.of();
+		}
+		Map<UUID, UUID> emptiedGenerations = new HashMap<>();
+		for (UUID threadId : threadIds) {
+			leave(threadId, connectionId, participant)
+					.ifPresent(generation -> emptiedGenerations.put(threadId, generation));
+		}
+		return emptiedGenerations;
 	}
 
 	/**
 	 * 이 연결이 방에 대해 아는 전부. snapshot은 연결이 붙는 순간의 명단이고, frames는 그 뒤로
 	 * 방에서 일어나는 일이다 — 둘을 이어 붙여 내보내는 것은 {@link CollabWebSocketHandler}가 한다.
-	 * kicked는 이 연결 하나에만 오는 강제 종료 신호다(evict, 이슈 #135) — frames와 달리 방 전체가
-	 * 아니라 이 connectionId로만 간다.
+	 * kicked는 이 연결 하나에만 오는 강제 해지 신호다(evict, 이슈 #135) — frames와 달리 방 전체가
+	 * 아니라 이 connectionId로만 간다. left는 이 연결이 방에서 빠지는 순간 완료된다(이슈 #161) —
+	 * 커넥션이 살아 있어도 구독이 풀리면 frames를 그만 받아야 하는데, 방에 남은 사람이 있으면 frames
+	 * 자체는 끝나지 않는다.
 	 */
 	public record RoomMembership(UUID generation, PresenceSnapshotFrame snapshot, Flux<WsFrame> frames,
-			Mono<Void> kicked) {
+			Mono<Void> kicked, Mono<Void> left) {
 	}
 
 	/**
@@ -197,10 +244,11 @@ public class RoomSessionRegistry {
 		 * 들을 상대가 이미 방에 있어야 하고, 유예 중인 퇴장 통보로 상쇄되지 않아야 한다. 상쇄되면
 		 * 그 퇴장 통보 자체가 무산되므로 입장도 알리지 않는다 — 화면엔 둘 다 보이지 않아야 한다.
 		 */
-		synchronized boolean add(UUID connectionId, PresenceParticipant participant, Sinks.One<Void> kicked) {
+		synchronized boolean add(UUID connectionId, PresenceParticipant participant, Sinks.One<Void> kicked,
+				Sinks.One<Void> left) {
 			boolean hadOthers = !connections.isEmpty();
 			boolean userIsNew = !hasSubject(participant.subject());
-			connections.put(connectionId, new ConnectionEntry(participant, kicked));
+			connections.put(connectionId, new ConnectionEntry(participant, kicked, left));
 			if (userIsNew) {
 				PendingDeparture pendingLeave = pendingLeaves.remove(participant.subject());
 				if (pendingLeave != null) {
@@ -213,6 +261,10 @@ public class RoomSessionRegistry {
 
 		UUID generation() {
 			return generation;
+		}
+
+		synchronized boolean contains(UUID connectionId) {
+			return connections.containsKey(connectionId);
 		}
 
 		/**
@@ -243,6 +295,9 @@ public class RoomSessionRegistry {
 		 */
 		synchronized Departure remove(UUID connectionId) {
 			ConnectionEntry removed = connections.remove(connectionId);
+			if (removed != null) {
+				removed.left().tryEmitEmpty();
+			}
 			if (connections.isEmpty()) {
 				active = false;
 				frames.tryEmitComplete();
@@ -287,8 +342,8 @@ public class RoomSessionRegistry {
 
 		/**
 		 * 그 subject가 지금 들고 있는 연결(탭이 여럿이면 전부) 각각의 kicked 신호를 완료시킨다.
-		 * 실제 연결 제거는 하지 않는다 — 소켓이 닫히면 CollabWebSocketHandler가 평소처럼
-		 * {@link RoomSessionRegistry#leave}를 부르며 자연히 빠진다.
+		 * 실제 연결 제거는 하지 않는다 — 신호를 받은 CollabWebSocketHandler가 그 구독을 풀며
+		 * {@link RoomSessionRegistry#leave}를 불러 자연히 빠진다.
 		 */
 		synchronized boolean evict(String subject) {
 			boolean evictedAny = false;
@@ -329,8 +384,9 @@ public class RoomSessionRegistry {
 			return true;
 		}
 
-		/** kicked는 이 연결 하나만의 것이라 frames(sink 하나를 방 전체가 공유)와 섞이지 않는다. */
-		private record ConnectionEntry(PresenceParticipant participant, Sinks.One<Void> kicked) {
+		/** kicked·left는 이 연결 하나만의 것이라 frames(sink 하나를 방 전체가 공유)와 섞이지 않는다. */
+		private record ConnectionEntry(PresenceParticipant participant, Sinks.One<Void> kicked,
+				Sinks.One<Void> left) {
 		}
 	}
 

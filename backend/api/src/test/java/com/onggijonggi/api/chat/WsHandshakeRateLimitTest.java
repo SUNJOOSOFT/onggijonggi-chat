@@ -132,7 +132,7 @@ class WsHandshakeRateLimitTest {
 
 	private RestTestClient.RequestHeadersSpec<?> probeWsPath(String token) {
 		return restTestClient.get()
-				.uri("/api/ws/" + java.util.UUID.randomUUID())
+				.uri("/api/ws")
 				.header("Sec-WebSocket-Protocol", "access_token, " + token);
 	}
 
@@ -143,7 +143,7 @@ class WsHandshakeRateLimitTest {
 		headers.setOrigin(ALLOWED_ORIGIN);
 
 		new ReactorNettyWebSocketClient()
-				.execute(URI.create("ws://localhost:" + port + "/api/ws/" + java.util.UUID.randomUUID()),
+				.execute(URI.create("ws://localhost:" + port + "/api/ws"),
 						headers, new WebSocketHandler() {
 
 					@Override

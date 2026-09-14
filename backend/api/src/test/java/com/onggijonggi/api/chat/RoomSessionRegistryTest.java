@@ -2,6 +2,7 @@ package com.onggijonggi.api.chat;
 
 import java.time.Duration;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.CopyOnWriteArrayList;
@@ -159,9 +160,9 @@ class RoomSessionRegistryTest {
 				registry.join(roomId, slowConnectionId, anyone());
 		RoomSessionRegistry.RoomMembership fastMembership =
 				registry.join(roomId, fastConnectionId, anyone());
-		CollabWebSocketHandler.bufferForConnection(
+		CollabWebSocketHandler.bufferForRoom(
 				slowMembership.frames(), slowOverflow).subscribe(slowSubscriber);
-		Disposable fastSubscription = CollabWebSocketHandler.bufferForConnection(
+		Disposable fastSubscription = CollabWebSocketHandler.bufferForRoom(
 				fastMembership.frames(), fastOverflow)
 				.subscribe(fastFrames::add);
 
@@ -618,6 +619,77 @@ class RoomSessionRegistryTest {
 		} finally {
 			pool.shutdownNow();
 		}
+	}
+
+	/** 한 커넥션이 여러 방에 들 수 있고, 방마다 그 방의 세대를 따로 돌려받는다(이슈 #161). */
+	@Test
+	void oneConnectionJoinsSeveralRoomsAndLooksUpEachGeneration() {
+		UUID connectionId = UUID.randomUUID();
+		UUID firstRoomId = UUID.randomUUID();
+		UUID secondRoomId = UUID.randomUUID();
+		PresenceParticipant user = participant("multi-room");
+
+		RoomSessionRegistry.RoomMembership first = registry.join(firstRoomId, connectionId, user);
+		RoomSessionRegistry.RoomMembership second = registry.join(secondRoomId, connectionId, user);
+
+		assertThat(registry.generationFor(firstRoomId, connectionId)).contains(first.generation());
+		assertThat(registry.generationFor(secondRoomId, connectionId)).contains(second.generation());
+		assertThat(registry.generationFor(firstRoomId, UUID.randomUUID())).isEmpty();
+
+		registry.leave(firstRoomId, connectionId, user);
+
+		// 한 방에서 빠져도 다른 방 구독은 그대로다.
+		assertThat(registry.generationFor(firstRoomId, connectionId)).isEmpty();
+		assertThat(registry.generationFor(secondRoomId, connectionId)).contains(second.generation());
+		registry.leave(secondRoomId, connectionId, user);
+	}
+
+	/**
+	 * 커넥션이 끊기면 그 커넥션이 든 방 전부에서 빠진다(이슈 #161). 비어서 사라진 방의 세대만
+	 * 돌려준다 — 다른 사람이 남은 방은 닫히지 않는다.
+	 */
+	@Test
+	void leaveAllRemovesTheConnectionFromEveryRoomAndReportsOnlyEmptiedRooms() {
+		UUID connectionId = UUID.randomUUID();
+		UUID aloneRoomId = UUID.randomUUID();
+		UUID sharedRoomId = UUID.randomUUID();
+		PresenceParticipant user = participant("closing");
+		UUID otherConnectionId = UUID.randomUUID();
+
+		RoomSessionRegistry.RoomMembership alone = registry.join(aloneRoomId, connectionId, user);
+		registry.join(sharedRoomId, connectionId, user);
+		RoomSessionRegistry.RoomMembership shared = registry.join(sharedRoomId, otherConnectionId, anyone());
+
+		assertThat(registry.leaveAll(connectionId, user)).containsExactly(Map.entry(aloneRoomId, alone.generation()));
+
+		assertThat(registry.generationFor(aloneRoomId, connectionId)).isEmpty();
+		assertThat(registry.generationFor(sharedRoomId, connectionId)).isEmpty();
+		assertThat(registry.generationFor(sharedRoomId, otherConnectionId)).contains(shared.generation());
+		// 이미 다 빠진 커넥션을 다시 부르면 할 일이 없다.
+		assertThat(registry.leaveAll(connectionId, user)).isEmpty();
+		registry.leave(sharedRoomId, otherConnectionId, anyone());
+	}
+
+	/**
+	 * left는 그 연결이 방에서 빠지는 순간 완료된다(이슈 #161) — 방에 남은 사람이 있어 frames가
+	 * 끝나지 않아도 구독을 끊을 수 있어야 한다. 다른 연결의 left는 건드리지 않는다.
+	 */
+	@Test
+	void leftCompletesForTheLeavingConnectionOnly() {
+		UUID roomId = UUID.randomUUID();
+		UUID leavingConnectionId = UUID.randomUUID();
+		PresenceParticipant leavingUser = participant("leaving");
+		RoomSessionRegistry.RoomMembership leaving = registry.join(roomId, leavingConnectionId, leavingUser);
+		RoomSessionRegistry.RoomMembership staying = registry.join(roomId, UUID.randomUUID(), anyone());
+		AtomicBoolean leavingLeft = new AtomicBoolean();
+		AtomicBoolean stayingLeft = new AtomicBoolean();
+		leaving.left().doOnSuccess(ignored -> leavingLeft.set(true)).subscribe();
+		staying.left().doOnSuccess(ignored -> stayingLeft.set(true)).subscribe();
+
+		registry.leave(roomId, leavingConnectionId, leavingUser);
+
+		assertThat(leavingLeft).isTrue();
+		assertThat(stayingLeft).isFalse();
 	}
 
 	private void broadcastRange(UUID roomId, UUID roomGeneration, String prefix, CountDownLatch start) {

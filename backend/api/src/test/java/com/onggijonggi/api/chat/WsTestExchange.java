@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import java.time.Duration;
+import java.util.UUID;
 import java.util.function.Consumer;
 import java.util.function.Function;
 import java.util.function.Predicate;
@@ -42,6 +43,16 @@ final class WsTestExchange {
 	 */
 	static Predicate<WebSocketMessage> exceptPresenceSnapshot() {
 		return message -> !message.getPayloadAsText().contains("\"type\":\"presence.snapshot\"");
+	}
+
+	/** 커넥션이 방을 나르기 전에 먼저 보내야 하는 구독 프레임(이슈 #161). */
+	static String subscribeFrame(UUID threadId) {
+		return "{\"type\":\"room.subscribe\",\"threadId\":\"" + threadId + "\"}";
+	}
+
+	/** 그 방으로 가는 발화 한 장. 인바운드 chat.message는 방을 threadId로 가리킨다(이슈 #161). */
+	static String chatMessageFrame(UUID threadId, String content) {
+		return "{\"type\":\"chat.message\",\"threadId\":\"" + threadId + "\",\"content\":\"" + content + "\"}";
 	}
 
 	static Mono<Void> exchange(WebSocketSession session,

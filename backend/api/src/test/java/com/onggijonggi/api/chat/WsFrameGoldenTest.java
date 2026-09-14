@@ -80,7 +80,7 @@ class WsFrameGoldenTest {
 	/** 클라이언트 → 서버 프레임의 예시. 선택 필드도 채워 둔다 — 프론트가 필드 이름을 검증하게. */
 	private static Map<String, InboundFrame> inboundSamples() {
 		Map<String, InboundFrame> samples = new LinkedHashMap<>();
-		samples.put("chat.message", new InboundChatMessage("@AI 요약해줘", "gemini-3.6-flash", CLIENT_MSG_ID, TURN_ID));
+		samples.put("chat.message", new InboundChatMessage(THREAD_ID, "@AI 요약해줘", "gemini-3.6-flash", CLIENT_MSG_ID, TURN_ID));
 		samples.put("chat.cancel", new InboundChatCancel(THREAD_ID, TURN_ID));
 		samples.put("room.subscribe", new InboundRoomSubscribe(THREAD_ID));
 		samples.put("room.unsubscribe", new InboundRoomUnsubscribe(THREAD_ID));

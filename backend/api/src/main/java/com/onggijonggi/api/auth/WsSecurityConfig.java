@@ -15,7 +15,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : WsSecurityConfig.java
- * Description : /api/ws/** 전용 인증 체인. 메인 SecurityConfig.filterChain()은 securityMatcher가 없어
+ * Description : /api/ws 전용 인증 체인. 메인 SecurityConfig.filterChain()은 securityMatcher가 없어
  *               전 경로를 잡으므로(anyExchange().denyAll()), 이 체인이 더 높은 순위로 먼저 매칭돼야
  *               /api/ws 요청이 Authorization 헤더 부재를 이유로 메인 체인에 거부되지 않는다.
  *               이슈 #7 스파이크(WsSecurityContextSpikeTest)가 이 배선으로 인증 컨텍스트가 WS 메시지
@@ -86,7 +86,7 @@ public class WsSecurityConfig {
 	@Order(Ordered.HIGHEST_PRECEDENCE)
 	public SecurityWebFilterChain wsFilterChain(ServerHttpSecurity http) {
 		return http
-				.securityMatcher(new PathPatternParserServerWebExchangeMatcher("/api/ws/**"))
+				.securityMatcher(new PathPatternParserServerWebExchangeMatcher("/api/ws"))
 				.csrf(ServerHttpSecurity.CsrfSpec::disable)
 				// 토큰을 검증하기 전에 거른다 — Origin이 틀린 요청은 JWT를 파싱해볼 이유가 없다.
 				.addFilterBefore(new WsOriginWebFilter(allowedOrigins, objectMapper),

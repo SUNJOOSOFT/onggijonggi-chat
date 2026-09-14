@@ -12,7 +12,7 @@ import tools.jackson.databind.ObjectMapper;
  * Class Name : WsOriginWebFilter.java
  * Description : WS 핸드셰이크의 Origin을 화이트리스트와 대조해 Cross-Site WebSocket Hijacking을
  *               막는다(이슈 #5). SecurityConfig의 CORS 설정은 이 경로에 닿지 않는다 — WsSecurityConfig가
- *               /api/ws/**를 별도 체인으로 먼저 채가고 그 체인에는 .cors()가 없으며, 설령 있어도 WS
+ *               /api/ws를 별도 체인으로 먼저 채가고 그 체인에는 .cors()가 없으며, 설령 있어도 WS
  *               Upgrade는 프리플라이트도 단순요청도 아니라 CorsWebFilter가 판단할 대상이 아니다.
  *               그래서 이 필터가 이 경로의 최초이자 유일한 Origin 검사다.
  *               RateLimitWebFilter와 같은 이유로 @Component를 붙이지 않는다 — 전역 WebFilter로도

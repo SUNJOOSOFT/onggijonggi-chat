@@ -21,12 +21,16 @@ import java.util.UUID;
  *               (app.collab.ai.model)을 쓴다. 서버가 미리 검증하지 않는다 — 어떤 별칭이 살아 있는지
  *               아는 곳은 게이트웨이뿐이고, 없는 별칭은 게이트웨이가 거절해 MODEL_UNAVAILABLE로 흐른다.
  *
+ *               threadId는 커넥션이 여러 방을 나르게 되면서 더했다(이슈 #161) — 경로가 방을 고정하던
+ *               때는 필요 없었다. 이 커넥션이 구독한 방이어야 한다.
+ *
+ * @param threadId 발화할 방
  * @param content 발화 원문
  * @param model 이 턴에 쓸 게이트웨이 모델 별칭. null이면 서버 기본값
  * @param clientMsgId 클라이언트가 만든 임시 메시지 id
  * @param turnId 클라이언트가 만든 턴 식별자
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record InboundChatMessage(String content, String model, UUID clientMsgId, UUID turnId)
+public record InboundChatMessage(UUID threadId, String content, String model, UUID clientMsgId, UUID turnId)
 		implements InboundFrame {
 }

@@ -249,7 +249,7 @@ public class ThreadParticipantService {
 	*
 	* DB 반영·통지 뒤 evict를 부르는 것은 자진 탈퇴·OWNER 제거 둘 다에 적용한다 — 어느 쪽이든
 	* targetSubject의 ACTIVE 참가 행이 끝났다는 사실은 같고, 다른 탭으로 이미 연결돼 있으면 그
-	* 연결도 같이 끊어야 한다(이슈 #135). evict가 아무 연결도 못 찾아도(애초에 접속한 적 없음)
+	* 연결의 이 방 구독도 같이 풀어야 한다(이슈 #135·#161). evict가 아무 연결도 못 찾아도(애초에 접속한 적 없음)
 	* 조용히 false만 돌려주므로 별도 분기가 필요 없다.
 	* @param actorSubject 호출자 자신의 Keycloak subject(자진 탈퇴 판정용, 조회하지 않는다)
 	*/

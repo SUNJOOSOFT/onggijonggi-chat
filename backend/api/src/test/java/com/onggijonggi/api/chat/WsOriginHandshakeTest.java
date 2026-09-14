@@ -68,9 +68,10 @@ class WsOriginHandshakeTest {
 	private String connect(HttpHeaders headers) {
 		String token = TestJwtSupport.signedJwt("origin-allowed-user", List.of("USER"));
 		AtomicReference<String> received = new AtomicReference<>();
+		java.util.UUID threadId = rooms.openRoom("origin-allowed-user");
 
 		new ReactorNettyWebSocketClient()
-				.execute(URI.create("ws://localhost:" + port + "/api/ws/" + rooms.openRoom("origin-allowed-user")),
+				.execute(URI.create("ws://localhost:" + port + "/api/ws"),
 						headers, new WebSocketHandler() {
 
 					@Override
@@ -81,8 +82,9 @@ class WsOriginHandshakeTest {
 					@Override
 					public Mono<Void> handle(WebSocketSession session) {
 						return WsTestExchange.exchange(session,
-								active -> Mono.just(active.textMessage(
-										"{\"type\":\"chat.message\",\"content\":\"origin check\"}")),
+								active -> reactor.core.publisher.Flux.just(
+										active.textMessage(WsTestExchange.subscribeFrame(threadId)),
+										active.textMessage(WsTestExchange.chatMessageFrame(threadId, "origin check"))),
 								1, message -> received.set(message.getPayloadAsText()), () -> {
 								}, WsTestExchange.exceptPresenceSnapshot());
 					}
