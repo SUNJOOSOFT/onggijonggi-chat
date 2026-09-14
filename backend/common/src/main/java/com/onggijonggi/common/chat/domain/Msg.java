@@ -104,6 +104,16 @@ public class Msg {
 		this.completedAt = Instant.now();
 	}
 
+	/**
+	* 중단된 답변은 그때까지 생성된 내용을 남긴다(이슈 #160) — 사용자가 읽던 글이 새로고침 뒤에
+	* 사라지면 손실로 느낀다. 문맥 조회는 COMPLETE만 읽으므로 잘린 답변이 다음 LLM 문맥에 끼지 않는다.
+	*/
+	public void cancel(String partialContent) {
+		this.content = partialContent;
+		this.status = MsgStatus.CANCELLED;
+		this.completedAt = Instant.now();
+	}
+
 	public UUID getId() {
 		return id;
 	}

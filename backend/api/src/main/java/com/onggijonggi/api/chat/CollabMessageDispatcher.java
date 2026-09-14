@@ -9,7 +9,9 @@ import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Deque;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
@@ -138,7 +140,16 @@ public class CollabMessageDispatcher {
 					// 상태를 다시 얻어 이어간다.
 					continue;
 				}
+				// 워커가 꺼내기 전에 도착한 취소도 받을 수 있게 큐에 넣는 순간 등록한다(cancel 주석).
+				// 인바운드는 연결마다 순서대로 처리되므로, 같은 연결의 chat.cancel은 이 등록 뒤에 온다.
+				TurnRef ref = prompt == null ? null : TurnRef.of(command.turnId(), command.connectionId());
+				if (ref != null) {
+					state.inFlight.put(ref, false);
+				}
 				if (state.inbox.tryEmitNext(new QueuedMessage(command, prompt)).isFailure()) {
+					if (ref != null) {
+						state.inFlight.remove(ref);
+					}
 					return Optional.of(new ErrorFrame(command.threadId(), "RATE_LIMITED",
 							"이 방의 메시지 대기열이 가득 찼습니다.", command.traceId()));
 				}
@@ -162,8 +173,8 @@ public class CollabMessageDispatcher {
 		long seq = state.seqBlock.allocate();
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(key.threadId(), key.roomGeneration(),
-					new ChatMessageFrame(command.threadId(), msgId, seq, command.fromSubject(),
-							command.fromDisplayName(), command.content()))) {
+					new ChatMessageFrame(command.threadId(), msgId, command.clientMsgId(), command.turnId(), seq,
+							command.fromSubject(), command.fromDisplayName(), command.content()))) {
 				closeGeneration(key, state);
 				return;
 			}
@@ -178,25 +189,48 @@ public class CollabMessageDispatcher {
 		}
 
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
-				command.traceId(), persistHumanMessageAndFetchContextAsync(msgId, seq, command));
-		ActiveTurn turnToStart;
+				command.traceId(), TurnRef.of(command.turnId(), command.connectionId()), command.model(),
+				persistHumanMessageAndFetchContext(msgId, seq, command));
+		ActiveTurn turnToStart = null;
+		boolean admitted = false;
+		// 등록 해제와 대기열 추가를 한 락 안에서 한다 — 사이가 벌어지면 그 틈에 온 취소가 어디서도
+		// 턴을 못 찾는다. 대기·취소 통지도 락 안에서 보낸다: 락 밖이면 앞 턴이 막 끝나 이 턴이 먼저
+		// 시작되고, 답변 프레임 뒤에 "대기 중"이 도착할 수 있다.
 		synchronized (state) {
+			boolean cancelledBeforeQueue = pendingTurn.ref() != null
+					&& Boolean.TRUE.equals(state.inFlight.remove(pendingTurn.ref()));
 			if (state.closed) {
-				return;
-			}
-			if (state.active != null) {
-				if (state.pending.size() >= maxPendingPerRoom) {
-					broadcastQuietly(key, new ErrorFrame(key.threadId(), "RATE_LIMITED",
-							"이 방의 AI 요청 대기열이 가득 찼습니다.", command.traceId()));
-					return;
-				}
+				// 저장만 하고 끝낸다.
+			} else if (cancelledBeforeQueue) {
+				broadcastQuietly(key, queuedFrame(pendingTurn, ChatQueuedStatus.CANCELLED));
+			} else if (state.active == null) {
+				turnToStart = new ActiveTurn(pendingTurn, state.seqBlock);
+				state.active = turnToStart;
+				admitted = true;
+			} else if (state.pending.size() >= maxPendingPerRoom) {
+				broadcastQuietly(key, new ErrorFrame(key.threadId(), "RATE_LIMITED",
+						"이 방의 AI 요청 대기열이 가득 찼습니다.", command.traceId()));
+			} else {
 				state.pending.addLast(pendingTurn);
-				return;
+				broadcastQuietly(key, queuedFrame(pendingTurn, ChatQueuedStatus.QUEUED));
+				admitted = true;
 			}
-			turnToStart = new ActiveTurn(pendingTurn, state.seqBlock);
-			state.active = turnToStart;
 		}
-		startTurn(key, state, turnToStart);
+
+		if (!admitted) {
+			// 턴은 없어도 발화는 이미 방송됐으니 이력에 남긴다.
+			persistHumanMessageAsync(msgId, seq, command);
+			return;
+		}
+		// 문맥 조회는 사람 메시지 저장을 겸하므로 턴이 대기 중이어도 지금 시작한다(이슈 #100).
+		pendingTurn.context().subscribe();
+		if (turnToStart != null) {
+			startTurn(key, state, turnToStart);
+		}
+	}
+
+	private static ChatQueuedFrame queuedFrame(PendingTurn turn, ChatQueuedStatus status) {
+		return new ChatQueuedFrame(turn.threadId(), turn.turnId(), status);
 	}
 
 	/** 방송 실패가 이 경로를 더 망가뜨리지 않게 삼킨다 — 이미 통지 성격의 호출이다. */
@@ -217,6 +251,62 @@ public class CollabMessageDispatcher {
 		}
 	}
 
+	/**
+	* 턴 하나를 멈춘다(이슈 #160). 지목은 (turnId, 그 발화가 들어온 커넥션) 짝으로 한다.
+	*
+	* turnId는 클라이언트가 만든 값이라 그것만으로는 믿지 않는다 — "이 커넥션이 보낸 발화"의 턴에서만
+	* 인정한다. 짝으로 찾으면 남이 부른 턴은 애초에 찾아지지 않는다 — 에코에서 남의 turnId를 읽어
+	* 보내도 끊을 수 없고, 같은 값을 우연히 재사용해도 서로 간섭하지 않는다. 같은 사용자라도 다른
+	* 탭(다른 커넥션)이 부른 턴은 멈출 수 없다. 그래서 FORBIDDEN이 따로 없고, 못 찾으면 조용히
+	* 넘어간다(이미 끝난 턴의 취소와 같은 결과다).
+	*
+	* 턴이 있을 수 있는 자리는 셋이다.
+	* - 워커가 아직 꺼내지 않았다(inFlight): 표시만 남기고, 워커가 꺼낼 때 턴을 만들지 않고
+	*   chat.queued(cancelled)를 보낸다. 사람 발화 자체는 이미 받은 것이라 방송·저장한다.
+	* - 기다리고 있다(pending): 큐에서 빼고 chat.queued(cancelled)를 보낸다.
+	* - 실행 중이다(active): 구독을 끊고, 그때까지 생성된 내용을 CANCELLED로 저장한 뒤
+	*   done 프레임을 보낸다. 화면은 done에서 스트림을 닫으므로 이게 없으면 중단한 답변이 계속
+	*   "생성 중"으로 남는다.
+	*/
+	public void cancel(UUID threadId, UUID roomGeneration, UUID turnId, UUID connectionId) {
+		TurnRef ref = TurnRef.of(turnId, connectionId);
+		RoomKey key = new RoomKey(threadId, roomGeneration);
+		RoomAiState state = states.get(key);
+		if (ref == null || state == null) {
+			return;
+		}
+
+		ActiveTurn activeTurn;
+		synchronized (state) {
+			if (state.closed) {
+				return;
+			}
+			if (state.inFlight.containsKey(ref)) {
+				state.inFlight.put(ref, true);
+				return;
+			}
+			if (state.active == null || !ref.equals(state.active.turn.ref())) {
+				for (PendingTurn candidate : state.pending) {
+					if (ref.equals(candidate.ref())) {
+						state.pending.remove(candidate);
+						broadcastQuietly(key, queuedFrame(candidate, ChatQueuedStatus.CANCELLED));
+						return;
+					}
+				}
+				return;
+			}
+			// state.active는 비우지 않는다 — advance()가 "끝난 턴이 아직 활성인가"로 경합을 거르므로,
+			// 여기서 비우면 다음 대기 턴이 시작되지 않는다.
+			activeTurn = state.active;
+		}
+
+		activeTurn.subscription.dispose();
+		persistAgentCancellation(activeTurn);
+		broadcastQuietly(key, new ChatAnswerFrame(threadId, activeTurn.msgId, activeTurn.turn.turnId(),
+				modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE));
+		advance(key, state, activeTurn);
+	}
+
 	@PreDestroy
 	void closeAllGenerations() {
 		states.forEach(this::closeGeneration);
@@ -227,28 +317,27 @@ public class CollabMessageDispatcher {
 	* (activeTurn.pendingMsgId에 캐시된 Mono로 보관 — 완료/실패 저장 시점에 그 결과를 기다린다).
 	* 문맥(turn.context())은 반대로 LLM 호출 자체의 입력이라 결과를 기다려야 한다 — 조회가 끝나야
 	* 무엇을 보낼지 정해지므로, 여기서만 스트림 시작이 그만큼 지연된다(이슈 #100).
-	* 델타는 개별 저장하지 않고 buffer에 누적해 턴이 끝났을 때 한 번에 완료 처리한다
+	* 델타는 개별 저장하지 않고 activeTurn.content에 누적해 턴이 끝났을 때 한 번에 완료 처리한다
 	* (PersistingChatStreamService와 동일한 결).
 	*/
 	private void startTurn(RoomKey key, RoomAiState state, ActiveTurn activeTurn) {
-		StringBuilder buffer = new StringBuilder();
 		activeTurn.pendingMsgId.subscribe();
 
 		Disposable subscription = activeTurn.turn.context()
 				.flatMapMany(context -> withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
-						new ChatStreamRequest(activeTurn.turn.threadId(), modelId,
+						new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
 								buildPromptMessages(context, activeTurn.turn.prompt()))))))
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
-					buffer.append(delta);
+					activeTurn.content.append(delta);
 					broadcastDelta(activeTurn, delta);
 				})
 				.concatWith(Flux.defer(() -> activeTurn.hasNonBlankOutput.get()
 						? Flux.empty()
 						: Flux.error(new EmptyLlmOutputException())))
 				.subscribe(ignored -> {
-				}, error -> handleTurnError(key, state, activeTurn, buffer.toString(), error),
-						() -> handleTurnComplete(key, state, activeTurn, buffer.toString()));
+				}, error -> handleTurnError(key, state, activeTurn, activeTurn.content.toString(), error),
+						() -> handleTurnComplete(key, state, activeTurn, activeTurn.content.toString()));
 
 		synchronized (state) {
 			if (!state.closed && state.active == activeTurn) {
@@ -257,6 +346,11 @@ public class CollabMessageDispatcher {
 				subscription.dispose();
 			}
 		}
+	}
+
+	/** 발화가 모델을 지정하지 않았으면 서버 기본값(app.collab.ai.model)으로 돌아간다(이슈 #160). */
+	private String modelIdFor(PendingTurn turn) {
+		return turn.model() == null || turn.model().isBlank() ? modelId : turn.model();
 	}
 
 	/** 저장된 이력의 HUMAN/AGENT를 user/assistant로 매핑하고, 이번 멘션의 발화를 마지막에 붙인다. */
@@ -298,8 +392,9 @@ public class CollabMessageDispatcher {
 	private void broadcastStreamingFrame(ActiveTurn activeTurn, String delta) {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
-					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.seq,
-							delta, List.of(), false, ChatAnswerStatus.STREAMING))) {
+					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
+							modelIdFor(activeTurn.turn), activeTurn.seq, delta, List.of(), false,
+							ChatAnswerStatus.STREAMING))) {
 				throw new StaleGenerationException();
 			}
 		} catch (StaleGenerationException error) {
@@ -318,8 +413,8 @@ public class CollabMessageDispatcher {
 	private void handleTurnComplete(RoomKey key, RoomAiState state, ActiveTurn activeTurn, String content) {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
-					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.seq, "",
-							List.of(), false, ChatAnswerStatus.DONE))) {
+					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
+							modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE))) {
 				persistAgentCompletion(activeTurn, content);
 				closeGeneration(key, state);
 				return;
@@ -401,7 +496,7 @@ public class CollabMessageDispatcher {
 		state.worker.dispose();
 		if (activeTurn != null) {
 			activeTurn.subscription.dispose();
-			persistAgentFailure(activeTurn, MsgStatus.CANCELLED);
+			persistAgentCancellation(activeTurn);
 		}
 		if (notifyPendingCancellation && pendingTurnsCancelled) {
 			try {
@@ -439,10 +534,13 @@ public class CollabMessageDispatcher {
 	* 기다렸다가 쓸 수 있게 한다(persistHumanMessageAsync와 달리 fire-and-forget이 아니다). 조회+저장
 	* 순서는 MsgPersistenceService 쪽에서 한 트랜잭션으로 보장한다 — 이 발화 자신이 문맥에 중복으로
 	* 끼지 않도록.
+	*
+	* 여기서 구독하지 않는다(이슈 #160). 턴이 받아들여지지 않으면(시작 전 취소·대기열 초과) 문맥을
+	* 읽을 이유가 없어 호출부가 persistHumanMessageAsync로 갈음한다 — 둘 중 하나만 구독해야 사람
+	* 메시지가 두 번 저장되지 않는다.
 	*/
-	private Mono<List<Msg>> persistHumanMessageAndFetchContextAsync(UUID msgId, long seq,
-			ChatMessageCommand command) {
-		Mono<List<Msg>> context = Mono
+	private Mono<List<Msg>> persistHumanMessageAndFetchContext(UUID msgId, long seq, ChatMessageCommand command) {
+		return Mono
 				.fromCallable(() -> msgPersistenceService.persistHumanMessageAndFetchContextBlocking(
 						msgId, seq, command.threadId(), command.from(), command.content(), maxContextMessages))
 				.subscribeOn(Schedulers.boundedElastic())
@@ -452,8 +550,6 @@ public class CollabMessageDispatcher {
 					return Mono.just(List.<Msg>of());
 				})
 				.cache();
-		context.subscribe();
-		return context;
 	}
 
 	/**
@@ -485,7 +581,32 @@ public class CollabMessageDispatcher {
 				.subscribe();
 	}
 
+	/** 중단된 턴을 그때까지 생성된 내용과 함께 CANCELLED로 닫는다. 내용은 구독을 끊은 뒤 읽는다. */
+	private void persistAgentCancellation(ActiveTurn activeTurn) {
+		if (!activeTurn.terminalPersisted.compareAndSet(false, true)) {
+			return;
+		}
+		String partialContent = activeTurn.content.toString();
+		activeTurn.pendingMsgId
+				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.cancelBlocking(msgId, partialContent))
+						.subscribeOn(Schedulers.boundedElastic())
+						.doOnError(e -> log.error("agent 메시지 취소 저장 실패 msgId={}", msgId, e)))
+				.onErrorComplete()
+				.subscribe();
+	}
+
 	private record RoomKey(UUID threadId, UUID roomGeneration) {
+	}
+
+	/**
+	* 취소가 턴을 찾는 키(이슈 #160). turnId만으로는 믿지 않고 그 발화가 들어온 커넥션과 짝으로 쓴다 —
+	* 이유는 cancel() 주석에 있다. 발화에 turnId가 없으면 null이고, 그 턴은 취소할 수 없다.
+	*/
+	private record TurnRef(UUID turnId, UUID connectionId) {
+
+		static TurnRef of(UUID turnId, UUID connectionId) {
+			return turnId == null ? null : new TurnRef(turnId, connectionId);
+		}
 	}
 
 	/**
@@ -520,8 +641,15 @@ public class CollabMessageDispatcher {
 	private record QueuedMessage(ChatMessageCommand command, String prompt) {
 	}
 
-	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId,
-			Mono<List<Msg>> context) {
+	/**
+	* ref는 취소 지목 키다(이슈 #160). model이 null이면 서버 기본값을 쓴다.
+	*/
+	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId, TurnRef ref,
+			String model, Mono<List<Msg>> context) {
+
+		UUID turnId() {
+			return ref == null ? null : ref.turnId();
+		}
 	}
 
 	private final class ActiveTurn {
@@ -533,6 +661,9 @@ public class CollabMessageDispatcher {
 		private final AtomicBoolean hasNonBlankOutput = new AtomicBoolean();
 
 		private final Deque<String> leadingWhitespace = new ArrayDeque<>();
+
+		/** 지금까지 생성된 답변. 스트림 스레드가 쓰고 취소하는 스레드가 읽어서 StringBuffer다(이슈 #160). */
+		private final StringBuffer content = new StringBuffer();
 
 		/**
 		* PENDING 행 생성 결과(성공 시 msgId, 실패 시 empty)를 캐시해 여러 번 구독해도 한 번만
@@ -579,6 +710,12 @@ public class CollabMessageDispatcher {
 				.onBackpressureBuffer(new ArrayBlockingQueue<QueuedMessage>(MAX_QUEUED_MESSAGES_PER_ROOM));
 
 		private final Deque<PendingTurn> pending = new ArrayDeque<>();
+
+		/**
+		* 큐에 넣었지만 워커가 아직 꺼내지 않은 {@code @AI} 발화(이슈 #160). 값이 true면 그 사이에 취소됐다.
+		* 워커가 꺼낼 때 지운다.
+		*/
+		private final Map<TurnRef, Boolean> inFlight = new HashMap<>();
 
 		private final SeqBlock seqBlock;
 

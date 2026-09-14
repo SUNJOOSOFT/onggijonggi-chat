@@ -155,10 +155,52 @@ class CollabWebSocketHandlerTest {
 				List.of("{\"type\":\"presence.join\",\"threadId\":\"" + threadId + "\"}",
 						"{\"type\":\"presence.leave\",\"threadId\":\"" + threadId + "\"}",
 						"{\"type\":\"system.notice\",\"threadId\":\"" + threadId + "\"}",
+						"{\"type\":\"chat.queued\",\"threadId\":\"" + threadId + "\"}",
+						"{\"type\":\"pong\"}",
 						"{\"type\":\"chat.message\",\"content\":\"accepted\"}"), 1);
 
 		ChatMessageFrame frame = (ChatMessageFrame) objectMapper.readValue(received.get(0), WsFrame.class);
 		assertThat(frame.content()).isEqualTo("accepted");
+	}
+
+	/**
+	* 이슈 #160이 연 인바운드 프레임을 실제 소켓으로 한 번에 본다. 조용히 넘어가야 하는 것들 사이에
+	* 응답이 오는 것들을 섞고, 마지막 발화의 에코까지 받아 "조용한 것은 정말 아무것도 안 보냈다"를
+	* 순서로 확인한다(인바운드는 연결마다 순서대로 처리된다).
+	*/
+	@Test
+	void handlesSubscriptionCancelAndPingFramesAndEchoesTheClientIds() throws Exception {
+		UUID threadId = rooms.openRoom("inbound-frames-user");
+		UUID otherThreadId = UUID.randomUUID();
+		UUID clientMsgId = UUID.randomUUID();
+		UUID turnId = UUID.randomUUID();
+		List<String> received = exchange("inbound-frames-user", threadId, List.of(
+				"{\"type\":\"room.subscribe\",\"threadId\":\"" + threadId + "\"}",
+				"{\"type\":\"room.unsubscribe\",\"threadId\":\"" + otherThreadId + "\"}",
+				"{\"type\":\"chat.cancel\",\"threadId\":\"" + threadId + "\",\"turnId\":\"" + UUID.randomUUID() + "\"}",
+				"{\"type\":\"chat.cancel\",\"threadId\":\"" + otherThreadId + "\",\"turnId\":\"" + UUID.randomUUID() + "\"}",
+				"{\"type\":\"chat.cancel\",\"threadId\":\"" + threadId + "\"}",
+				"{\"type\":\"ping\"}",
+				"{\"type\":\"room.subscribe\",\"threadId\":\"" + otherThreadId + "\"}",
+				"{\"type\":\"room.unsubscribe\",\"threadId\":\"" + threadId + "\"}",
+				"{\"type\":\"chat.message\",\"content\":\"after\",\"clientMsgId\":\"" + clientMsgId
+						+ "\",\"turnId\":\"" + turnId + "\"}"), 5);
+
+		ErrorFrame missingTurn = (ErrorFrame) objectMapper.readValue(received.get(0), WsFrame.class);
+		WsFrame pong = objectMapper.readValue(received.get(1), WsFrame.class);
+		ErrorFrame otherRoomSubscribe = (ErrorFrame) objectMapper.readValue(received.get(2), WsFrame.class);
+		ErrorFrame ownRoomUnsubscribe = (ErrorFrame) objectMapper.readValue(received.get(3), WsFrame.class);
+		ChatMessageFrame echo = (ChatMessageFrame) objectMapper.readValue(received.get(4), WsFrame.class);
+
+		assertThat(missingTurn.code()).isEqualTo("MALFORMED_REQUEST");
+		assertThat(pong).isEqualTo(new PongFrame());
+		assertThat(otherRoomSubscribe.code()).isEqualTo("NOT_SUPPORTED");
+		assertThat(otherRoomSubscribe.threadId()).isEqualTo(otherThreadId);
+		assertThat(ownRoomUnsubscribe.code()).isEqualTo("NOT_SUPPORTED");
+		assertThat(ownRoomUnsubscribe.threadId()).isEqualTo(threadId);
+		assertThat(echo.content()).isEqualTo("after");
+		assertThat(echo.clientMsgId()).isEqualTo(clientMsgId);
+		assertThat(echo.turnId()).isEqualTo(turnId);
 	}
 
 	@Test

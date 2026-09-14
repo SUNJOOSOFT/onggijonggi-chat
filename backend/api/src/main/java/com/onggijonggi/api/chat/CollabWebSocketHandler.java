@@ -55,7 +55,7 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 	private static final Duration CLOSE_DRAIN_GRACE_PERIOD = Duration.ofMillis(500);
 
 	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join",
-			"presence.leave", "presence.snapshot", "error", "system.notice");
+			"presence.leave", "presence.snapshot", "error", "system.notice", "chat.queued", "pong");
 
 	private final ObjectMapper objectMapper;
 
@@ -182,7 +182,8 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		// 나간다(이슈 #181). 인바운드 처리 결과 프레임은 sink로 옮겨 outbound에 실어 보낸다.
 		Sinks.Many<WsFrame> inboundResponses = Sinks.many().unicast().onBackpressureBuffer();
 		Mono<Void> inboundPump = session.receive()
-				.concatMap(message -> handleInbound(message, threadId, userId, actor, membership.generation()))
+				.concatMap(message -> handleInbound(message, threadId, userId, connectionId, actor,
+						membership.generation()))
 				.doOnNext(inboundResponses::tryEmitNext)
 				// 클라이언트/피어가 먼저 닫으면 receive()가 끝난다 — 정상 종료(1000)로 수렴시킨다.
 				.doFinally(ignored -> {
@@ -256,7 +257,12 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 				});
 	}
 
-	private Mono<WsFrame> handleInbound(WebSocketMessage message, UUID threadId, UUID userId,
+	/**
+	* 인바운드 프레임 하나를 처리한다. 파싱은 두 걸음이다 — 먼저 type만 읽어 서버 전용 타입을 조용히
+	* 거르고(#157: 위조해 보내도 오류를 돌려주지 않는다), 그다음 InboundFrame 화이트리스트로 읽는다.
+	* 한 걸음으로 합치면 서버 전용 타입이 화이트리스트에 없다는 이유로 MALFORMED_REQUEST를 받게 된다.
+	*/
+	private Mono<WsFrame> handleInbound(WebSocketMessage message, UUID threadId, UUID userId, UUID connectionId,
 			PresenceParticipant actor, UUID roomGeneration) {
 		String traceId = newTraceId();
 		String payload = textPayload(message);
@@ -264,17 +270,42 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 			return Mono.just(malformed(threadId, traceId));
 		}
 
-		InboundMessage inbound;
+		InboundFrame inbound;
 		try {
-			inbound = objectMapper.readValue(payload, InboundMessage.class);
+			if (SERVER_ONLY_TYPES.contains(objectMapper.readValue(payload, InboundEnvelope.class).type())) {
+				return Mono.empty();
+			}
+			inbound = objectMapper.readValue(payload, InboundFrame.class);
 		} catch (Exception error) {
 			log.debug("Malformed WebSocket frame threadId={} traceId={}", threadId, traceId, error);
 			return Mono.just(malformed(threadId, traceId));
 		}
-		if (SERVER_ONLY_TYPES.contains(inbound.type())) {
-			return Mono.empty();
+
+		// Java 17이라 sealed 타입의 switch 패턴 매칭을 쓸 수 없다. 분기를 빠뜨려도 컴파일러가 못
+		// 잡고 마지막 malformed로 떨어지므로, InboundFrame에 타입을 더할 때 여기를 함께 본다.
+		if (inbound instanceof InboundChatMessage chatMessage) {
+			return handleChatMessage(chatMessage, threadId, userId, connectionId, actor, roomGeneration,
+					traceIdOf(chatMessage.turnId(), traceId));
 		}
-		if (!"chat.message".equals(inbound.type()) || inbound.content() == null || inbound.content().isBlank()) {
+		if (inbound instanceof InboundChatCancel cancel) {
+			return handleCancel(cancel, threadId, connectionId, roomGeneration, traceIdOf(cancel.turnId(), traceId));
+		}
+		if (inbound instanceof InboundRoomSubscribe subscribe) {
+			return handleSubscribe(subscribe.threadId(), threadId, traceId);
+		}
+		if (inbound instanceof InboundRoomUnsubscribe unsubscribe) {
+			return handleUnsubscribe(unsubscribe.threadId(), threadId, traceId);
+		}
+		if (inbound instanceof InboundPing) {
+			// 주기적으로 묻고 무응답이면 다시 붙는 하트비트 동작은 #161이 붙인다 — 여기서는 답만 한다.
+			return Mono.just(new PongFrame());
+		}
+		return Mono.just(malformed(threadId, traceId));
+	}
+
+	private Mono<WsFrame> handleChatMessage(InboundChatMessage inbound, UUID threadId, UUID userId,
+			UUID connectionId, PresenceParticipant actor, UUID roomGeneration, String traceId) {
+		if (inbound.content() == null || inbound.content().isBlank()) {
 			return Mono.just(malformed(threadId, traceId));
 		}
 
@@ -288,7 +319,8 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		}
 
 		ChatMessageCommand command = new ChatMessageCommand(threadId, userId, actor.subject(),
-				actor.displayName(), inbound.content(), traceId);
+				actor.displayName(), inbound.content(), inbound.model(), inbound.clientMsgId(), inbound.turnId(),
+				connectionId, traceId);
 		return threadMembershipService.isActiveParticipant(threadId, userId)
 				.flatMap(participant -> participant
 						? rejectIfLocked(command, roomGeneration, traceId)
@@ -300,6 +332,58 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 					return Mono.just(new ErrorFrame(threadId, "INTERNAL_ERROR",
 							"메시지를 처리하지 못했습니다.", traceId));
 				});
+	}
+
+	/**
+	* 취소는 DB를 보지 않는다 — 멈출 대상은 메모리에 있는 턴이고, 어느 커넥션이 불렀는지도 디스패처가
+	* 들고 있다. 참가자 재확인을 하지 않는 이유도 같다: 방에서 빠진 사람이 자기가 띄운 턴을 거두는 것을
+	* 막을 이유가 없다. 발화 빈도 제한(#74)에도 세지 않는다 — 발화가 아니고 비용도 없다.
+	*
+	* 이 커넥션의 방이 아닌 threadId는 찾을 턴이 없는 것과 같다 — 지금은 경로가 방을 고정한다(#161 전).
+	*/
+	private Mono<WsFrame> handleCancel(InboundChatCancel inbound, UUID threadId, UUID connectionId,
+			UUID roomGeneration, String traceId) {
+		if (inbound.threadId() == null || inbound.turnId() == null) {
+			return Mono.just(malformed(threadId, traceId));
+		}
+		if (threadId.equals(inbound.threadId())) {
+			collabMessageDispatcher.cancel(threadId, roomGeneration, inbound.turnId(), connectionId);
+		}
+		return Mono.empty();
+	}
+
+	/**
+	* 구독·해지는 이번 범위에서 계약과 파싱까지다(이슈 #160). 실제 멀티플렉싱은 #161이 붙인다.
+	*
+	* 두 프레임은 "이 연결의 방인가"를 반대 방향으로 읽는다. 지금 연결은 경로가 고정한 방 하나만 듣고
+	* 있어서, 그 방의 구독은 이미 이뤄진 상태라 할 일이 없고 그 방의 해지는 곧 연결 종료라 받아줄 수
+	* 없다. 다른 방은 반대로, 구독은 아직 못 받고 해지는 듣고 있지 않으니 할 일이 없다. 한 헬퍼로
+	* 합치면 한쪽 판정이 뒤집힌다.
+	*
+	* 거절 코드는 FORBIDDEN이 아니라 NOT_SUPPORTED다 — 권한 문제가 아니고, 화면(room-state.ts)은
+	* FORBIDDEN을 받으면 방을 닫고 재연결을 멈춘다.
+	*/
+	private Mono<WsFrame> handleSubscribe(UUID requestedThreadId, UUID connectionThreadId, String traceId) {
+		if (requestedThreadId == null) {
+			return Mono.just(malformed(connectionThreadId, traceId));
+		}
+		if (connectionThreadId.equals(requestedThreadId)) {
+			return Mono.empty();
+		}
+		return Mono.just(new ErrorFrame(requestedThreadId, "NOT_SUPPORTED",
+				"아직 한 연결로 다른 방을 구독할 수 없습니다.", traceId));
+	}
+
+	/** {@link #handleSubscribe}와 판정 방향이 반대인 이유는 그쪽 주석에 있다. */
+	private Mono<WsFrame> handleUnsubscribe(UUID requestedThreadId, UUID connectionThreadId, String traceId) {
+		if (requestedThreadId == null) {
+			return Mono.just(malformed(connectionThreadId, traceId));
+		}
+		if (!connectionThreadId.equals(requestedThreadId)) {
+			return Mono.empty();
+		}
+		return Mono.just(new ErrorFrame(connectionThreadId, "NOT_SUPPORTED",
+				"이 연결의 방은 해지할 수 없습니다. 연결을 닫아 주세요.", traceId));
 	}
 
 	/**
@@ -397,8 +481,14 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		return UUID.randomUUID().toString();
 	}
 
+	/** 턴 식별자가 있으면 그 값을 traceId로 쓴다(이슈 #160) — 한 턴이 내는 프레임과 로그를 이어 볼 수 있게. */
+	private static String traceIdOf(UUID turnId, String fallback) {
+		return turnId == null ? fallback : turnId.toString();
+	}
+
+	/** type만 먼저 읽기 위한 최소 봉투 — 서버 전용 타입 선별(handleInbound 주석)에만 쓴다. */
 	@JsonIgnoreProperties(ignoreUnknown = true)
-	private record InboundMessage(String type, String content) {
+	private record InboundEnvelope(String type) {
 	}
 
 	private record SessionInfo(String subject, String displayName, Instant tokenExpiresAt) {

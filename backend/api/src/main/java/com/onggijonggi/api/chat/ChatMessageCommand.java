@@ -13,7 +13,11 @@ import java.util.UUID;
  * @param from 작성자의 내부 app_user.id. 저장 경로에서만 쓰고 밖으로 내보내지 않는다
  * @param fromSubject 작성자의 Keycloak subject. 프레임이 사람을 가리키는 값
  * @param fromDisplayName 작성자의 표시 이름
+ * @param model {@code @AI} 턴에 쓸 게이트웨이 모델 별칭. null이면 서버 기본값(이슈 #160)
+ * @param clientMsgId 클라이언트가 만든 임시 메시지 id. 에코에 돌려준다(이슈 #160)
+ * @param turnId 클라이언트가 만든 턴 식별자. 에코·답변·대기 프레임에 돌려주고 취소 지목에 쓴다(이슈 #160)
+ * @param connectionId 이 발화가 들어온 커넥션. 턴 식별자를 이 커넥션 범위에서만 인정하는 데 쓴다
  */
 record ChatMessageCommand(UUID threadId, UUID from, String fromSubject, String fromDisplayName,
-		String content, String traceId) {
+		String content, String model, UUID clientMsgId, UUID turnId, UUID connectionId, String traceId) {
 }

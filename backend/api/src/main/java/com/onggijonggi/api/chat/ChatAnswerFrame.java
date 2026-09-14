@@ -23,10 +23,19 @@ import java.util.UUID;
  *               1:1이라 이 값이 곧 턴 식별자 역할을 한다(D5) — 같은 턴의 delta들은 모두 같은
  *               msgId·seq를 달고 온다. seq는 턴이 시작되는 순간 확정되므로, 스트리밍 도중
  *               도착한 사람 메시지가 이 답변 앞으로 끼어들지 않는다.
+ *
+ *               turnId는 이 턴을 부른 발화에 클라이언트가 실은 값이다(이슈 #160). 협업방에서는
+ *               남이 부른 턴도 같은 방에 흐르므로, 요청한 화면은 이 값으로 "내 질문의 답"을 고르고
+ *               취소할 때도 이 값을 쓴다. 발화에 없었으면 null이다.
+ *
+ *               model은 이 턴에 실제로 쓴 게이트웨이 모델 별칭이다 — 발화가 지정했으면 그 값,
+ *               비웠으면 서버 기본값이다.
  */
 public record ChatAnswerFrame(
 		UUID threadId,
 		UUID msgId,
+		UUID turnId,
+		String model,
 		long seq,
 		String delta,
 		List<Citation> citations,

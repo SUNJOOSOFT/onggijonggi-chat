@@ -61,4 +61,15 @@ class MsgTest {
 		assertThat(msg.getCompletedAt()).isNotNull();
 	}
 
+	@Test
+	void cancelKeepsThePartialContent() {
+		Msg msg = Msg.pendingAgent(UUID.randomUUID(), thrId, 1);
+
+		msg.cancel("여기까지 생성");
+
+		assertThat(msg.getStatus()).isEqualTo(MsgStatus.CANCELLED);
+		assertThat(msg.getContent()).isEqualTo("여기까지 생성");
+		assertThat(msg.getCompletedAt()).isNotNull();
+	}
+
 }

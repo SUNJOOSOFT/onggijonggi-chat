@@ -122,4 +122,13 @@ public class MsgPersistenceService {
 		});
 	}
 
+	/** 중단된 답변을 그때까지의 내용과 함께 CANCELLED로 닫는다(이슈 #160). 못 찾으면 조용히 넘어간다. */
+	@Transactional
+	public void cancelBlocking(UUID msgId, String partialContent) {
+		msgRepository.findById(msgId).ifPresent(msg -> {
+			msg.cancel(partialContent);
+			msgRepository.save(msg);
+		});
+	}
+
 }

@@ -114,10 +114,13 @@ class CollabMessageDispatcherTest {
 		verify(llm, timeout(1000).times(2)).streamChat(requests.capture());
 		assertThat(requests.getAllValues()).extracting(request -> request.messages().get(0).content())
 				.containsExactly("one", "two");
-		awaitFrameCount(room.frames, 6);
-		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").containsExactly(
+		awaitFrameCount(room.frames, 7);
+		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq")
+				.containsExactly(
 				message(room, "@AI one"),
 				message(room, "@AI two"),
+				// 앞 턴이 실행 중이라 두 번째 턴은 기다린다고 알린다(이슈 #160).
+				new ChatQueuedFrame(room.threadId, null, ChatQueuedStatus.QUEUED),
 				answer(room, "first", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE),
 				answer(room, "second", ChatAnswerStatus.STREAMING),
@@ -230,7 +233,8 @@ class CollabMessageDispatcherTest {
 		verify(llm, timeout(1000)).streamChat(any());
 		firstResponse.tryEmitError(new IllegalStateException("gateway failure"));
 
-		awaitFrameCount(room.frames, 5);
+		// 사람 메시지 2, 대기 알림 1, 오류 1, 다음 턴의 답변·done 2
+		awaitFrameCount(room.frames, 6);
 		assertThat(room.frames).anySatisfy(frame -> {
 			assertThat(frame).isInstanceOf(ErrorFrame.class);
 			assertThat(((ErrorFrame) frame).code()).isEqualTo("INTERNAL_ERROR");
@@ -503,7 +507,7 @@ class CollabMessageDispatcherTest {
 		room.registry.leave(room.threadId, room.connectionId, room.participant)
 				.ifPresent(generation -> dispatcher.closeGeneration(room.threadId, generation));
 
-		verify(msgPersistenceService, timeout(1000)).failBlocking(pending.getId(), MsgStatus.CANCELLED);
+		verify(msgPersistenceService, timeout(1000)).cancelBlocking(pending.getId(), "");
 	}
 
 	@Test
@@ -526,7 +530,158 @@ class CollabMessageDispatcherTest {
 		source.tryEmitComplete();
 
 		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "answer");
-		verify(msgPersistenceService, never()).failBlocking(pending.getId(), MsgStatus.CANCELLED);
+		verify(msgPersistenceService, never()).cancelBlocking(eq(pending.getId()), any());
+	}
+
+	/** 클라이언트가 실은 clientMsgId·turnId가 에코에, turnId와 쓴 모델이 그 발화가 부른 답변에 돌아온다(이슈 #160). */
+	@Test
+	void echoesTheClientIdsOnTheMessageAndTheTurnIdAndModelOnItsAnswer() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+		UUID clientMsgId = UUID.randomUUID();
+		UUID turnId = UUID.randomUUID();
+
+		dispatcher.dispatch(command(room, "@AI 질문", clientMsgId, turnId, null), room.membership.generation());
+
+		awaitFrameCount(room.frames, 3);
+		ChatMessageFrame echo = (ChatMessageFrame) room.frames.get(0);
+		assertThat(echo.clientMsgId()).isEqualTo(clientMsgId);
+		assertThat(echo.turnId()).isEqualTo(turnId);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.extracting(frame -> ((ChatAnswerFrame) frame).turnId(), frame -> ((ChatAnswerFrame) frame).model())
+				.containsOnly(tuple(turnId, "test-model"));
+	}
+
+	/** 실행 중인 턴을 멈추면 그때까지의 내용이 CANCELLED로 남고, done 뒤에 다음 턴이 시작된다. */
+	@Test
+	void cancelStopsTheActiveTurnKeepsItsPartialContentAndStartsTheNextTurn() {
+		TestRoom room = new TestRoom();
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
+		Sinks.Many<String> source = Sinks.many().unicast().onBackpressureBuffer();
+		AtomicBoolean upstreamCancelled = new AtomicBoolean();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(source.asFlux().doOnCancel(() -> upstreamCancelled.set(true)),
+				Flux.just("next"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(pending);
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+		UUID first = UUID.randomUUID();
+
+		dispatcher.dispatch(command(room, "@AI first", first), room.membership.generation());
+		dispatcher.dispatch(command(room, "@AI second", UUID.randomUUID()), room.membership.generation());
+		verify(llm, timeout(1000)).streamChat(any());
+		source.tryEmitNext("부분");
+		awaitFrameCount(room.frames, 4);
+		dispatcher.cancel(room.threadId, room.membership.generation(), first, room.connectionId);
+
+		awaitTrue(upstreamCancelled);
+		assertThat(upstreamCancelled).isTrue();
+		verify(msgPersistenceService, timeout(1000)).cancelBlocking(pending.getId(), "부분");
+		verify(llm, timeout(1000).times(2)).streamChat(any());
+		awaitFrameCount(room.frames, 7);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.extracting(frame -> ((ChatAnswerFrame) frame).delta(), frame -> ((ChatAnswerFrame) frame).status())
+				.containsExactly(tuple("부분", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE),
+						tuple("next", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE));
+	}
+
+	/** turnId는 클라이언트가 만든 값이라 그 발화가 들어온 커넥션에서만 인정한다 — 다른 커넥션이 같은 값을 보내도 턴은 계속된다. */
+	@Test
+	void ignoresACancelFromAnotherConnection() {
+		TestRoom room = new TestRoom();
+		AtomicBoolean upstreamCancelled = new AtomicBoolean();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.<String>never().doOnCancel(() -> upstreamCancelled.set(true)));
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+		UUID turnId = UUID.randomUUID();
+
+		dispatcher.dispatch(command(room, "@AI first", turnId), room.membership.generation());
+		verify(llm, timeout(1000)).streamChat(any());
+		// 같은 사용자라도 다른 탭(다른 커넥션)이다.
+		dispatcher.cancel(room.threadId, room.membership.generation(), turnId, UUID.randomUUID());
+
+		assertThat(upstreamCancelled).isFalse();
+		assertThat(room.frames).noneMatch(ChatAnswerFrame.class::isInstance);
+	}
+
+	/** 앞 턴이 있으면 뒤 턴은 기다린다는 것을 방에 알리고, 기다리는 중에 취소하면 큐에서 빠진다. */
+	@Test
+	void announcesQueuedTurnsAndDropsOneCancelledWhileWaiting() {
+		TestRoom room = new TestRoom();
+		Sinks.One<String> firstResponse = Sinks.one();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(firstResponse.asMono().flux(), Flux.just("never"));
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+		UUID second = UUID.randomUUID();
+
+		dispatcher.dispatch(command(room, "@AI first", UUID.randomUUID()), room.membership.generation());
+		dispatcher.dispatch(command(room, "@AI second", second), room.membership.generation());
+		verify(llm, timeout(1000)).streamChat(any());
+		awaitFrameCount(room.frames, 3);
+		assertThat(room.frames.get(2)).isEqualTo(new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.QUEUED));
+
+		dispatcher.cancel(room.threadId, room.membership.generation(), second, room.connectionId);
+		firstResponse.tryEmitValue("first");
+
+		awaitFrameCount(room.frames, 6);
+		assertThat(room.frames.get(3)).isEqualTo(new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.CANCELLED));
+		verify(llm, times(1)).streamChat(any());
+	}
+
+	/** 워커가 발화를 꺼내기 전에 온 취소도 받는다 — 그래서 에코를 기다리지 않고 중단할 수 있다. */
+	@Test
+	void cancelArrivingBeforeTheWorkerProcessesTheMessagePreventsTheTurn() throws InterruptedException {
+		TestRoom room = new TestRoom();
+		CountDownLatch workerBlocked = new CountDownLatch(1);
+		CountDownLatch releaseWorker = new CountDownLatch(1);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		// 워커가 처음 seq 블록을 예약하는 자리에서 붙잡아 둔다 — 그 사이에 취소를 넣는다.
+		when(msgPersistenceService.allocateSeqBlockBlocking(eq(room.threadId), anyInt())).thenAnswer(invocation -> {
+			workerBlocked.countDown();
+			releaseWorker.await(1, TimeUnit.SECONDS);
+			return 0L;
+		});
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+		UUID turnId = UUID.randomUUID();
+
+		try {
+			dispatcher.dispatch(command(room, "@AI stop me", turnId), room.membership.generation());
+			assertThat(workerBlocked.await(1, TimeUnit.SECONDS)).isTrue();
+			dispatcher.cancel(room.threadId, room.membership.generation(), turnId, room.connectionId);
+		} finally {
+			releaseWorker.countDown();
+		}
+
+		awaitFrameCount(room.frames, 2);
+		assertThat(room.frames.get(1)).isEqualTo(new ChatQueuedFrame(room.threadId, turnId, ChatQueuedStatus.CANCELLED));
+		// 발화 자체는 받은 것이라 저장한다 — 턴만 만들지 않는다.
+		verify(msgPersistenceService, timeout(1000)).persistHumanMessageBlocking(any(), anyLong(), eq(room.threadId),
+				eq(room.userId), eq("@AI stop me"));
+		verify(llm, never()).streamChat(any());
+	}
+
+	@Test
+	void usesTheModelTheMessageAskedForAndFallsBackToTheServerDefault() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("a"), Flux.just("b"));
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@AI one", null, null, "picked-model"), room.membership.generation());
+		dispatcher.dispatch(command(room, "@AI two", null, null, " "), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> requests = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000).times(2)).streamChat(requests.capture());
+		assertThat(requests.getAllValues()).extracting(ChatStreamRequest::modelId)
+				.containsExactly("picked-model", "test-model");
+		awaitFrameCount(room.frames, 6);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.extracting(frame -> ((ChatAnswerFrame) frame).model())
+				.containsExactly("picked-model", "picked-model", "test-model", "test-model");
 	}
 
 	@Test
@@ -567,8 +722,18 @@ class CollabMessageDispatcherTest {
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
+		return command(room, content, null);
+	}
+
+	/** 취소가 관심사인 테스트용 — turnId만 싣는다. 커넥션은 방의 연결(room.connectionId)이다. */
+	private static ChatMessageCommand command(TestRoom room, String content, UUID turnId) {
+		return command(room, content, null, turnId, null);
+	}
+
+	private static ChatMessageCommand command(TestRoom room, String content, UUID clientMsgId, UUID turnId,
+			String model) {
 		return new ChatMessageCommand(room.threadId, room.userId, room.participant.subject(),
-				room.participant.displayName(), content, "trace");
+				room.participant.displayName(), content, model, clientMsgId, turnId, room.connectionId, "trace");
 	}
 
 	/**
@@ -578,12 +743,12 @@ class CollabMessageDispatcherTest {
 	*/
 	/** msgId·seq는 아래 비교에서 무시되므로 자리만 채운다 — 그 계약은 전용 테스트가 본다. */
 	private static ChatMessageFrame message(TestRoom room, String content) {
-		return new ChatMessageFrame(room.threadId, null, 0L, room.participant.subject(),
+		return new ChatMessageFrame(room.threadId, null, null, null, 0L, room.participant.subject(),
 				room.participant.displayName(), content);
 	}
 
 	private static ChatAnswerFrame answer(TestRoom room, String delta, ChatAnswerStatus status) {
-		return new ChatAnswerFrame(room.threadId, null, 0L, delta, List.of(), false, status);
+		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status);
 	}
 
 	private static void awaitFrameCount(List<WsFrame> frames, int expected) {

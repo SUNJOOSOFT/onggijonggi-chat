@@ -17,11 +17,18 @@ import java.util.UUID;
  *               재접속 시 마지막 seq 이후만 따라잡는다. seq는 순서와 커서로만 쓰고 연속성은
  *               가정하지 않는다 — 블록 예약이 구멍을 남긴다.
  *
+ *               clientMsgId·turnId는 보낸 사람이 발화에 실은 값을 그대로 돌려준 것이다(이슈 #160).
+ *               보낸 사람의 화면은 먼저 그려둔 말풍선을 clientMsgId로 찾아 서버 msgId로 바꾸고, 방의
+ *               모든 화면은 turnId로 이 발화와 그 턴의 chat.answer·chat.queued를 잇는다. 저장하지
+ *               않으므로 이력(MsgItem)에는 없다.
+ *
  * @param msgId 이 메시지의 id. 저장되는 msg 행의 id와 같은 값이다
+ * @param clientMsgId 보낸 사람이 실은 임시 메시지 id. 없었으면 null
+ * @param turnId 보낸 사람이 실은 턴 식별자. 없었으면 null
  * @param seq 방 안에서의 순서. 방 워커가 직렬로 꺼내므로 방송 순서와 일치한다
  * @param from 작성자의 Keycloak subject
  * @param fromDisplayName 작성자의 표시 이름
  */
-public record ChatMessageFrame(UUID threadId, UUID msgId, long seq, String from, String fromDisplayName,
-		String content) implements WsFrame {
+public record ChatMessageFrame(UUID threadId, UUID msgId, UUID clientMsgId, UUID turnId, long seq, String from,
+		String fromDisplayName, String content) implements WsFrame {
 }
