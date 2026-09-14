@@ -473,6 +473,18 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     expect(second.protocols).toEqual(['access_token', healthy]);
 
     second.open();
+    // 열리기만 해서는 옛 소켓을 닫지 않는다 — 서버가 아직 방에 등록하기 전일 수 있다.
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(first.closedWith).toBeNull();
+
+    // 서버가 등록을 마치고 보내는 첫 프레임이 참여자 스냅샷이다.
+    second.message(
+      JSON.stringify({
+        type: 'presence.snapshot',
+        threadId: THREAD_ID,
+        participants: [],
+      }),
+    );
     await vi.waitFor(() => expect(first.closedWith).toBe(1000));
     expect(h.sockets).toHaveLength(2);
 
@@ -504,6 +516,36 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(first.closedWith).toBeNull();
     expect(h.connection.send('still-alive')).toBe(true);
+
+    h.connection.close();
+  });
+
+  it('새 소켓이 열렸지만 방 등록 전에 거부되면(error 프레임 뒤 종료) 옛 소켓을 닫지 않는다', async () => {
+    // 'open'에서 옛 소켓을 닫던 때는 서버가 방에 등록하기 전에 방이 비어, 흐르던 AI 답변이
+    // 취소되고 대기 턴이 버려졌다. 거부로 끝나는 새 소켓은 등록된 적이 없으니 더더욱 닫으면 안 된다.
+    const h = harness([
+      { accessToken: jwtDueInMs(150) },
+      { accessToken: jwtWithLife(300) },
+    ]);
+
+    const first = await h.waitForSocket(1);
+    first.open();
+
+    const second = await h.waitForSocket(2);
+    second.open();
+    second.message(
+      JSON.stringify({
+        type: 'error',
+        threadId: THREAD_ID,
+        code: 'FORBIDDEN',
+        message: 'x',
+        traceId: 't',
+      }),
+    );
+    second.serverClose(1000);
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(first.closedWith).toBeNull();
 
     h.connection.close();
   });

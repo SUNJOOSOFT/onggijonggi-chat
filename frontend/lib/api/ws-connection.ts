@@ -157,19 +157,37 @@ function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+/** 서버가 방 등록을 마쳤다는 신호인지(connectOnce의 onJoined). 파싱은 이 계층의 일이 아니지만 이
+ * 판정 하나만은 여기서 한다 — 선제 갱신에서만 쓰고, 첫 프레임 몇 개에만 돈다. 거부될 때 오는
+ * error 프레임은 등록이 아니므로 type까지 본다. */
+function isPresenceSnapshot(data: string): boolean {
+  try {
+    return (
+      (JSON.parse(data) as { type?: unknown }).type === 'presence.snapshot'
+    );
+  } catch {
+    return false;
+  }
+}
+
 /** 한 번 연결해서 끊길 때까지 기다린다. 열린 적이 있는지(opened)와 close code를 함께 돌려주는데,
  * 이 둘의 조합이 "인증이 거부됐다"와 "연결은 됐다가 끊겼다"를 가르는 유일한 단서다.
  *
- * onOpen은 close와 별개로 "이 소켓이 지금 열렸다"만 알려준다(이슈 #188) — 선제 갱신이 새 소켓을
- * 미리 열어 겹쳐 둘 때, 그 소켓이 실제로 열린 시점(그래야 옛 소켓을 닫아도 안전하다)을 알아야
- * 하는데 반환 Promise는 close 때까지 기다려서 그 용도로 못 쓴다. */
+ * onJoined는 close와 별개로 "서버가 이 연결을 방에 등록했다"만 알려준다(이슈 #188) — 선제 갱신이
+ * 새 소켓을 미리 열어 겹쳐 둘 때, 옛 소켓을 닫아도 안전한 시점을 알아야 하는데 반환 Promise는
+ * close 때까지 기다려서 그 용도로 못 쓴다.
+ *
+ * 그 시점은 'open'이 아니라 첫 presence.snapshot이다. 'open'은 HTTP 업그레이드 직후에 오지만 서버는
+ * 그 뒤 사용자·참가자 조회를 거쳐서야 방에 등록한다(CollabWebSocketHandler). 'open'에서 옛 소켓을
+ * 닫으면 그 사이에 방이 비어, 서버가 방 세대를 닫으며 흐르던 AI 답변을 취소하고 대기 턴을 버린다.
+ * 스냅샷은 등록이 끝난 뒤 그 연결에 가장 먼저 보내는 프레임이다. */
 function connectOnce(
   token: string,
   path: string,
   options: WsConnectionOptions,
   deps: WsConnectionDeps,
   onSocket: (socket: SocketLike) => void,
-  onOpen?: () => void,
+  onJoined?: () => void,
 ): Promise<{ opened: boolean; code: number }> {
   return new Promise((resolve) => {
     // 표준 WebSocket API는 핸드셰이크에 Authorization 헤더를 못 실으므로 서브프로토콜 두 값으로
@@ -178,14 +196,19 @@ function connectOnce(
     onSocket(socket);
 
     let opened = false;
+    let joined = false;
     socket.addEventListener('open', () => {
       opened = true;
       options.onOpenChange?.(true);
-      onOpen?.();
     });
     socket.addEventListener('message', (event) => {
       // 서버는 텍스트 프레임만 보낸다. Blob·ArrayBuffer가 오면 이 계층이 다룰 것이 아니다.
-      if (typeof event.data === 'string') options.onMessage(event.data);
+      if (typeof event.data !== 'string') return;
+      if (onJoined && !joined && isPresenceSnapshot(event.data)) {
+        joined = true;
+        onJoined();
+      }
+      options.onMessage(event.data);
     });
     socket.addEventListener('close', (event) => {
       // [#181 계측] 브라우저가 실제로 받는 close code/reason. 서버 의도(4000 등) ↔ 수신 코드 간극 확인용.
@@ -354,10 +377,10 @@ export function openWsConnection(
     }
 
     const oldSocket = socket;
-    let swapOpened = false;
-    let signalSwapOpened: (() => void) | undefined;
-    const swapOpenedSignal = new Promise<void>((resolve) => {
-      signalSwapOpened = resolve;
+    let swapJoined = false;
+    let signalSwapJoined: (() => void) | undefined;
+    const swapJoinedSignal = new Promise<void>((resolve) => {
+      signalSwapJoined = resolve;
     });
     // 새 소켓을 먼저 열어 옛 소켓과 겹친다(RoomSessionRegistry.add()가 "이미 다른 연결이
     // 있다"로 보고 presence.join을 쏘지 않게 하려는 것 — 위 connectAndProactivelyRefresh
@@ -374,15 +397,16 @@ export function openWsConnection(
         swapRef.current = s;
       },
       () => {
-        swapOpened = true;
-        signalSwapOpened?.();
+        swapJoined = true;
+        signalSwapJoined?.();
       },
     );
-    // 새 소켓이 열리는지(성공) 또는 열리지 못한 채 닫히는지(실패) 중 먼저 오는 쪽을 본다 —
-    // 실패면 swapPending 자체가 그 결과로 resolve되므로 별도 처리가 필요 없다.
-    await Promise.race([swapOpenedSignal, swapPending.then(() => undefined)]);
+    // 새 소켓이 방에 등록되는지(성공) 또는 등록 전에 닫히는지(실패) 중 먼저 오는 쪽을 본다 —
+    // 실패면 swapPending 자체가 그 결과로 resolve되므로 별도 처리가 필요 없다. 열리기만 하고
+    // 등록 전인 때 옛 소켓을 닫으면 방이 비는 순간이 생긴다(connectOnce의 onJoined 설명).
+    await Promise.race([swapJoinedSignal, swapPending.then(() => undefined)]);
 
-    if (!swapOpened) {
+    if (!swapJoined) {
       console.info('[#188][ws] proactive refresh handshake rejected — keeping current connection');
       socket = oldSocket;
       return await pending;
