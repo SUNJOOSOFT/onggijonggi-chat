@@ -25,14 +25,15 @@ Keycloak·BFF·PostgreSQL·LiteLLM을 함께 띄우는 절차는 루트 [INSTALL
 무관하다 — 위의 제약은 그대로다.
 
 ```
-bun run mock:ws        # ws://localhost:4001/api/ws/{threadId}
+bun run mock:ws        # ws://localhost:4001/api/ws
 ```
 
 WebSocket은 Next Route Handler로 흉내 낼 수 없어(`Request → Response` 모델이라 raw socket에 닿지
 못한다) 별도 프로세스로 뜬다. 그래서 HTTP 목업 라우트(`app/(chat)/api/chat/*`)와 토글이 따로다 —
 `.env.local`의 `NEXT_PUBLIC_MOCK_WS_URL`을 채우면 HTTP는 그대로 두고 WS만 이 서버로 간다.
 
-방은 `/api/ws/{threadId}`의 UUID 경로로, 목업 사용자 이름은 선택적인 `?user=`로 정한다. 같은 방에
+커넥션 하나가 여러 방을 나르고, 방은 `room.subscribe` 프레임의 UUID `threadId`로 건다. 목업 사용자
+이름은 선택적인 `?user=`로 정한다. 같은 방에
 둘이 붙으면 서로의 발화가 보이고 `@AI`가 들어간 발화에만 답변 스트림이 흐른다. 협업 채널 목록에는
 정상 스트리밍·AI 최초 오류·AI 도중 오류를 재현하는 UUID 방이 각각 제공된다.
 

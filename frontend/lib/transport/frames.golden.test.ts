@@ -57,6 +57,7 @@ const INBOUND_SAMPLES: {
 } = {
   'chat.message': {
     type: 'chat.message',
+    threadId: '',
     content: '',
     model: '',
     clientMsgId: '',

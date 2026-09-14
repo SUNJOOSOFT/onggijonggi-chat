@@ -7,14 +7,13 @@ import {
   ERROR_BEFORE_THREAD_ID,
   ERROR_MID_THREAD_ID,
   FORBIDDEN_FRAME_THREAD_ID,
-  FORBIDDEN_HANDSHAKE_THREAD_ID,
+  isWsPath,
   mentionsAi,
   type MockAiJob,
   MockAiQueue,
   MockRoomRegistry,
   NORMAL_THREAD_ID,
   parseInboundMessage,
-  parseWsPath,
   roomAccess,
   type RoomMember,
   scenarioForRoom,
@@ -62,72 +61,75 @@ function job(prompt: string, connectionId = 'c1'): MockAiJob {
   };
 }
 
-describe('parseWsPath', () => {
-  it('정확한 UUID 방 경로만 받는다', () => {
-    expect(parseWsPath(`/api/ws/${NORMAL_THREAD_ID}`)).toEqual({
-      kind: 'valid',
-      threadId: NORMAL_THREAD_ID,
+describe('isWsPath', () => {
+  it('방 없는 단일 경로만 받는다(이슈 #161)', () => {
+    expect(isWsPath('/api/ws')).toBe(true);
+    expect(isWsPath(`/api/ws/${NORMAL_THREAD_ID}`)).toBe(false);
+    expect(isWsPath('/api/ws/')).toBe(false);
+  });
+});
+
+describe('roomAccess', () => {
+  it('예약 threadId만 접근을 거부한다', () => {
+    expect(roomAccess(NORMAL_THREAD_ID)).toBe('allow');
+    expect(roomAccess(FORBIDDEN_FRAME_THREAD_ID)).toBe('deny');
+  });
+});
+
+describe('parseInboundMessage', () => {
+  const subscribe = (threadId: string) =>
+    parseInboundMessage(JSON.stringify({ type: 'room.subscribe', threadId }));
+
+  it('최소 DTO를 받고 정상 content의 공백을 보존한다', () => {
+    expect(
+      parseInboundMessage(
+        JSON.stringify({
+          type: 'chat.message',
+          threadId: NORMAL_THREAD_ID,
+          content: '  hello  ',
+        }),
+      ),
+    ).toEqual({
+      kind: 'message',
+      message: {
+        type: 'chat.message',
+        threadId: NORMAL_THREAD_ID,
+        content: '  hello  ',
+        clientMsgId: null,
+        turnId: null,
+      },
     });
-    expect(parseWsPath('/api/ws')).toBeNull();
-    expect(parseWsPath(`/api/ws/${NORMAL_THREAD_ID}/extra`)).toBeNull();
   });
 
-  it('형식이 잘못된 threadId는 핸드셰이크 뒤 오류를 보낼 수 있게 구분한다', () => {
-    expect(parseWsPath('/api/ws/not-a-uuid')).toEqual({
-      kind: 'invalid-thread',
-      threadId: 'not-a-uuid',
+  it('방을 가리키지 않는 발화는 형식 오류다(이슈 #161)', () => {
+    expect(
+      parseInboundMessage(
+        JSON.stringify({ type: 'chat.message', content: 'hi' }),
+      ),
+    ).toEqual({ kind: 'malformed' });
+  });
+
+  it('UUID로 못 읽는 threadId는 서버처럼 형식 오류로 본다', () => {
+    expect(subscribe('not-a-uuid')).toEqual({ kind: 'malformed' });
+    // Long.parseLong 범위를 넘는 조각은 서버도 거절한다.
+    expect(subscribe('12345678901234567-1-1-1-1')).toEqual({
+      kind: 'malformed',
+    });
+    expect(subscribe('ffffffffffffffff-1-1-1-1')).toEqual({
+      kind: 'malformed',
     });
   });
 
   it('백엔드 UUID.fromString처럼 조각별 자릿수를 강제하지 않는다', () => {
     // Long.parseLong(part, 16)은 조각 자릿수를 검사하지 않으므로 표준 8-4-4-4-12보다
     // 짧거나 긴 16진 조각도 실서버는 통과시킨다 — 목업도 같은 threadId를 받아야 한다.
-    expect(parseWsPath('/api/ws/1-2-3-4-5')).toEqual({
-      kind: 'valid',
+    expect(subscribe('1-2-3-4-5')).toEqual({
+      kind: 'subscribe',
       threadId: '1-2-3-4-5',
     });
-    expect(
-      parseWsPath('/api/ws/123456789-1111-4111-8111-111111111111'),
-    ).toEqual({
-      kind: 'valid',
+    expect(subscribe('123456789-1111-4111-8111-111111111111')).toEqual({
+      kind: 'subscribe',
       threadId: '123456789-1111-4111-8111-111111111111',
-    });
-  });
-
-  it('Long.parseLong 범위를 넘는 조각은 서버처럼 잘못된 threadId로 본다', () => {
-    expect(parseWsPath('/api/ws/12345678901234567-1-1-1-1')).toEqual({
-      kind: 'invalid-thread',
-      threadId: '12345678901234567-1-1-1-1',
-    });
-    expect(parseWsPath('/api/ws/ffffffffffffffff-1-1-1-1')).toEqual({
-      kind: 'invalid-thread',
-      threadId: 'ffffffffffffffff-1-1-1-1',
-    });
-  });
-});
-
-describe('roomAccess', () => {
-  it('예약 threadId만 접근을 거부하고 방식을 구분한다', () => {
-    expect(roomAccess(NORMAL_THREAD_ID)).toBe('allow');
-    expect(roomAccess(FORBIDDEN_HANDSHAKE_THREAD_ID)).toBe('deny-handshake');
-    expect(roomAccess(FORBIDDEN_FRAME_THREAD_ID)).toBe('deny-frame');
-  });
-});
-
-describe('parseInboundMessage', () => {
-  it('최소 DTO를 받고 정상 content의 공백을 보존한다', () => {
-    expect(
-      parseInboundMessage(
-        JSON.stringify({ type: 'chat.message', content: '  hello  ' }),
-      ),
-    ).toEqual({
-      kind: 'message',
-      message: {
-        type: 'chat.message',
-        content: '  hello  ',
-        clientMsgId: null,
-        turnId: null,
-      },
     });
   });
 
@@ -136,6 +138,7 @@ describe('parseInboundMessage', () => {
       parseInboundMessage(
         JSON.stringify({
           type: 'chat.message',
+          threadId: NORMAL_THREAD_ID,
           content: 'hi',
           clientMsgId: 'c1',
           turnId: 't1',
@@ -146,6 +149,7 @@ describe('parseInboundMessage', () => {
       kind: 'message',
       message: {
         type: 'chat.message',
+        threadId: NORMAL_THREAD_ID,
         content: 'hi',
         clientMsgId: 'c1',
         turnId: 't1',

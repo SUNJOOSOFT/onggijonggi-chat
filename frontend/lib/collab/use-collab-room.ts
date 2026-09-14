@@ -1,7 +1,9 @@
 /********************************************************
  파일명 : use-collab-room.ts (lib/collab)
  설 명 : 협업방 하나에 붙어 프레임을 상태로 접고, 메시지를 올려보내는 훅(이슈 #19).
- 연결 유지·재연결·재로그인은 전부 ws-connection.ts(#4)의 몫이고 여기서 다시 하지 않는다.
+ 연결 유지·재연결·재로그인은 전부 ws-connection.ts(#4)의 몫이고 여기서 다시 하지 않는다. 커넥션은
+ 탭이 공유하고(ws-rooms.ts, 이슈 #161) 이 훅은 그 위에 방 하나를 구독한다 — 화면을 떠나도 커넥션은
+ 남고 이 방 구독만 풀린다.
 
  이 훅이 실제로 더하는 것은 화면이 알아야 하는 "지금 붙어 있나"의 네 단계다. 붙지 못한 이유를
  클라이언트가 알 수 없다는 제약(브라우저가 핸드셰이크 status를 안 준다, #4 주석) 때문에 처음
@@ -13,9 +15,8 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchCollabMessages } from '@/lib/api/collab';
-import { type WsConnection, openWsConnection } from '@/lib/api/ws-connection';
+import { type RoomSubscription, subscribeRoom } from '@/lib/api/ws-rooms';
 import type { ClientFrame } from '@/lib/transport/frames';
-import { parseFrameFromText } from '@/lib/transport/parse-frame';
 import { generateUUID } from '@/lib/utils';
 import {
   type RoomState,
@@ -76,7 +77,7 @@ export interface CollabRoom {
 export function useCollabRoom(threadId: string): CollabRoom {
   const [state, setState] = useState<RoomState>(initialRoomState);
   const [connection, setConnection] = useState<RoomConnection>('connecting');
-  const connectionRef = useRef<WsConnection | null>(null);
+  const subscriptionRef = useRef<RoomSubscription | null>(null);
   /** 따라잡기 요청에 실을 커서. WS 콜백이 최신 값을 봐야 해서 ref로 따로 둔다. */
   const lastSeqRef = useRef<number | null>(null);
   const [participantsRevision, setParticipantsRevision] = useState(0);
@@ -111,36 +112,48 @@ export function useCollabRoom(threadId: string): CollabRoom {
     let reconnected = false;
     let alive = true;
 
-    const ws = openWsConnection(threadId, {
-      onMessage: (data) => {
-        // 해석되지 않는 프레임은 parse-frame.ts가 null로 흘려보낸다 — 화면을 멈출 이유가 아니다.
-        const frame = parseFrameFromText(data);
-        if (frame !== null) {
-          if (frame.type === 'error') {
-            console.error(`[collab] WS error traceId=${frame.traceId}`);
-          }
-          // info 알림(#29)은 지나가도 되는 안내라 토스트로만 띄운다 — 상태에 남기지 않아
-          // applyFrame이 그대로 흘려보낸다. warning은 반대로 배너로 남는다.
-          if (frame.type === 'system.notice' && frame.severity === 'info') {
-            toast.info(noticeMessage(frame.message));
-          }
-          // 참여자 명단은 이 훅의 상태가 아니라 REST를 읽는 참여자 시트가 들고 있다.
-          // 값을 세지 않고 눈금만 올려, 시트가 "다시 불러오라"는 신호로만 쓰게 한다 —
-          // action으로 분기할 이유가 없다(어느 액션이든 답은 재조회다).
-          if (frame.type === 'participant.changed') {
-            setParticipantsRevision((current) => current + 1);
-          }
-          setState((current) => applyFrame(current, frame));
+    /**
+     * 끊겼다 다시 붙으면 그 동안 오간 메시지를 따라잡는다(이슈 #190). 방송은 그 순간 붙어
+     * 있는 연결에만 가고 다시 틀어주지 않아, 재연결만으로는 구멍이 그대로 남는다.
+     *
+     * 마지막으로 받은 seq 이후만 요청한다 — "빠진 번호를 기다린다"가 아니다. 서버가 seq를
+     * 블록으로 예약해 쓰지 않은 번호가 구멍으로 남으므로, 다음 번호를 기다리면 영영 멈춘다.
+     * 아직 하나도 못 받았으면(null) 커서 없이 전부 받는다.
+     */
+    const catchUp = () => {
+      fetchCollabMessages(threadId, lastSeqRef.current ?? undefined)
+        .then((items) => {
+          if (alive) setState((current) => applyHistory(current, items));
+        })
+        .catch((error) => {
+          console.error(
+            '[collab] 끊긴 동안의 대화를 따라잡지 못했습니다',
+            error,
+          );
+        });
+    };
+
+    const subscription = subscribeRoom(threadId, {
+      onFrame: (frame) => {
+        if (frame.type === 'error') {
+          console.error(`[collab] WS error traceId=${frame.traceId}`);
+          // 서버가 이 방 구독을 잃었다(이슈 #161). 다시 거는 것은 허브가 이미 했고, 그 사이의
+          // 구멍은 재연결과 같은 방법으로 메운다.
+          if (frame.code === 'NOT_SUBSCRIBED') catchUp();
         }
+        // info 알림(#29)은 지나가도 되는 안내라 토스트로만 띄운다 — 상태에 남기지 않아
+        // applyFrame이 그대로 흘려보낸다. warning은 반대로 배너로 남는다.
+        if (frame.type === 'system.notice' && frame.severity === 'info') {
+          toast.info(noticeMessage(frame.message));
+        }
+        // 참여자 명단은 이 훅의 상태가 아니라 REST를 읽는 참여자 시트가 들고 있다.
+        // 값을 세지 않고 눈금만 올려, 시트가 "다시 불러오라"는 신호로만 쓰게 한다 —
+        // action으로 분기할 이유가 없다(어느 액션이든 답은 재조회다).
+        if (frame.type === 'participant.changed') {
+          setParticipantsRevision((current) => current + 1);
+        }
+        setState((current) => applyFrame(current, frame));
       },
-      /**
-       * 끊겼다 다시 붙으면 그 동안 오간 메시지를 따라잡는다(이슈 #190). 방송은 그 순간 붙어
-       * 있는 연결에만 가고 다시 틀어주지 않아, 재연결만으로는 구멍이 그대로 남는다.
-       *
-       * 마지막으로 받은 seq 이후만 요청한다 — "빠진 번호를 기다린다"가 아니다. 서버가 seq를
-       * 블록으로 예약해 쓰지 않은 번호가 구멍으로 남으므로, 다음 번호를 기다리면 영영 멈춘다.
-       * 아직 하나도 못 받았으면(null) 커서 없이 전부 받는다.
-       */
       onOpenChange: (open) => {
         setConnection(open ? 'open' : 'reconnecting');
         if (!open) {
@@ -149,28 +162,22 @@ export function useCollabRoom(threadId: string): CollabRoom {
         }
         if (!reconnected) return;
         reconnected = false;
-        fetchCollabMessages(threadId, lastSeqRef.current ?? undefined)
-          .then((items) => {
-            if (alive) setState((current) => applyHistory(current, items));
-          })
-          .catch((error) => {
-            console.error('[collab] 끊긴 동안의 대화를 따라잡지 못했습니다', error);
-          });
+        catchUp();
       },
     });
-    connectionRef.current = ws;
+    subscriptionRef.current = subscription;
 
     return () => {
       alive = false;
-      ws.close();
-      connectionRef.current = null;
+      subscription.close();
+      subscriptionRef.current = null;
     };
   }, [threadId]);
 
-  // 거부를 통보받았으면 재연결을 멈춘다. #4의 루프는 끊긴 이유를 모르니 그대로 두면 권한 없는
-  // 방을 계속 두드리게 되고, 그 시도는 핸드셰이크 레이트리밋(#6)에도 그대로 쌓인다.
+  // 거부를 통보받았으면 이 방 구독을 푼다 — 커넥션은 다른 방과 함께 쓰므로 닫지 않는다(이슈 #161).
+  // 구독을 남겨 두면 재연결할 때마다 권한 없는 방을 다시 두드린다.
   useEffect(() => {
-    if (isForbidden(state.error)) connectionRef.current?.close();
+    if (isForbidden(state.error)) subscriptionRef.current?.close();
   }, [state.error]);
 
   useEffect(() => {
@@ -180,19 +187,24 @@ export function useCollabRoom(threadId: string): CollabRoom {
   }, [connection]);
 
   const sendFrame = useCallback(
-    (frame: ClientFrame) =>
-      connectionRef.current?.send(JSON.stringify(frame)) ?? false,
+    (frame: ClientFrame) => subscriptionRef.current?.send(frame) ?? false,
     [],
   );
 
   const send = useCallback(
     (content: string, model?: string) => {
       const ids = { clientMsgId: generateUUID(), turnId: generateUUID() };
-      return sendFrame({ type: 'chat.message', content, model, ...ids })
+      return sendFrame({
+        type: 'chat.message',
+        threadId,
+        content,
+        model,
+        ...ids,
+      })
         ? ids
         : null;
     },
-    [sendFrame],
+    [sendFrame, threadId],
   );
 
   const cancel = useCallback(

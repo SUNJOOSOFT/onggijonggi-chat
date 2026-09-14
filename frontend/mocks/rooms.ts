@@ -1,6 +1,6 @@
 /********************************************************
  파일명 : rooms.ts (mocks)
- 설 명 : 목업 WS 서버의 순수 로직. UUID 방 경로, 최소 inbound DTO, 방 방송과 AI FIFO를
+ 설 명 : 목업 WS 서버의 순수 로직. 단일 경로, 최소 inbound DTO, 방 방송과 AI FIFO를
  소켓·Bun 런타임에서 분리해 vitest로 검증한다.
  *********************************************************/
 
@@ -19,16 +19,13 @@ export const ERROR_BEFORE_THREAD_ID = '22222222-2222-4222-8222-222222222222';
 export const ERROR_MID_THREAD_ID = '33333333-3333-4333-8333-333333333333';
 
 /**
- * 방 접근 거부를 재현하는 threadId. 실서버가 인가 실패를 **핸드셰이크 거부**로 줄지
- * **error 프레임**으로 줄지는 이슈 #22 완료 기준에 미정 항목으로 남아 있다 — 화면(#19) 처리가
- * 완전히 갈리는 분기라, 목업은 두 방식을 모두 재현해 양쪽 UI를 다 시험해볼 수 있게 한다.
+ * 방 접근 거부를 재현하는 threadId. 구독하면 실서버처럼 그 방 threadId로 FORBIDDEN이 오고 커넥션은
+ * 유지된다. 핸드셰이크에는 방이 없어(이슈 #161) 방 단위 핸드셰이크 거부는 재현할 대상이 아니다.
  */
-export const FORBIDDEN_HANDSHAKE_THREAD_ID =
-  '44444444-4444-4444-8444-444444444444';
 export const FORBIDDEN_FRAME_THREAD_ID = '55555555-5555-4555-8555-555555555555';
 
 /**
- * 백엔드 `CollabWebSocketHandler`는 threadId를 `UUID.fromString`으로 그대로 파싱한다. 이
+ * 백엔드는 프레임의 threadId를 Jackson이 `UUID.fromString`으로 그대로 파싱한다. 이
  * 파서는 `-`로 나눈 조각을 각각 `Long.parseLong(part, 16)`으로만 읽어 조각별 자릿수를 강제하지
  * 않는다(표준 8-4-4-4-12보다 짧거나 길어도 통과한다). 목업이 RFC4122 정확한 자릿수만 받으면
  * 실서버는 받는 threadId를 목업만 튕겨내는 불일치가 생기므로, 여기서는 자릿수를 강제하지 않고
@@ -56,35 +53,22 @@ export function scenarioForRoom(threadId: string): MockRoomScenario {
   return 'normal';
 }
 
-export type RoomAccess = 'allow' | 'deny-handshake' | 'deny-frame';
+export type RoomAccess = 'allow' | 'deny';
 
-/** 위 두 예약 threadId 외에는 전부 허용한다(목업엔 참여자 테이블이 없다). */
+/** 위 예약 threadId 외에는 전부 허용한다(목업엔 참여자 테이블이 없다). */
 export function roomAccess(threadId: string): RoomAccess {
-  if (threadId === FORBIDDEN_HANDSHAKE_THREAD_ID) return 'deny-handshake';
-  if (threadId === FORBIDDEN_FRAME_THREAD_ID) return 'deny-frame';
-  return 'allow';
+  return threadId === FORBIDDEN_FRAME_THREAD_ID ? 'deny' : 'allow';
 }
 
-export type WsPathResult =
-  | { kind: 'valid'; threadId: string }
-  | { kind: 'invalid-thread'; threadId: string };
-
-/** 실서버처럼 `/api/ws/{threadId}` 한 세그먼트만 받고 UUID 형식은 별도로 판정한다. */
-export function parseWsPath(pathname: string): WsPathResult | null {
-  const match = /^\/api\/ws\/([^/]+)$/.exec(pathname);
-  if (!match) return null;
-  try {
-    const threadId = decodeURIComponent(match[1]);
-    return isJavaUuid(threadId)
-      ? { kind: 'valid', threadId }
-      : { kind: 'invalid-thread', threadId };
-  } catch {
-    return null;
-  }
+/** 실서버처럼 방 없는 `/api/ws` 하나만 받는다(이슈 #161). */
+export function isWsPath(pathname: string): boolean {
+  return pathname === '/api/ws';
 }
 
 export type InboundChatMessage = {
   type: 'chat.message';
+  /** 말할 방(이슈 #161). 이 커넥션이 구독한 방이어야 한다. */
+  threadId: string;
   content: string;
   /** 클라이언트가 만든 임시 메시지 id(이슈 #160). 에코에 그대로 돌려준다. */
   clientMsgId: string | null;
@@ -117,6 +101,11 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value !== '';
 }
 
+/** 실서버는 UUID로 못 읽는 threadId를 역직렬화 단계에서 형식 오류로 거른다. */
+function threadIdValue(value: unknown): value is string {
+  return nonEmptyString(value) && isJavaUuid(value);
+}
+
 /** 서버 전용 타입은 무시하고, 그 밖에는 클라이언트가 올려보낼 수 있는 타입(InboundFrame.java)만 허용한다. */
 export function parseInboundMessage(raw: string): InboundParseResult {
   try {
@@ -129,18 +118,19 @@ export function parseInboundMessage(raw: string): InboundParseResult {
     }
     if (value.type === 'ping') return { kind: 'ping' };
     if (value.type === 'chat.cancel') {
-      return nonEmptyString(value.threadId) && nonEmptyString(value.turnId)
+      return threadIdValue(value.threadId) && nonEmptyString(value.turnId)
         ? { kind: 'cancel', threadId: value.threadId, turnId: value.turnId }
         : { kind: 'malformed' };
     }
     if (value.type === 'room.subscribe' || value.type === 'room.unsubscribe') {
-      if (!nonEmptyString(value.threadId)) return { kind: 'malformed' };
+      if (!threadIdValue(value.threadId)) return { kind: 'malformed' };
       return value.type === 'room.subscribe'
         ? { kind: 'subscribe', threadId: value.threadId }
         : { kind: 'unsubscribe', threadId: value.threadId };
     }
     if (
       value.type !== 'chat.message' ||
+      !threadIdValue(value.threadId) ||
       typeof value.content !== 'string' ||
       value.content.trim() === ''
     ) {
@@ -151,6 +141,7 @@ export function parseInboundMessage(raw: string): InboundParseResult {
       kind: 'message',
       message: {
         type: 'chat.message',
+        threadId: value.threadId,
         content: value.content,
         clientMsgId: nonEmptyString(value.clientMsgId)
           ? value.clientMsgId
@@ -171,7 +162,7 @@ export function aiPrompt(content: string): string | null {
 }
 
 export function errorFrame(
-  threadId: string,
+  threadId: string | null,
   code: string,
   message: string,
   traceId: string,

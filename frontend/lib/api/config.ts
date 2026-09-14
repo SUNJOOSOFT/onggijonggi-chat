@@ -58,7 +58,8 @@ export const collabThreadMessagesPath = (
   return afterSeq === undefined ? base : `${base}?afterSeq=${afterSeq}`;
 };
 
-/** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3). */
+/** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3).
+ * 경로에 방이 없다 — 커넥션 하나가 여러 방을 나르고, 방은 room.subscribe 프레임으로 건다(이슈 #161). */
 export const WS_PATH = '/api/ws';
 
 /**
@@ -79,16 +80,6 @@ export const bffWsUrl = (path: string): string => {
   const base = BFF_BASE_URL || window.location.origin;
   return `${base}${path}`.replace(/^http/, 'ws');
 };
-
-/**
- * 협업방 WS 경로 — 어느 방에 들어갈지를 경로 세그먼트로 넘긴다(이슈 #19).
- *
- * 서버가 읽는 방식에 맞춘 것이다. #16(PR #77)의 WsHandlerMappingConfig가 `/api/ws/{threadId}`로
- * 매핑하고 CollabWebSocketHandler가 그 세그먼트를 UUID로 파싱한다 — 쿼리로 보내면 라우팅
- * 자체가 되지 않는다. 그래서 실서버에서는 threadId가 UUID여야 한다(목업은 검증하지 않는다).
- */
-export const collabWsPath = (threadId: string): string =>
-  `${WS_PATH}/${encodeURIComponent(threadId)}`;
 
 /** 세션별 대화 이력 조회 경로. */
 export const chatSessionMessagesPath = (sessionId: string): string =>

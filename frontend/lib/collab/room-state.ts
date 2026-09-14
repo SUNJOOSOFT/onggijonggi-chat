@@ -449,7 +449,8 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
     case 'chat.queued':
       return state;
 
-    // 연결 생존 확인의 응답이라 방 상태와 무관하다. 하트비트 동작은 #161이 붙인다.
+    // 연결 생존 확인의 응답이라 방 상태와 무관하다. 허브(ws-rooms.ts)가 화면에 넘기지 않지만
+    // WsFrame 유니온의 한 갈래라 여기서도 받는다.
     case 'pong':
       return state;
 

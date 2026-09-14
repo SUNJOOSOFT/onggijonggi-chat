@@ -25,11 +25,19 @@
  여부의 판정을 close code가 아니라 next-auth에 넘기는 것이다. 세션이 실제로 죽었으면
  (RefreshAccessTokenError·토큰 없음) freshToken()이 그 자리에서 재로그인시키고, 살아 있으면
  새 토큰을 받아 백오프 재연결을 이어간다.
+
+ 커넥션은 방이 아니라 사용자(탭)의 것이다(이슈 #161). /api/ws 하나를 열고, 소켓이 열릴 때마다
+ options.rooms()가 돌려주는 방을 room.subscribe로 다시 건다 — 서버는 끊긴 커넥션이 어느 방에
+ 있었는지 기억하지 않는다. 방별 프레임을 가르는 일은 이 계층 위(ws-rooms.ts)가 한다.
+
+ 커넥션이 하나로 모이면 방을 옮길 때마다 새로 붙던 계기가 사라져, 절전 복귀 등으로 소켓이 죽었는데
+ close가 오지 않으면 화면이 계속 "연결됨"인 채 아무것도 못 받는다. 그래서 소켓마다 ping을 보내고
+ 그 사이 아무 프레임도 오지 않으면 죽은 것으로 보고 다시 붙는다(하트비트).
  *********************************************************/
 
 import { getSession, signIn } from 'next-auth/react';
 import { decodeJwtTimes, proactiveRefreshMarginMs } from '../auth/refresh-gate';
-import { bffWsUrl, collabWsPath } from './config';
+import { WS_PATH, bffWsUrl } from './config';
 
 /** JWT payload의 exp를 읽어 지금 대비 몇 초 남았는지. 파싱 불가·exp 없음이면 null.
  * freshToken()의 근-만료 토큰 판정(이슈 #181)에 쓴다 — `[#181][ws]` 계측 로그에도 함께 실린다.
@@ -54,6 +62,14 @@ const CLOSE_ABNORMAL = 1006;
 
 /** 재연결 백오프 상한 — http.ts의 429 백오프와 같은 값으로 맞춘다. */
 const RECONNECT_BACKOFF_CAP_MS = 10_000;
+
+/** 하트비트 주기. 매 주기마다 "지난 ping 뒤로 받은 프레임이 있었나"를 보고, 있었으면 다시 ping을
+ * 보내고 없었으면 소켓을 버린다 — 그래서 죽은 소켓은 늦어도 두 주기 안에 드러난다. 백그라운드 탭은
+ * 브라우저가 타이머를 분 단위로 늦추지만, 판정이 "주기 사이에 뭐라도 받았나"라 늦춰져도 오판하지
+ * 않는다. */
+export const HEARTBEAT_INTERVAL_MS = 20_000;
+
+const PING_FRAME = JSON.stringify({ type: 'ping' });
 
 /** 핸드셰이크가 이만큼 연속으로 거부되면 세션을 다시 조회한다. 1회로 하면 서버가 잠깐 흔들릴 때마다
  * /api/auth/session을 두드리게 되고, 너무 늘리면 낡은 토큰으로 헛도는 시간이 길어진다. 3회면 백오프
@@ -104,8 +120,7 @@ export interface SocketLike {
 }
 
 interface WsConnectionDeps {
-  /** URL 결정까지 소켓 팩토리가 맡는다 — 그래야 테스트가 window.location에 기대지 않는다.
-   * 방 경로는 openWsConnection의 threadId로 결정한다. */
+  /** URL 결정까지 소켓 팩토리가 맡는다 — 그래야 테스트가 window.location에 기대지 않는다. */
   createSocket: (protocols: string[], path: string) => SocketLike;
   getSession: typeof getSession;
   signIn: typeof signIn;
@@ -127,6 +142,13 @@ export interface WsConnectionOptions {
   onForcedReauth?: () => void;
   /** 연결이 열리고 끊길 때마다 불린다. 화면이 "연결 중" 표시와 전송 버튼 활성화를 이걸로 정한다. */
   onOpenChange?: (open: boolean) => void;
+  /** 소켓이 열릴 때마다 구독할 방(이슈 #161). 열리는 순간의 값을 읽는다 — 재연결·선제 갱신으로 새
+   * 소켓이 열려도 그때 보고 있는 방이 다시 걸린다. 열려 있는 동안 늘거나 준 방은 호출부가 send로
+   * 직접 구독·해지한다. */
+  rooms?: () => string[];
+  /** 재연결 루프가 스스로 끝났을 때(정상 종료 1000·재로그인) 불린다. close()로 끝낸 때는 부르지 않는다
+   * — 호출부가 이 커넥션을 더 쓰지 않도록 버리는 신호다. */
+  onEnd?: () => void;
 }
 
 export interface WsConnection {
@@ -157,30 +179,38 @@ function realSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/** 서버가 방 등록을 마쳤다는 신호인지(connectOnce의 onJoined). 파싱은 이 계층의 일이 아니지만 이
- * 판정 하나만은 여기서 한다 — 선제 갱신에서만 쓰고, 첫 프레임 몇 개에만 돈다. 거부될 때 오는
- * error 프레임은 등록이 아니므로 type까지 본다. */
-function isPresenceSnapshot(data: string): boolean {
+/** 방 구독의 답인지 — 답이면 그 방 threadId(connectOnce의 onJoined). 파싱은 이 계층의 일이 아니지만
+ * 이 판정 하나만은 여기서 한다 — 선제 갱신에서만 쓰고, 구독 답이 올 때까지만 돈다. 구독이 걸리면
+ * 서버가 그 방의 presence.snapshot을 가장 먼저 보내고, 거부되면 그 방 threadId를 단 error를 보낸다
+ * (CollabWebSocketHandler.handleSubscribe). 어느 쪽이든 그 방에 대해서는 기다릴 것이 끝났다. */
+function subscriptionAnswerOf(data: string): string | null {
   try {
-    return (
-      (JSON.parse(data) as { type?: unknown }).type === 'presence.snapshot'
-    );
+    const frame = JSON.parse(data) as { type?: unknown; threadId?: unknown };
+    if (frame.type !== 'presence.snapshot' && frame.type !== 'error') {
+      return null;
+    }
+    return typeof frame.threadId === 'string' ? frame.threadId : null;
   } catch {
-    return false;
+    return null;
   }
 }
 
 /** 한 번 연결해서 끊길 때까지 기다린다. 열린 적이 있는지(opened)와 close code를 함께 돌려주는데,
  * 이 둘의 조합이 "인증이 거부됐다"와 "연결은 됐다가 끊겼다"를 가르는 유일한 단서다.
  *
- * onJoined는 close와 별개로 "서버가 이 연결을 방에 등록했다"만 알려준다(이슈 #188) — 선제 갱신이
- * 새 소켓을 미리 열어 겹쳐 둘 때, 옛 소켓을 닫아도 안전한 시점을 알아야 하는데 반환 Promise는
- * close 때까지 기다려서 그 용도로 못 쓴다.
+ * 열리면 곧바로 options.rooms()의 방을 구독한다 — 화면에 열림을 알리기 전에 보낸다. 서버는 인바운드를
+ * 순서대로 처리하므로, 열림을 본 화면이 이어서 보내는 발화는 구독이 걸린 뒤에 처리된다.
  *
- * 그 시점은 'open'이 아니라 첫 presence.snapshot이다. 'open'은 HTTP 업그레이드 직후에 오지만 서버는
- * 그 뒤 사용자·참가자 조회를 거쳐서야 방에 등록한다(CollabWebSocketHandler). 'open'에서 옛 소켓을
- * 닫으면 그 사이에 방이 비어, 서버가 방 세대를 닫으며 흐르던 AI 답변을 취소하고 대기 턴을 버린다.
- * 스냅샷은 등록이 끝난 뒤 그 연결에 가장 먼저 보내는 프레임이다. */
+ * onJoined는 close와 별개로 "서버가 이 연결을 구독한 방 전부에 등록했다"만 알려준다(이슈 #188·#161)
+ * — 선제 갱신이 새 소켓을 미리 열어 겹쳐 둘 때, 옛 소켓을 닫아도 안전한 시점을 알아야 하는데 반환
+ * Promise는 close 때까지 기다려서 그 용도로 못 쓴다.
+ *
+ * 그 시점은 'open'이 아니라 방마다의 구독 답(스냅샷 또는 거부)이 다 온 때다. 'open'에서 옛 소켓을
+ * 닫으면 새 소켓의 구독이 걸리기 전에 방이 비어, 서버가 방 세대를 닫으며 흐르던 AI 답변을 취소하고
+ * 대기 턴을 버린다. 구독할 방이 없으면 기다릴 것도 없어 'open'이 곧 그 시점이다.
+ *
+ * 하트비트도 소켓마다 여기서 돈다. 죽었다고 판정하면 close 이벤트를 기다리지 않고 곧바로 비정상
+ * 종료(1006)로 끝낸다 — 죽은 소켓의 close는 브라우저가 한참 뒤에야 내거나 아예 안 낸다. */
 function connectOnce(
   token: string,
   path: string,
@@ -196,17 +226,55 @@ function connectOnce(
     onSocket(socket);
 
     let opened = false;
-    let joined = false;
+    let settled = false;
+    let pendingRooms: Set<string> | null = null;
+    let heartbeat: ReturnType<typeof setInterval> | null = null;
+    let receivedSincePing = true;
+
+    const finish = (code: number) => {
+      if (settled) return;
+      settled = true;
+      if (heartbeat !== null) clearInterval(heartbeat);
+      // 열린 적 없는 소켓의 close는 알릴 것이 없다 — 화면은 애초에 열림을 본 적이 없다.
+      if (opened) options.onOpenChange?.(false);
+      resolve({ opened, code });
+    };
+
     socket.addEventListener('open', () => {
+      if (settled) return;
       opened = true;
+      const rooms = options.rooms?.() ?? [];
+      for (const threadId of rooms) {
+        socket.send(JSON.stringify({ type: 'room.subscribe', threadId }));
+      }
+      pendingRooms = new Set(rooms);
+      if (pendingRooms.size === 0) onJoined?.();
+      heartbeat = setInterval(() => {
+        if (!receivedSincePing) {
+          console.info('[#161][ws] heartbeat timed out — dropping the socket');
+          finish(CLOSE_ABNORMAL);
+          socket.close(CLOSE_NORMAL);
+          return;
+        }
+        receivedSincePing = false;
+        socket.send(PING_FRAME);
+      }, HEARTBEAT_INTERVAL_MS);
       options.onOpenChange?.(true);
     });
     socket.addEventListener('message', (event) => {
+      if (settled) return;
+      receivedSincePing = true;
       // 서버는 텍스트 프레임만 보낸다. Blob·ArrayBuffer가 오면 이 계층이 다룰 것이 아니다.
       if (typeof event.data !== 'string') return;
-      if (onJoined && !joined && isPresenceSnapshot(event.data)) {
-        joined = true;
-        onJoined();
+      if (onJoined && pendingRooms !== null && pendingRooms.size > 0) {
+        const answered = subscriptionAnswerOf(event.data);
+        if (
+          answered !== null &&
+          pendingRooms.delete(answered) &&
+          pendingRooms.size === 0
+        ) {
+          onJoined();
+        }
       }
       options.onMessage(event.data);
     });
@@ -215,11 +283,9 @@ function connectOnce(
       console.info(
         `[#181][ws] close opened=${opened} code=${event.code} reason=${JSON.stringify((event as { reason?: string }).reason ?? '')}`,
       );
-      // 열린 적 없는 소켓의 close는 알릴 것이 없다 — 화면은 애초에 열림을 본 적이 없다.
-      if (opened) options.onOpenChange?.(false);
       // code가 없는 close는 표준상 나오지 않지만, 온다면 정상 종료로 읽어 조용히 끊기는 것보다
       // 비정상으로 읽어 재연결을 시도하는 쪽이 안전하다.
-      resolve({ opened, code: event.code ?? CLOSE_ABNORMAL });
+      finish(event.code ?? CLOSE_ABNORMAL);
     });
   });
 }
@@ -230,7 +296,6 @@ function connectOnce(
  * deps는 테스트용 주입 지점이다(http.ts와 같은 패턴).
  */
 export function openWsConnection(
-  threadId: string,
   options: WsConnectionOptions,
   deps: WsConnectionDeps = defaultDeps,
 ): WsConnection {
@@ -244,7 +309,7 @@ export function openWsConnection(
   // send()가 봐야 하는 상태. 소켓 객체만으로는 지금 열려 있는지 알 수 없다 — SocketLike에
   // readyState를 넣지 않았다(테스트용 가짜 소켓이 그것까지 흉내 내야 하는 부담을 피한 선택이다).
   let isOpen = false;
-  const path = collabWsPath(threadId);
+  const path = WS_PATH;
 
   /**
    * connectOnce 한 번 호출마다 이 함수로 만든 전용 options를 넘긴다(이슈 #188 버그 수정).
@@ -473,7 +538,9 @@ export function openWsConnection(
     }
   };
 
-  void run();
+  void run().then(() => {
+    if (!closedByCaller) options.onEnd?.();
+  });
 
   return {
     close: () => {

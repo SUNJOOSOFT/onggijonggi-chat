@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   CLOSE_TOKEN_EXPIRED,
+  HEARTBEAT_INTERVAL_MS,
   type SocketLike,
   type WsConnection,
   type WsConnectionOptions,
@@ -9,6 +10,10 @@ import {
 } from './ws-connection';
 
 const THREAD_ID = '11111111-1111-4111-8111-111111111111';
+const OTHER_THREAD_ID = '22222222-2222-4222-8222-222222222222';
+
+const subscribeFrame = (threadId: string) =>
+  JSON.stringify({ type: 'room.subscribe', threadId });
 
 /** tokenSkewSeconds()가 실제 JWT처럼 파싱할 수 있는 토큰. exp는 지금부터 seconds 뒤.
  * 'access_token'·'t1' 같은 문자열은 JWT가 아니라 tokenSkewSeconds()가 null을 돌려주고,
@@ -120,7 +125,6 @@ function harness(
   const onMessage = vi.fn();
 
   const connection = openWsConnection(
-    THREAD_ID,
     { onMessage, ...extraOptions },
     {
       createSocket: (protocols, path) => {
@@ -261,7 +265,6 @@ describe('openWsConnection', () => {
     const signIn = vi.fn(async () => undefined);
 
     openWsConnection(
-      THREAD_ID,
       { onMessage: vi.fn(), onForcedReauth },
       {
         createSocket: (protocols, path) => {
@@ -388,10 +391,10 @@ describe('openWsConnection - [#181] 근-만료 토큰 무한 재발급', () => {
 });
 
 describe('openWsConnection - 협업방(이슈 #19)', () => {
-  it('threadId를 경로 세그먼트로 넣어 방에 붙는다', async () => {
+  it('방 없는 단일 경로로 붙는다(이슈 #161)', async () => {
     const h = harness([{ accessToken: 't1' }]);
     const socket = await h.waitForSocket(1);
-    expect(socket.path).toBe(`/api/ws/${THREAD_ID}`);
+    expect(socket.path).toBe('/api/ws');
     h.connection.close();
   });
 
@@ -442,6 +445,82 @@ describe('openWsConnection - 협업방(이슈 #19)', () => {
   });
 });
 
+describe('openWsConnection - [#161] 사용자당 커넥션 하나', () => {
+  it('열릴 때마다 보고 있는 방을 다시 구독하고, 화면에는 그 뒤에 열림을 알린다', async () => {
+    let rooms = [THREAD_ID, OTHER_THREAD_ID];
+    // 열림을 본 화면이 곧바로 보내는 발화가 구독 뒤에 나가야 한다 — 서버는 인바운드를 순서대로 처리한다.
+    const h = harness([{ accessToken: 't1' }], {
+      rooms: () => rooms,
+      onOpenChange: (open) => {
+        if (open) h.connection.send('hello');
+      },
+    });
+    const first = await h.waitForSocket(1);
+    first.open();
+    expect(first.sent).toEqual([
+      subscribeFrame(THREAD_ID),
+      subscribeFrame(OTHER_THREAD_ID),
+      'hello',
+    ]);
+
+    // 서버는 끊긴 커넥션의 방을 기억하지 않는다 — 새 소켓이 열리는 순간의 방 목록을 다시 건다.
+    rooms = [OTHER_THREAD_ID];
+    first.serverClose(1006);
+    const second = await h.waitForSocket(2);
+    second.open();
+    expect(second.sent).toEqual([subscribeFrame(OTHER_THREAD_ID), 'hello']);
+
+    h.connection.close();
+  });
+
+  it('루프가 스스로 끝나면 onEnd로 알리고, close()로 끝낸 때는 알리지 않는다', async () => {
+    const endedByServer = vi.fn();
+    const server = harness([{ accessToken: 't1' }], { onEnd: endedByServer });
+    const socket = await server.waitForSocket(1);
+    socket.open();
+    socket.serverClose(1000);
+    await vi.waitFor(() => expect(endedByServer).toHaveBeenCalledOnce());
+
+    const endedByCaller = vi.fn();
+    const caller = harness([{ accessToken: 't1' }], { onEnd: endedByCaller });
+    (await caller.waitForSocket(1)).open();
+    caller.connection.close();
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(endedByCaller).not.toHaveBeenCalled();
+  });
+
+  it('ping 뒤로 한 주기 동안 아무 프레임도 없으면 소켓을 버리고 다시 붙는다', async () => {
+    const onOpenChange = vi.fn();
+    const h = harness([{ accessToken: 't1' }], { onOpenChange });
+    const socket = await h.waitForSocket(1);
+
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      socket.open();
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+      expect(socket.sent).toEqual([JSON.stringify({ type: 'ping' })]);
+
+      // 답이 오면(pong이 아니어도 된다) 살아 있다 — 다음 주기에 다시 묻는다.
+      socket.message('{"type":"pong"}');
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+      expect(socket.sent).toHaveLength(2);
+      expect(socket.closedWith).toBeNull();
+
+      // 이번엔 아무것도 오지 않았다 — close 이벤트를 기다리지 않고 끊김으로 본다.
+      vi.advanceTimersByTime(HEARTBEAT_INTERVAL_MS);
+      expect(socket.closedWith).toBe(1000);
+      expect(onOpenChange).toHaveBeenLastCalledWith(false);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 스스로 버린 소켓이라 정상 종료가 아니라 비정상 종료처럼 백오프 재연결한다.
+    await h.waitForSocket(2);
+    expect(h.sleep).toHaveBeenCalledExactlyOnceWith(1000);
+    h.connection.close();
+  });
+});
+
 describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
   /** 선제 갱신이 delayMs 뒤에 걸리도록 exp를 ms 단위로 정확히 역산한다. 공유 헬퍼
    * jwtWithTimes()는 초 단위로 내림해 최대 1초까지 오차가 생겨(이 테스트가 필요한 수백 ms
@@ -460,7 +539,10 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
 
   it('만료 마진에 도달하면 새 소켓을 먼저 열어 옛 소켓과 겹친 뒤에야 닫는다', async () => {
     const healthy = jwtWithLife(300);
-    const h = harness([{ accessToken: jwtDueInMs(150) }, { accessToken: healthy }]);
+    const h = harness(
+      [{ accessToken: jwtDueInMs(150) }, { accessToken: healthy }],
+      { rooms: () => [THREAD_ID] },
+    );
 
     const first = await h.waitForSocket(1);
     first.open();
@@ -473,11 +555,12 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     expect(second.protocols).toEqual(['access_token', healthy]);
 
     second.open();
-    // 열리기만 해서는 옛 소켓을 닫지 않는다 — 서버가 아직 방에 등록하기 전일 수 있다.
+    // 열리기만 해서는 옛 소켓을 닫지 않는다 — 새 소켓의 구독이 아직 걸리기 전일 수 있다.
+    expect(second.sent).toEqual([subscribeFrame(THREAD_ID)]);
     await new Promise((resolve) => setTimeout(resolve, 50));
     expect(first.closedWith).toBeNull();
 
-    // 서버가 등록을 마치고 보내는 첫 프레임이 참여자 스냅샷이다.
+    // 서버가 구독을 마치고 그 방에 가장 먼저 보내는 프레임이 참여자 스냅샷이다.
     second.message(
       JSON.stringify({
         type: 'presence.snapshot',
@@ -491,8 +574,59 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     // 옛 소켓의 close 이벤트가 (비동기로) 뒤늦게 와도, 새 소켓이 이미 authoritative가 됐으므로
     // isOpen이 false로 되돌아가면 안 된다 — 한때 실제로 되돌아가던 회귀다.
     expect(h.connection.send('after-swap')).toBe(true);
-    expect(second.sent).toEqual(['after-swap']);
+    expect(second.sent).toEqual([subscribeFrame(THREAD_ID), 'after-swap']);
 
+    h.connection.close();
+  });
+
+  it('구독한 방이 여럿이면 방마다 답(스냅샷이든 거부든)이 다 와야 옛 소켓을 닫는다', async () => {
+    const h = harness(
+      [{ accessToken: jwtDueInMs(150) }, { accessToken: jwtWithLife(300) }],
+      { rooms: () => [THREAD_ID, OTHER_THREAD_ID] },
+    );
+
+    const first = await h.waitForSocket(1);
+    first.open();
+    const second = await h.waitForSocket(2);
+    second.open();
+
+    second.message(
+      JSON.stringify({
+        type: 'presence.snapshot',
+        threadId: THREAD_ID,
+        participants: [],
+      }),
+    );
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(first.closedWith).toBeNull();
+
+    // 그 사이 참가자에서 빠진 방은 거부로 답한다 — 그 방에 대해서도 기다릴 것은 끝났다.
+    second.message(
+      JSON.stringify({
+        type: 'error',
+        threadId: OTHER_THREAD_ID,
+        code: 'FORBIDDEN',
+        message: 'x',
+        traceId: 't',
+      }),
+    );
+    await vi.waitFor(() => expect(first.closedWith).toBe(1000));
+
+    h.connection.close();
+  });
+
+  it('구독한 방이 없으면 새 소켓이 열리자마자 옛 소켓을 닫는다', async () => {
+    const h = harness([
+      { accessToken: jwtDueInMs(150) },
+      { accessToken: jwtWithLife(300) },
+    ]);
+
+    const first = await h.waitForSocket(1);
+    first.open();
+    const second = await h.waitForSocket(2);
+    second.open();
+
+    await vi.waitFor(() => expect(first.closedWith).toBe(1000));
     h.connection.close();
   });
 
@@ -520,24 +654,25 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     h.connection.close();
   });
 
-  it('새 소켓이 열렸지만 방 등록 전에 거부되면(error 프레임 뒤 종료) 옛 소켓을 닫지 않는다', async () => {
+  it('새 소켓이 열렸지만 구독이 걸리기 전에 끊기면 옛 소켓을 닫지 않는다', async () => {
     // 'open'에서 옛 소켓을 닫던 때는 서버가 방에 등록하기 전에 방이 비어, 흐르던 AI 답변이
-    // 취소되고 대기 턴이 버려졌다. 거부로 끝나는 새 소켓은 등록된 적이 없으니 더더욱 닫으면 안 된다.
-    const h = harness([
-      { accessToken: jwtDueInMs(150) },
-      { accessToken: jwtWithLife(300) },
-    ]);
+    // 취소되고 대기 턴이 버려졌다. 구독 답 없이 끝나는 새 소켓은 등록된 적이 없으니 더더욱 닫으면 안 된다.
+    const h = harness(
+      [{ accessToken: jwtDueInMs(150) }, { accessToken: jwtWithLife(300) }],
+      { rooms: () => [THREAD_ID] },
+    );
 
     const first = await h.waitForSocket(1);
     first.open();
 
     const second = await h.waitForSocket(2);
     second.open();
+    // 커넥션 전역 오류(threadId 없음)는 방의 구독 답이 아니다.
     second.message(
       JSON.stringify({
         type: 'error',
-        threadId: THREAD_ID,
-        code: 'FORBIDDEN',
+        threadId: null,
+        code: 'INTERNAL_ERROR',
         message: 'x',
         traceId: 't',
       }),

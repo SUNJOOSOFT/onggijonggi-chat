@@ -203,7 +203,7 @@ export interface ChatQueuedFrame {
 
 /**
  * 클라이언트 ping에 대한 서버의 응답(이슈 #160). 방에 속한 프레임이 아니라 threadId가 없다.
- * 주기적으로 ping을 보내고 pong이 끊기면 다시 붙는 하트비트 동작은 #161이 붙인다.
+ * 하트비트(ws-connection.ts, 이슈 #161)는 pong만이 아니라 어떤 프레임이든 받았는지로 생존을 본다.
  */
 export interface PongFrame {
   type: 'pong';
@@ -242,9 +242,11 @@ export type WsFrameType = WsFrame['type'];
  *   에코와 그 턴의 chat.answer·chat.queued에 돌려준다. 에코 전에도 이 값으로 취소할 수 있다.
  *   턴을 만들지는 서버가 정하므로 모든 발화에 싣는다.
  * model은 턴에 쓸 게이트웨이 모델 별칭이고 생략하면 서버 기본값을 쓴다.
+ * threadId는 말할 방이다(이슈 #161) — 이 커넥션이 구독한 방이어야 하고, 아니면 NOT_SUBSCRIBED가 온다.
  */
 export interface ClientChatMessageFrame {
   type: 'chat.message';
+  threadId: string;
   content: string;
   model?: string;
   clientMsgId?: string;
@@ -253,15 +255,16 @@ export interface ClientChatMessageFrame {
 
 /** 진행 중이거나 기다리는 @AI 턴을 멈춘다. 그 턴을 부른 발화의 turnId로 가리킨다. 서버는 이
  * 커넥션이 보낸 발화의 턴만 찾으므로, 멈출 턴이 없으면(이미 끝났거나 다른 커넥션의 턴) 아무 응답도
- * 오지 않는다. threadId는 커넥션이 여러 방을 나르게 되면(#161) 어느 방의 턴인지 가르는 값이다. */
+ * 오지 않는다. threadId는 커넥션이 여러 방을 나르므로(#161) 어느 방의 턴인지 가르는 값이다. */
 export interface ClientChatCancelFrame {
   type: 'chat.cancel';
   threadId: string;
   turnId: string;
 }
 
-/** 이 커넥션으로 그 방을 듣기 시작한다/그만 듣는다. 계약만 열려 있고 실제 멀티플렉싱은 #161이
- * 붙인다 — 지금은 경로가 커넥션의 방을 고정하므로 다른 방 구독·자기 방 해지는 NOT_SUPPORTED다. */
+/** 이 커넥션으로 그 방을 듣기 시작한다/그만 듣는다(이슈 #161). 구독이 걸리면 그 방의
+ * presence.snapshot이 가장 먼저 오고, 참가자가 아니면 그 방 threadId로 FORBIDDEN이 온다. 어느 쪽이든
+ * 커넥션은 유지된다. 재연결 뒤 다시 거는 것은 클라이언트 몫이다(ws-connection.ts). */
 export interface ClientRoomSubscribeFrame {
   type: 'room.subscribe';
   threadId: string;
