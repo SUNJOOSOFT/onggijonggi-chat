@@ -5,7 +5,7 @@ describe('parseFrame', () => {
   it('chat.answer를 파싱한다 (delta만)', () => {
     const frame = parseFrame({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '안녕',
@@ -15,7 +15,7 @@ describe('parseFrame', () => {
     });
     expect(frame).toEqual({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '안녕',
@@ -28,7 +28,7 @@ describe('parseFrame', () => {
   it('chat.answer를 파싱한다 (citations만, delta 빈 문자열 — 근거를 먼저 보내는 경우)', () => {
     const frame = parseFrame({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '',
@@ -46,7 +46,7 @@ describe('parseFrame', () => {
   it('citations가 빈 배열이어도 restrictedResultsOmitted가 true일 수 있다(전부 걸러진 경우)', () => {
     const frame = parseFrame({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '',
@@ -64,7 +64,7 @@ describe('parseFrame', () => {
   it('chat.answer의 status:"done"을 파싱한다', () => {
     const frame = parseFrame({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '',
@@ -74,7 +74,7 @@ describe('parseFrame', () => {
     });
     expect(frame).toEqual({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '',
@@ -88,7 +88,7 @@ describe('parseFrame', () => {
     expect(
       parseFrame({
         type: 'chat.answer',
-        sessionId: 's1',
+        threadId: 's1',
         msgId: 'msg-1',
         seq: 1,
         delta: '',
@@ -103,7 +103,7 @@ describe('parseFrame', () => {
     expect(
       parseFrame({
         type: 'chat.answer',
-        sessionId: 's1',
+        threadId: 's1',
         msgId: 'msg-1',
         seq: 1,
         delta: '',
@@ -116,7 +116,7 @@ describe('parseFrame', () => {
   it('chat.message를 파싱한다', () => {
     const frame = parseFrame({
       type: 'chat.message',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       from: 'u1',
@@ -125,7 +125,7 @@ describe('parseFrame', () => {
     });
     expect(frame).toEqual({
       type: 'chat.message',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       from: 'u1',
@@ -137,13 +137,13 @@ describe('parseFrame', () => {
   it('presence.join을 파싱한다', () => {
     const frame = parseFrame({
       type: 'presence.join',
-      sessionId: 's1',
+      threadId: 's1',
       subject: 'u1',
       displayName: '주성민',
     });
     expect(frame).toEqual({
       type: 'presence.join',
-      sessionId: 's1',
+      threadId: 's1',
       subject: 'u1',
       displayName: '주성민',
     });
@@ -152,13 +152,13 @@ describe('parseFrame', () => {
   it('presence.leave를 파싱한다', () => {
     const frame = parseFrame({
       type: 'presence.leave',
-      sessionId: 's1',
+      threadId: 's1',
       subject: 'u1',
       displayName: '주성민',
     });
     expect(frame).toEqual({
       type: 'presence.leave',
-      sessionId: 's1',
+      threadId: 's1',
       subject: 'u1',
       displayName: '주성민',
     });
@@ -167,7 +167,7 @@ describe('parseFrame', () => {
   it('presence.snapshot을 파싱한다', () => {
     const frame = parseFrame({
       type: 'presence.snapshot',
-      sessionId: 's1',
+      threadId: 's1',
       participants: [
         { subject: 'u1', displayName: '주성민' },
         { subject: 'u2', displayName: '이한결' },
@@ -175,7 +175,7 @@ describe('parseFrame', () => {
     });
     expect(frame).toEqual({
       type: 'presence.snapshot',
-      sessionId: 's1',
+      threadId: 's1',
       participants: [
         { subject: 'u1', displayName: '주성민' },
         { subject: 'u2', displayName: '이한결' },
@@ -187,58 +187,58 @@ describe('parseFrame', () => {
     expect(
       parseFrame({
         type: 'presence.snapshot',
-        sessionId: 's1',
+        threadId: 's1',
         participants: 'u1',
       }),
     ).toBeNull();
   });
 
-  it('error를 파싱한다 (sessionId 있음)', () => {
+  it('error를 파싱한다 (threadId 있음)', () => {
     const frame = parseFrame({
       type: 'error',
-      sessionId: 's1',
+      threadId: 's1',
       code: 'MODEL_UNAVAILABLE',
       message: '모델을 호출할 수 없습니다.',
       traceId: 't1',
     });
     expect(frame).toEqual({
       type: 'error',
-      sessionId: 's1',
+      threadId: 's1',
       code: 'MODEL_UNAVAILABLE',
       message: '모델을 호출할 수 없습니다.',
       traceId: 't1',
     });
   });
 
-  it('error를 파싱한다 (sessionId null — 연결 수립 실패 등 세션에 속하지 않는 오류)', () => {
+  it('error를 파싱한다 (threadId null — 연결 수립 실패 등 방에 속하지 않는 오류)', () => {
     const frame = parseFrame({
       type: 'error',
-      sessionId: null,
+      threadId: null,
       code: 'UNAUTHENTICATED',
       message: '인증이 필요합니다.',
       traceId: 't1',
     });
     expect(frame?.type).toBe('error');
     if (frame?.type === 'error') {
-      expect(frame.sessionId).toBeNull();
+      expect(frame.threadId).toBeNull();
     }
   });
 
   it('알 수 없는 type은 null (계약이 넓어지기 전의 새 프레임에 대비)', () => {
     expect(
-      parseFrame({ type: 'presence.away', sessionId: 's1', userId: 'u1' }),
+      parseFrame({ type: 'presence.away', threadId: 's1', userId: 'u1' }),
     ).toBeNull();
   });
 
   it('필드가 빠진 known type은 null', () => {
-    expect(parseFrame({ type: 'chat.answer', sessionId: 's1' })).toBeNull();
+    expect(parseFrame({ type: 'chat.answer', threadId: 's1' })).toBeNull();
   });
 
   it('필드 타입이 안 맞으면 null', () => {
     expect(
       parseFrame({
         type: 'chat.answer',
-        sessionId: 's1',
+        threadId: 's1',
         msgId: 'msg-1',
         seq: 1,
         delta: 123,
@@ -258,18 +258,18 @@ describe('parseFrame', () => {
   });
 
   it('type 필드 자체가 없으면 null', () => {
-    expect(parseFrame({ sessionId: 's1', delta: 'x' })).toBeNull();
+    expect(parseFrame({ threadId: 's1', delta: 'x' })).toBeNull();
   });
 });
 
 describe('parseFrameFromText', () => {
   it('유효한 JSON 문자열을 파싱한다', () => {
     const frame = parseFrameFromText(
-      '{"type":"chat.answer","sessionId":"s1","msgId":"msg-1","seq":1,"delta":"","citations":[],"restrictedResultsOmitted":false,"status":"done"}',
+      '{"type":"chat.answer","threadId":"s1","msgId":"msg-1","seq":1,"delta":"","citations":[],"restrictedResultsOmitted":false,"status":"done"}',
     );
     expect(frame).toEqual({
       type: 'chat.answer',
-      sessionId: 's1',
+      threadId: 's1',
       msgId: 'msg-1',
       seq: 1,
       delta: '',
@@ -294,7 +294,7 @@ describe('parseFrame — system.notice(#29)', () => {
     expect(
       parseFrame({
         type: 'system.notice',
-        sessionId: 's1',
+        threadId: 's1',
         severity: 'warning',
         code: 'RISKY_CONTENT',
         message: '검토가 필요한 내용이 감지되었습니다.',
@@ -302,7 +302,7 @@ describe('parseFrame — system.notice(#29)', () => {
       }),
     ).toEqual({
       type: 'system.notice',
-      sessionId: 's1',
+      threadId: 's1',
       severity: 'warning',
       code: 'RISKY_CONTENT',
       message: '검토가 필요한 내용이 감지되었습니다.',
@@ -313,7 +313,7 @@ describe('parseFrame — system.notice(#29)', () => {
   it('info 알림을 파싱한다', () => {
     const frame = parseFrame({
       type: 'system.notice',
-      sessionId: 's1',
+      threadId: 's1',
       severity: 'info',
       code: 'TOKEN_BUDGET_LOW',
       message: '한도에 가까워지고 있습니다.',
@@ -327,7 +327,7 @@ describe('parseFrame — system.notice(#29)', () => {
   it('모르는 severity는 버리지 않고 warning으로 받는다', () => {
     const frame = parseFrame({
       type: 'system.notice',
-      sessionId: 's1',
+      threadId: 's1',
       severity: 'critical',
       code: 'RISKY_CONTENT',
       message: '알림',
@@ -339,7 +339,7 @@ describe('parseFrame — system.notice(#29)', () => {
   it('severity 필드가 아예 없어도 warning으로 받는다', () => {
     const frame = parseFrame({
       type: 'system.notice',
-      sessionId: 's1',
+      threadId: 's1',
       code: 'RISKY_CONTENT',
       message: '알림',
       traceId: 't1',
@@ -347,23 +347,23 @@ describe('parseFrame — system.notice(#29)', () => {
     expect(frame?.type === 'system.notice' && frame.severity).toBe('warning');
   });
 
-  it('방에 속하지 않는 알림은 sessionId가 null일 수 있다', () => {
+  it('방에 속하지 않는 알림은 threadId가 null일 수 있다', () => {
     const frame = parseFrame({
       type: 'system.notice',
-      sessionId: null,
+      threadId: null,
       severity: 'info',
       code: 'TOKEN_BUDGET_LOW',
       message: '알림',
       traceId: 't1',
     });
-    expect(frame?.type === 'system.notice' && frame.sessionId).toBeNull();
+    expect(frame?.type === 'system.notice' && frame.threadId).toBeNull();
   });
 
   it('code가 없으면 파싱하지 않는다', () => {
     expect(
       parseFrame({
         type: 'system.notice',
-        sessionId: 's1',
+        threadId: 's1',
         severity: 'warning',
         message: '알림',
         traceId: 't1',
@@ -375,7 +375,7 @@ describe('parseFrame — system.notice(#29)', () => {
     // 조용히 버려진다 — 실제로 한 번 그렇게 놓쳐서 남기는 테스트다.
     const frame = parseFrame({
       type: 'participant.changed',
-      sessionId: 'room-1',
+      threadId: 'room-1',
       action: 'INVITE_PENDING',
       subject: 'sub-1',
       displayName: '아직 로그인 전',
@@ -389,7 +389,7 @@ describe('parseFrame — system.notice(#29)', () => {
     // 분기하지 않으므로 통지 자체는 살아 있어야 한다.
     const frame = parseFrame({
       type: 'participant.changed',
-      sessionId: 'room-1',
+      threadId: 'room-1',
       action: 'SOMETHING_NEW',
       subject: 'sub-1',
       displayName: '누군가',

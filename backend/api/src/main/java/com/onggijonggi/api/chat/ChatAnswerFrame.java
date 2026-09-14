@@ -25,7 +25,7 @@ import java.util.UUID;
  *               도착한 사람 메시지가 이 답변 앞으로 끼어들지 않는다.
  */
 public record ChatAnswerFrame(
-		UUID sessionId,
+		UUID threadId,
 		UUID msgId,
 		long seq,
 		String delta,

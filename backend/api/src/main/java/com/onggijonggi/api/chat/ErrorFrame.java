@@ -16,7 +16,7 @@ import java.util.UUID;
  *               클라이언트에 넘기지 않아 어차피 닿지 않기 때문이다
  *               (frontend lib/api/ws-connection.ts). 이 경계의 논의는 이슈 #11에 있다.
  *
- *               연결 수립 자체가 실패하는 경우처럼 특정 세션에 속하지 않는 오류라면 sessionId는
+ *               연결 수립 자체가 실패하는 경우처럼 특정 방에 속하지 않는 오류라면 threadId는
  *               null일 수 있다.
  *
  *               traceId는 연결 단위가 아니라 메시지(턴) 단위로 발급한다(이슈 #12) — 커넥션 하나가
@@ -24,5 +24,5 @@ import java.util.UUID;
  *               턴마다 새로 발급해야 한다. 발급 지점은 CollabWebSocketHandler가 인바운드 프레임을
  *               받는 자리다.
  */
-public record ErrorFrame(UUID sessionId, String code, String message, String traceId) implements WsFrame {
+public record ErrorFrame(UUID threadId, String code, String message, String traceId) implements WsFrame {
 }

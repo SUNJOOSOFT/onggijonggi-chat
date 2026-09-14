@@ -16,5 +16,5 @@ import java.util.UUID;
  *               흐름의 시스템 메시지로 그리기 때문이다. 명단 재생과 실제 입장이 같은 타입이면
  *               방에 들어갈 때마다 이미 있던 사람들이 방금 들어온 것처럼 보인다.
  */
-public record PresenceSnapshotFrame(UUID sessionId, List<PresenceParticipant> participants) implements WsFrame {
+public record PresenceSnapshotFrame(UUID threadId, List<PresenceParticipant> participants) implements WsFrame {
 }

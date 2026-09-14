@@ -11,6 +11,6 @@ import java.util.UUID;
  * @param severity warning(배너) 또는 info(토스트) — 01·CLIENT가 이 값으로 표시 방식을 고른다
  * @param code 알림 종류를 가리키는 고정 토큰(예: RISKY_CONTENT). 01·CLIENT는 분기에 쓰지 않는다
  */
-public record SystemNoticeFrame(UUID sessionId, String severity, String code, String message, String traceId)
+public record SystemNoticeFrame(UUID threadId, String severity, String code, String message, String traceId)
 		implements WsFrame {
 }

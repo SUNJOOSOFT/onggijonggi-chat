@@ -10,5 +10,5 @@ import java.util.UUID;
  *
  *               사람을 가리키는 방식은 {@link PresenceJoinFrame}과 같다(이슈 #130).
  */
-public record PresenceLeaveFrame(UUID sessionId, String subject, String displayName) implements WsFrame {
+public record PresenceLeaveFrame(UUID threadId, String subject, String displayName) implements WsFrame {
 }

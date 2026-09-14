@@ -334,9 +334,9 @@ public class CollabWebSocketHandler implements WebSocketHandler {
 		}
 	}
 
-	private Mono<Void> sendErrorAndClose(WebSocketSession session, UUID sessionId, String code,
+	private Mono<Void> sendErrorAndClose(WebSocketSession session, UUID threadId, String code,
 			String message, String traceId) {
-		ErrorFrame frame = new ErrorFrame(sessionId, code, message, traceId);
+		ErrorFrame frame = new ErrorFrame(threadId, code, message, traceId);
 		return session.send(Mono.just(session.textMessage(serialize(frame))))
 				.then(Mono.defer(() -> session.close(CloseStatus.NORMAL)))
 				.doOnError(error -> log.debug("Failed to send WebSocket error frame traceId={}", traceId, error))

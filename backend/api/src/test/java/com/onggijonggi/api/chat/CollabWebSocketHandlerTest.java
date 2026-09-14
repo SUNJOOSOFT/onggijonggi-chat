@@ -79,13 +79,13 @@ class CollabWebSocketHandlerTest {
 		UUID threadId = rooms.openRoom("collab-ws-user");
 		String received = exchange("collab-ws-user", threadId,
 				List.of("""
-						{"type":"chat.message","content":"hello","sessionId":"ignored","from":"ignored"}
+						{"type":"chat.message","content":"hello","threadId":"ignored","from":"ignored"}
 						"""), 1).get(0);
 
 		WsFrame frame = objectMapper.readValue(received, WsFrame.class);
 
 		assertThat(frame).isInstanceOfSatisfying(ChatMessageFrame.class, message -> {
-			assertThat(message.sessionId()).isEqualTo(threadId);
+			assertThat(message.threadId()).isEqualTo(threadId);
 			assertThat(message.from()).isNotNull();
 			assertThat(message.content()).isEqualTo("hello");
 		});
@@ -104,7 +104,7 @@ class CollabWebSocketHandlerTest {
 						"""), 1).get(0);
 
 		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received, WsFrame.class);
-		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.threadId()).isEqualTo(threadId);
 		assertThat(error.code()).isEqualTo("THREAD_LOCKED");
 	}
 
@@ -120,7 +120,7 @@ class CollabWebSocketHandlerTest {
 		WsFrame frame = objectMapper.readValue(received.get(0), WsFrame.class);
 
 		assertThat(frame).isInstanceOfSatisfying(PresenceSnapshotFrame.class, snapshot -> {
-			assertThat(snapshot.sessionId()).isEqualTo(threadId);
+			assertThat(snapshot.threadId()).isEqualTo(threadId);
 			// 방에 혼자여도 자기 자신은 들어 있다(이슈 #26). userId는 fixture가 돌려주지 않아
 			// 값 자체는 RoomSessionRegistryTest가 확인한다.
 			assertThat(snapshot.participants()).hasSize(1);
@@ -152,9 +152,9 @@ class CollabWebSocketHandlerTest {
 	void ignoresKnownServerOnlyFrameTypes() throws Exception {
 		UUID threadId = rooms.openRoom("server-frame-user");
 		List<String> received = exchange("server-frame-user", threadId,
-				List.of("{\"type\":\"presence.join\",\"sessionId\":\"" + threadId + "\"}",
-						"{\"type\":\"presence.leave\",\"sessionId\":\"" + threadId + "\"}",
-						"{\"type\":\"system.notice\",\"sessionId\":\"" + threadId + "\"}",
+				List.of("{\"type\":\"presence.join\",\"threadId\":\"" + threadId + "\"}",
+						"{\"type\":\"presence.leave\",\"threadId\":\"" + threadId + "\"}",
+						"{\"type\":\"system.notice\",\"threadId\":\"" + threadId + "\"}",
 						"{\"type\":\"chat.message\",\"content\":\"accepted\"}"), 1);
 
 		ChatMessageFrame frame = (ChatMessageFrame) objectMapper.readValue(received.get(0), WsFrame.class);
@@ -212,7 +212,7 @@ class CollabWebSocketHandlerTest {
 			ChatMessageFrame firstFrame = (ChatMessageFrame) objectMapper.readValue(firstReceived.get(0), WsFrame.class);
 			ChatMessageFrame secondFrame = (ChatMessageFrame) objectMapper.readValue(secondReceived.get(0), WsFrame.class);
 			assertThat(firstFrame).isEqualTo(secondFrame);
-			assertThat(firstFrame.sessionId()).isEqualTo(threadId);
+			assertThat(firstFrame.threadId()).isEqualTo(threadId);
 		} finally {
 			firstOutbound.tryEmitComplete();
 			secondOutbound.tryEmitComplete();
@@ -262,7 +262,7 @@ class CollabWebSocketHandlerTest {
 			PresenceLeaveFrame left =
 					(PresenceLeaveFrame) objectMapper.readValue(stayingReceived.get(1), WsFrame.class);
 
-			assertThat(left.sessionId()).isEqualTo(threadId);
+			assertThat(left.threadId()).isEqualTo(threadId);
 			// 방금 말하고 나간 그 사람이다.
 			assertThat(left.subject()).isEqualTo(message.from());
 		} finally {
@@ -298,7 +298,7 @@ class CollabWebSocketHandlerTest {
 				.block(WsTestTimeouts.BLOCK);
 
 		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(), WsFrame.class);
-		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.threadId()).isEqualTo(threadId);
 		assertThat(error.code()).isEqualTo("FORBIDDEN");
 		// 재연결해도 같은 거부라, 프론트가 루프를 멈출 수 있게 정상 종료로 닫는다.
 		assertThat(closeStatus.get().getCode()).isEqualTo(1000);
@@ -329,7 +329,7 @@ class CollabWebSocketHandlerTest {
 				.block(WsTestTimeouts.BLOCK);
 
 		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(), WsFrame.class);
-		assertThat(error.sessionId()).isNull();
+		assertThat(error.threadId()).isNull();
 		assertThat(error.code()).isEqualTo("MALFORMED_REQUEST");
 		assertThat(closeStatus.get().getCode()).isEqualTo(1000);
 	}
@@ -430,7 +430,7 @@ class CollabWebSocketHandlerTest {
 
 		assertThat(received).hasSize(2);
 		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(1), WsFrame.class);
-		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.threadId()).isEqualTo(threadId);
 		assertThat(error.code()).isEqualTo("FORBIDDEN");
 	}
 
@@ -489,7 +489,7 @@ class CollabWebSocketHandlerTest {
 		remover.join(TimeUnit.SECONDS.toMillis(5));
 
 		ErrorFrame error = (ErrorFrame) objectMapper.readValue(received.get(received.size() - 1), WsFrame.class);
-		assertThat(error.sessionId()).isEqualTo(threadId);
+		assertThat(error.threadId()).isEqualTo(threadId);
 		assertThat(error.code()).isEqualTo("FORBIDDEN");
 	}
 

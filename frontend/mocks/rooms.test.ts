@@ -40,7 +40,7 @@ function member(id: string, subject = id) {
 function say(content: string): ChatMessageFrame {
   return {
     type: 'chat.message',
-    sessionId: NORMAL_THREAD_ID,
+    threadId: NORMAL_THREAD_ID,
     msgId: 'msg-1',
     seq: 1,
     from: 'alice',

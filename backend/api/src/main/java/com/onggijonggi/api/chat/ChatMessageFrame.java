@@ -22,6 +22,6 @@ import java.util.UUID;
  * @param from 작성자의 Keycloak subject
  * @param fromDisplayName 작성자의 표시 이름
  */
-public record ChatMessageFrame(UUID sessionId, UUID msgId, long seq, String from, String fromDisplayName,
+public record ChatMessageFrame(UUID threadId, UUID msgId, long seq, String from, String fromDisplayName,
 		String content) implements WsFrame {
 }

@@ -87,7 +87,7 @@ describe('frameSourceToResponse — 스트림 시작 전 오류(첫 프레임이
     const frames: WsFrame[] = [
       {
         type: 'error',
-        sessionId: 's1',
+        threadId: 's1',
         code: 'MODEL_UNAVAILABLE',
         message: '모델 호출 불가',
         traceId: 't1',
@@ -119,7 +119,7 @@ describe('frameSourceToResponse — 스트림 시작 전 오류(첫 프레임이
     'code=%s → status=%i (GlobalExceptionHandler.java 매핑과 동일)',
     async (code, expectedStatus) => {
       const frames: WsFrame[] = [
-        { type: 'error', sessionId: 's1', code, message: 'x', traceId: 't1' },
+        { type: 'error', threadId: 's1', code, message: 'x', traceId: 't1' },
       ];
       const response = await frameSourceToResponse(mockFrameSource(frames));
       expect(response.status).toBe(expectedStatus);
@@ -144,7 +144,7 @@ describe('frameSourceToResponse — 손상된 프레임', () => {
     async function* sourceWithGarbage() {
       yield JSON.stringify({
         type: 'chat.answer',
-        sessionId: 's1',
+        threadId: 's1',
         msgId: 'msg-1',
         seq: 1,
         delta: '안',
@@ -155,7 +155,7 @@ describe('frameSourceToResponse — 손상된 프레임', () => {
       yield 'this is not json';
       yield JSON.stringify({
         type: 'chat.answer',
-        sessionId: 's1',
+        threadId: 's1',
         msgId: 'msg-1',
         seq: 1,
         delta: '녕',
@@ -165,7 +165,7 @@ describe('frameSourceToResponse — 손상된 프레임', () => {
       });
       yield JSON.stringify({
         type: 'chat.answer',
-        sessionId: 's1',
+        threadId: 's1',
         msgId: 'msg-1',
         seq: 1,
         delta: '',

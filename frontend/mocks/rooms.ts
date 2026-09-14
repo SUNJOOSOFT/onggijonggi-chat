@@ -135,12 +135,12 @@ export function aiPrompt(content: string): string | null {
 }
 
 export function errorFrame(
-  sessionId: string,
+  threadId: string,
   code: string,
   message: string,
   traceId: string,
 ): WsErrorFrame {
-  return { type: 'error', sessionId, code, message, traceId };
+  return { type: 'error', threadId, code, message, traceId };
 }
 
 /** 목업 전용 seq 카운터. 실서버는 방마다 블록으로 예약하지만(이슈 #190), 목업은 순서만
@@ -152,7 +152,7 @@ export function nextMockSeq(): number {
 }
 
 export function answerFrame(
-  sessionId: string,
+  threadId: string,
   msgId: string,
   seq: number,
   delta: string,
@@ -162,7 +162,7 @@ export function answerFrame(
 ): ChatAnswerFrame {
   return {
     type: 'chat.answer',
-    sessionId,
+    threadId,
     msgId,
     seq,
     delta,

@@ -489,7 +489,7 @@ class RoomSessionRegistryTest {
 
 		// 혼자 들어온 첫 입장자도 자기 자신을 받는다 — 자기 입장 통보는 오지 않으므로 이 명단이
 		// 클라이언트가 스스로를 목록에 넣을 유일한 근거다(이슈 #26).
-		assertThat(first.snapshot().sessionId()).isEqualTo(roomId);
+		assertThat(first.snapshot().threadId()).isEqualTo(roomId);
 		assertThat(first.snapshot().participants()).containsExactly(firstUser);
 		// 뒤에 온 사람은 입장 순서대로 방 전원을 받는다.
 		assertThat(second.snapshot().participants()).containsExactly(firstUser, secondUser);

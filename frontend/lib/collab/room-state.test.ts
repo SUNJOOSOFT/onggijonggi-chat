@@ -22,17 +22,17 @@ function person(subject: string): PresenceParticipant {
 }
 
 function join(subject: string): WsFrame {
-  return { type: 'presence.join', sessionId: THREAD, ...person(subject) };
+  return { type: 'presence.join', threadId: THREAD, ...person(subject) };
 }
 
 function leave(subject: string): WsFrame {
-  return { type: 'presence.leave', sessionId: THREAD, ...person(subject) };
+  return { type: 'presence.leave', threadId: THREAD, ...person(subject) };
 }
 
 function snapshot(...subjects: string[]): WsFrame {
   return {
     type: 'presence.snapshot',
-    sessionId: THREAD,
+    threadId: THREAD,
     participants: subjects.map(person),
   };
 }
@@ -49,7 +49,7 @@ function say(
   frameCounter += 1;
   return {
     type: 'chat.message',
-    sessionId: THREAD,
+    threadId: THREAD,
     msgId: msgId ?? `msg-${frameCounter}`,
     seq: seq ?? frameCounter,
     from,
@@ -65,7 +65,7 @@ function notice(
 ): WsFrame {
   return {
     type: 'system.notice',
-    sessionId: THREAD,
+    threadId: THREAD,
     severity,
     code,
     message,
@@ -85,7 +85,7 @@ function answer(
 ): WsFrame {
   return {
     type: 'chat.answer',
-    sessionId: THREAD,
+    threadId: THREAD,
     msgId: metadata.msgId ?? 'agent-msg-1',
     seq: 1000,
     delta,
@@ -353,7 +353,7 @@ describe('applyFrame - error', () => {
     const state = fold([
       {
         type: 'error',
-        sessionId: THREAD,
+        threadId: THREAD,
         code: 'FORBIDDEN',
         message: '이 방에 접근할 수 없습니다.',
         traceId: 'trace-1',
@@ -368,7 +368,7 @@ describe('applyFrame - error', () => {
     const state = fold([
       {
         type: 'error',
-        sessionId: null,
+        threadId: null,
         code: 'RATE_LIMITED',
         message: '요청이 많습니다.',
         traceId: 'trace-2',
@@ -383,7 +383,7 @@ describe('applyFrame - error', () => {
       answer('부분 답변', 'streaming'),
       {
         type: 'error',
-        sessionId: THREAD,
+        threadId: THREAD,
         code: 'MODEL_UNAVAILABLE',
         message: '모델 오류',
         traceId: 'trace-ai',
@@ -401,7 +401,7 @@ describe('applyFrame - error', () => {
       answer('진행 중', 'streaming'),
       {
         type: 'error',
-        sessionId: THREAD,
+        threadId: THREAD,
         code: 'MESSAGE_DELIVERY_FAILED',
         message: '전달 실패',
         traceId: 'trace-local',
@@ -493,13 +493,13 @@ describe('system.notice(#29)', () => {
     // 명단(REST)과 접속자(presence)는 다른 목록이다 — 이 프레임은 시트 재조회 신호일 뿐이다.
     const before = applyFrame(initialRoomState, {
       type: 'presence.snapshot',
-      sessionId: 'room-1',
+      threadId: 'room-1',
       participants: [{ subject: 'sub-1', displayName: '나' }],
     });
 
     const after = applyFrame(before, {
       type: 'participant.changed',
-      sessionId: 'room-1',
+      threadId: 'room-1',
       action: 'INVITE_PENDING',
       subject: 'sub-2',
       displayName: '초대된 사람',

@@ -20,23 +20,23 @@ class WsFrameTest {
 
 	@Test
 	void serializesChatAnswerWithTypeTag() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		UUID msgId = UUID.randomUUID();
-		WsFrame frame = new ChatAnswerFrame(sessionId, msgId, 7L, "안녕", List.of(), false,
+		WsFrame frame = new ChatAnswerFrame(threadId, msgId, 7L, "안녕", List.of(), false,
 				ChatAnswerStatus.STREAMING);
 
 		String json = objectMapper.writeValueAsString(frame);
 
-		assertThat(json).contains("\"type\":\"chat.answer\"", "\"sessionId\":\"" + sessionId + "\"",
+		assertThat(json).contains("\"type\":\"chat.answer\"", "\"threadId\":\"" + threadId + "\"",
 				"\"msgId\":\"" + msgId + "\"", "\"seq\":7",
 				"\"delta\":\"안녕\"", "\"status\":\"streaming\"");
 	}
 
 	@Test
 	void citationOnlyAnswerFrameIsValid() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		List<Citation> citations = List.of(new Citation("doc-001", "제목", "발췌", 0.91));
-		WsFrame frame = new ChatAnswerFrame(sessionId, UUID.randomUUID(), 0L, "", citations, false, ChatAnswerStatus.STREAMING);
+		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), 0L, "", citations, false, ChatAnswerStatus.STREAMING);
 
 		String json = objectMapper.writeValueAsString(frame);
 		WsFrame roundTripped = objectMapper.readValue(json, WsFrame.class);
@@ -46,8 +46,8 @@ class WsFrameTest {
 
 	@Test
 	void restrictedResultsOmittedIsIndependentOfEmptyCitations() throws Exception {
-		UUID sessionId = UUID.randomUUID();
-		WsFrame frame = new ChatAnswerFrame(sessionId, UUID.randomUUID(), 0L, "", List.of(), true, ChatAnswerStatus.DONE);
+		UUID threadId = UUID.randomUUID();
+		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), 0L, "", List.of(), true, ChatAnswerStatus.DONE);
 
 		String json = objectMapper.writeValueAsString(frame);
 		WsFrame roundTripped = objectMapper.readValue(json, WsFrame.class);
@@ -58,38 +58,38 @@ class WsFrameTest {
 
 	@Test
 	void deserializesByTypeTagIntoCorrectSubtype() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		String json = """
-				{"type":"presence.join","sessionId":"%s","subject":"kc-1","displayName":"주성민"}"""
-				.formatted(sessionId);
+				{"type":"presence.join","threadId":"%s","subject":"kc-1","displayName":"주성민"}"""
+				.formatted(threadId);
 
 		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
 
-		assertThat(frame).isEqualTo(new PresenceJoinFrame(sessionId, "kc-1", "주성민"));
+		assertThat(frame).isEqualTo(new PresenceJoinFrame(threadId, "kc-1", "주성민"));
 	}
 
 	@Test
 	void deserializesPresenceLeaveByTypeTag() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		String json = """
-				{"type":"presence.leave","sessionId":"%s","subject":"kc-1","displayName":"주성민"}"""
-				.formatted(sessionId);
+				{"type":"presence.leave","threadId":"%s","subject":"kc-1","displayName":"주성민"}"""
+				.formatted(threadId);
 
 		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
 
-		assertThat(frame).isEqualTo(new PresenceLeaveFrame(sessionId, "kc-1", "주성민"));
+		assertThat(frame).isEqualTo(new PresenceLeaveFrame(threadId, "kc-1", "주성민"));
 	}
 
 	@Test
 	void deserializesPresenceSnapshotByTypeTag() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		String json = """
-				{"type":"presence.snapshot","sessionId":"%s","participants":[				{"subject":"kc-1","displayName":"주성민"},{"subject":"kc-2","displayName":"이한결"}]}"""
-				.formatted(sessionId);
+				{"type":"presence.snapshot","threadId":"%s","participants":[				{"subject":"kc-1","displayName":"주성민"},{"subject":"kc-2","displayName":"이한결"}]}"""
+				.formatted(threadId);
 
 		WsFrame frame = objectMapper.readValue(json, WsFrame.class);
 
-		assertThat(frame).isEqualTo(new PresenceSnapshotFrame(sessionId,
+		assertThat(frame).isEqualTo(new PresenceSnapshotFrame(threadId,
 				List.of(new PresenceParticipant("kc-1", "주성민"),
 						new PresenceParticipant("kc-2", "이한결"))));
 	}
@@ -97,9 +97,9 @@ class WsFrameTest {
 	/** chat.message도 msgId·seq를 실어야 프론트가 REST 이력과 이어붙일 수 있다(이슈 #190). */
 	@Test
 	void serializesChatMessageWithMsgIdAndSeq() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		UUID msgId = UUID.randomUUID();
-		WsFrame frame = new ChatMessageFrame(sessionId, msgId, 12L, "kc-1", "주성민", "안녕하세요");
+		WsFrame frame = new ChatMessageFrame(threadId, msgId, 12L, "kc-1", "주성민", "안녕하세요");
 
 		String json = objectMapper.writeValueAsString(frame);
 
@@ -110,17 +110,17 @@ class WsFrameTest {
 
 	@Test
 	void allFrameTypesRoundTripThroughJson() throws Exception {
-		UUID sessionId = UUID.randomUUID();
+		UUID threadId = UUID.randomUUID();
 		PresenceParticipant participant = new PresenceParticipant("kc-1", "주성민");
 		List<WsFrame> frames = List.of(
-				new ChatAnswerFrame(sessionId, UUID.randomUUID(), 0L, "delta",
+				new ChatAnswerFrame(threadId, UUID.randomUUID(), 0L, "delta",
 						List.of(new Citation("doc-001", "제목", "발췌", 0.91)), false, ChatAnswerStatus.DONE),
-				new PresenceJoinFrame(sessionId, participant.subject(), participant.displayName()),
-				new PresenceLeaveFrame(sessionId, participant.subject(), participant.displayName()),
-				new PresenceSnapshotFrame(sessionId, List.of(participant)),
-				new ChatMessageFrame(sessionId, UUID.randomUUID(), 3L, participant.subject(), participant.displayName(), "content"),
-				new SystemNoticeFrame(sessionId, "warning", "RISKY_CONTENT", "위험 감지", "trace-2"),
-				new ErrorFrame(sessionId, "FORBIDDEN", "권한이 없습니다.", "trace-1"));
+				new PresenceJoinFrame(threadId, participant.subject(), participant.displayName()),
+				new PresenceLeaveFrame(threadId, participant.subject(), participant.displayName()),
+				new PresenceSnapshotFrame(threadId, List.of(participant)),
+				new ChatMessageFrame(threadId, UUID.randomUUID(), 3L, participant.subject(), participant.displayName(), "content"),
+				new SystemNoticeFrame(threadId, "warning", "RISKY_CONTENT", "위험 감지", "trace-2"),
+				new ErrorFrame(threadId, "FORBIDDEN", "권한이 없습니다.", "trace-1"));
 
 		for (WsFrame frame : frames) {
 			String json = objectMapper.writeValueAsString(frame);

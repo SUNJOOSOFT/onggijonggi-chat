@@ -11,5 +11,5 @@ import java.util.UUID;
  *               사람을 subject와 표시 이름으로 가리킨다(이슈 #130). 내부 app_user.id를 싣던
  *               이전 계약은 참여자 관리 API와 식별자 체계가 어긋났다.
  */
-public record PresenceJoinFrame(UUID sessionId, String subject, String displayName) implements WsFrame {
+public record PresenceJoinFrame(UUID threadId, String subject, String displayName) implements WsFrame {
 }

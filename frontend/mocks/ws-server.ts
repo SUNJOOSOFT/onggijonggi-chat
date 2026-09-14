@@ -87,7 +87,7 @@ function sendPresence(
 ): void {
   const text = JSON.stringify({
     type,
-    sessionId: threadId,
+    threadId: threadId,
     subject,
     displayName,
   });
@@ -130,7 +130,7 @@ function scheduleMockNotice(
   if (content.includes('위험')) {
     frame = {
       type: 'system.notice',
-      sessionId: threadId,
+      threadId: threadId,
       severity: 'warning',
       code: 'RISKY_CONTENT',
       message: '이 방의 최근 질문 중 검토가 필요한 내용이 감지되었습니다.',
@@ -139,7 +139,7 @@ function scheduleMockNotice(
   } else if (content.includes('@notice')) {
     frame = {
       type: 'system.notice',
-      sessionId: threadId,
+      threadId: threadId,
       severity: 'info',
       code: 'TOKEN_BUDGET_LOW',
       message: '이번 달 토큰 사용량이 한도에 가까워지고 있습니다.',
@@ -255,7 +255,7 @@ const server = Bun.serve<SocketData>({
       member.send(
         JSON.stringify({
           type: 'presence.snapshot',
-          sessionId: threadId,
+          threadId: threadId,
           participants: distinctParticipants(registry.membersOf(threadId)),
         }),
       );
@@ -288,7 +288,7 @@ const server = Bun.serve<SocketData>({
 
       registry.broadcastIfCurrent(threadId, generation, {
         type: 'chat.message',
-        sessionId: threadId,
+        threadId: threadId,
         msgId: crypto.randomUUID(),
         seq: nextMockSeq(),
         from: subject,

@@ -3,6 +3,9 @@
  설 명 : 서버 WsFrame(backend WsFrame.java, 이슈 #9) 계약을 그대로 미러링한 판별 유니온.
  type 태그는 Jackson @JsonTypeInfo(property = "type")가 쓰는 이름과 정확히 같아야 한다.
  필드명도 Java record 컴포넌트명을 그대로 따른다(커스텀 네이밍 전략 없음 → camelCase 그대로 직렬화).
+
+ threadId는 프레임이 속한 방이고, null이면 커넥션 전체에 대한 것이다. 이슈 #160 전에는
+ sessionId였다(WsFrame.java 주석 참고).
  *********************************************************/
 
 import type { Citation } from '@/lib/api/chat';
@@ -28,7 +31,7 @@ import type { Citation } from '@/lib/api/chat';
  */
 export interface ChatAnswerFrame {
   type: 'chat.answer';
-  sessionId: string;
+  threadId: string;
   /** 이 턴의 AGENT 메시지 id. 같은 턴의 delta·done 패킷이 모두 같은 값을 단다(이슈 #190).
    * 한 턴이 저장되는 msg 행 하나와 1:1이라 턴 식별자 역할을 겸한다. */
   msgId: string;
@@ -44,7 +47,7 @@ export interface ChatAnswerFrame {
 /** 참여자 간 일반 대화 메시지. AI 호출 라우팅 정책은 이슈 #13에서 결정 중. */
 export interface ChatMessageFrame {
   type: 'chat.message';
-  sessionId: string;
+  threadId: string;
   /** 서버가 저장하는 msg 행의 id와 같은 값이다(이슈 #190). REST 이력(MsgItem.id)과 이 값으로
    * 같은 메시지를 알아본다. */
   msgId: string;
@@ -70,7 +73,7 @@ export interface PresenceParticipant {
 /** 참여자 입장 이벤트. */
 export interface PresenceJoinFrame {
   type: 'presence.join';
-  sessionId: string;
+  threadId: string;
   subject: string;
   displayName: string;
 }
@@ -85,7 +88,7 @@ export interface PresenceJoinFrame {
  */
 export interface PresenceLeaveFrame {
   type: 'presence.leave';
-  sessionId: string;
+  threadId: string;
   subject: string;
   displayName: string;
 }
@@ -103,16 +106,16 @@ export interface PresenceLeaveFrame {
  */
 export interface PresenceSnapshotFrame {
   type: 'presence.snapshot';
-  sessionId: string;
+  threadId: string;
   participants: PresenceParticipant[];
 }
 
 /** 스트림 중 발생한 오류. HTTP 쪽 BffErrorEnvelope(lib/api/errors.ts)와 code/message/traceId를
- * 같은 모양으로 재사용한다. 연결 수립 자체가 실패하는 등 특정 세션에 속하지 않는 오류는
- * sessionId가 null일 수 있다. */
+ * 같은 모양으로 재사용한다. 연결 수립 자체가 실패하는 등 특정 방에 속하지 않는 오류는
+ * threadId가 null일 수 있다. */
 export interface WsErrorFrame {
   type: 'error';
-  sessionId: string | null;
+  threadId: string | null;
   code: string;
   message: string;
   traceId: string;
@@ -139,7 +142,7 @@ export interface WsErrorFrame {
  */
 export interface SystemNoticeFrame {
   type: 'system.notice';
-  sessionId: string | null;
+  threadId: string | null;
   severity: 'warning' | 'info';
   code: string;
   message: string;
@@ -157,7 +160,7 @@ export interface SystemNoticeFrame {
  */
 export interface ParticipantChangedFrame {
   type: 'participant.changed';
-  sessionId: string;
+  threadId: string;
   /**
    * 서버가 지금 보내는 값은 INVITED·REMOVED·OWNER_TRANSFERRED·INVITE_PENDING·INVITE_REVOKED
    * 다섯이지만 union으로 좁히지 않는다 — 화면이 이 값으로 분기하지 않는데 좁혀 두면 서버가

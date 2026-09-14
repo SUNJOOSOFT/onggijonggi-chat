@@ -21,7 +21,7 @@ const citationSchema = z.object({
  * 서버가 항상 필드를 채워 보낸다는 게 확정 스펙의 전제). */
 const chatAnswerFrameSchema = z.object({
   type: z.literal('chat.answer'),
-  sessionId: z.string(),
+  threadId: z.string(),
   msgId: z.string(),
   seq: z.number(),
   delta: z.string(),
@@ -32,7 +32,7 @@ const chatAnswerFrameSchema = z.object({
 
 const chatMessageFrameSchema = z.object({
   type: z.literal('chat.message'),
-  sessionId: z.string(),
+  threadId: z.string(),
   msgId: z.string(),
   seq: z.number(),
   from: z.string(),
@@ -48,17 +48,17 @@ const presenceParticipantSchema = z.object({
 
 const presenceJoinFrameSchema = presenceParticipantSchema.extend({
   type: z.literal('presence.join'),
-  sessionId: z.string(),
+  threadId: z.string(),
 });
 
 const presenceLeaveFrameSchema = presenceParticipantSchema.extend({
   type: z.literal('presence.leave'),
-  sessionId: z.string(),
+  threadId: z.string(),
 });
 
 const presenceSnapshotFrameSchema = z.object({
   type: z.literal('presence.snapshot'),
-  sessionId: z.string(),
+  threadId: z.string(),
   participants: z.array(presenceParticipantSchema),
 });
 
@@ -69,7 +69,7 @@ const presenceSnapshotFrameSchema = z.object({
  */
 const systemNoticeFrameSchema = z.object({
   type: z.literal('system.notice'),
-  sessionId: z.string().nullable(),
+  threadId: z.string().nullable(),
   severity: z
     .unknown()
     .transform((value) => (value === 'info' ? 'info' : 'warning')),
@@ -86,17 +86,17 @@ const systemNoticeFrameSchema = z.object({
  */
 const participantChangedFrameSchema = z.object({
   type: z.literal('participant.changed'),
-  sessionId: z.string(),
+  threadId: z.string(),
   action: z.string(),
   subject: z.string(),
   displayName: z.string(),
 });
 
-/** 연결 수립 자체가 실패하는 경우처럼 특정 세션에 속하지 않는 오류는 sessionId가 null일 수
+/** 연결 수립 자체가 실패하는 경우처럼 특정 방에 속하지 않는 오류는 threadId가 null일 수
  * 있다(ErrorFrame.java 주석과 동일 계약). */
 const wsErrorFrameSchema = z.object({
   type: z.literal('error'),
-  sessionId: z.string().nullable(),
+  threadId: z.string().nullable(),
   code: z.string(),
   message: z.string(),
   traceId: z.string(),

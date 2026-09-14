@@ -24,7 +24,7 @@ export async function* mockFrameSource(
 }
 
 function answerFrame(
-  sessionId: string,
+  threadId: string,
   msgId: string,
   seq: number,
   partial: Partial<
@@ -36,7 +36,7 @@ function answerFrame(
 ): ChatAnswerFrame {
   return {
     type: 'chat.answer',
-    sessionId,
+    threadId,
     msgId,
     seq,
     delta: partial.delta ?? '',
@@ -51,12 +51,12 @@ function answerFrame(
  * ChatAnswerFrame의 citations를 delta보다 먼저 채워 보낼 수 있게 한 이유(이슈 #10 코멘트,
  * bsjSunjoo 확정 스펙)를 그대로 재현한다. */
 export function goldenPathFrames(params?: {
-  sessionId?: string;
+  threadId?: string;
   tokens?: string[];
   citations?: Citation[];
   restrictedResultsOmitted?: boolean;
 }): WsFrame[] {
-  const sessionId = params?.sessionId ?? 's1';
+  const threadId = params?.threadId ?? 's1';
   // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
   const answerMsgId = crypto.randomUUID();
   const answerSeq = 0;
@@ -65,81 +65,81 @@ export function goldenPathFrames(params?: {
     { docId: 'd1', title: '문서 제목', snippet: '발췌 내용', score: 0.87 },
   ];
   return [
-    answerFrame(sessionId, answerMsgId, answerSeq, {
+    answerFrame(threadId, answerMsgId, answerSeq, {
       citations,
       restrictedResultsOmitted: params?.restrictedResultsOmitted ?? false,
       status: 'streaming',
     }),
     ...tokens.map((delta) =>
-      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
+      answerFrame(threadId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
-    answerFrame(sessionId, answerMsgId, answerSeq, { status: 'done' }),
+    answerFrame(threadId, answerMsgId, answerSeq, { status: 'done' }),
   ];
 }
 
 /** 근거가 전부 RBAC로 걸러진 흐름 — citations는 빈 배열이지만 restrictedResultsOmitted는
  * true다. 이 둘이 서로 독립이라는 걸 보여주는 시나리오(PR #50 리뷰, bsjSunjoo). */
 export function restrictedCitationsFrames(params?: {
-  sessionId?: string;
+  threadId?: string;
   tokens?: string[];
 }): WsFrame[] {
-  const sessionId = params?.sessionId ?? 's1';
+  const threadId = params?.threadId ?? 's1';
   // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
   const answerMsgId = crypto.randomUUID();
   const answerSeq = 0;
   const tokens = params?.tokens ?? ['안녕', '하세요'];
   return [
-    answerFrame(sessionId, answerMsgId, answerSeq, {
+    answerFrame(threadId, answerMsgId, answerSeq, {
       citations: [],
       restrictedResultsOmitted: true,
       status: 'streaming',
     }),
     ...tokens.map((delta) =>
-      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
+      answerFrame(threadId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
-    answerFrame(sessionId, answerMsgId, answerSeq, { status: 'done' }),
+    answerFrame(threadId, answerMsgId, answerSeq, { status: 'done' }),
   ];
 }
 
 /** 근거 없이 답변만 오는 흐름 — RAG가 근거를 못 찾은 경우 등. 모든 패킷의 citations가 빈 배열이다. */
 export function tokensOnlyFrames(params?: {
-  sessionId?: string;
+  threadId?: string;
   tokens?: string[];
 }): WsFrame[] {
-  const sessionId = params?.sessionId ?? 's1';
+  const threadId = params?.threadId ?? 's1';
   // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
   const answerMsgId = crypto.randomUUID();
   const answerSeq = 0;
   const tokens = params?.tokens ?? ['안녕', '하세요'];
   return [
     ...tokens.map((delta) =>
-      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
+      answerFrame(threadId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
-    answerFrame(sessionId, answerMsgId, answerSeq, { status: 'done' }),
+    answerFrame(threadId, answerMsgId, answerSeq, { status: 'done' }),
   ];
 }
 
 /** 토큰이 일부 흐르다가 스트림 중간에 error 프레임으로 끊기는 흐름. status:'done' 패킷 없이
  * 종료된다 — 소비자가 error를 받으면 스트림을 닫아야 한다는 걸 검증하는 시나리오. */
 export function errorMidStreamFrames(params?: {
-  sessionId?: string;
+  threadId?: string;
   tokensBeforeError?: string[];
   code?: string;
   message?: string;
   traceId?: string;
 }): WsFrame[] {
-  const sessionId = params?.sessionId ?? 's1';
+  const threadId = params?.threadId ?? 's1';
   // 한 턴의 패킷은 모두 같은 msgId·seq를 단다 — 실서버 계약과 같다(이슈 #190).
   const answerMsgId = crypto.randomUUID();
   const answerSeq = 0;
   const tokensBeforeError = params?.tokensBeforeError ?? ['안녕'];
   return [
     ...tokensBeforeError.map((delta) =>
-      answerFrame(sessionId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
+      answerFrame(threadId, answerMsgId, answerSeq, { delta, status: 'streaming' }),
     ),
     {
       type: 'error',
-      sessionId,
+      threadId,
       code: params?.code ?? 'MODEL_UNAVAILABLE',
       message: params?.message ?? '모델을 호출할 수 없습니다.',
       traceId: params?.traceId ?? 't1',

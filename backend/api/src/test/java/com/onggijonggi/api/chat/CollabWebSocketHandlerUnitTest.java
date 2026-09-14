@@ -113,7 +113,7 @@ class CollabWebSocketHandlerUnitTest {
 		handler.handle(session).block();
 
 		assertThat(sent.get()).contains("\"type\":\"error\"", "\"code\":\"INTERNAL_ERROR\"",
-				"\"sessionId\":\"" + threadId + "\"");
+				"\"threadId\":\"" + threadId + "\"");
 		verify(session).close(CloseStatus.NORMAL);
 	}
 

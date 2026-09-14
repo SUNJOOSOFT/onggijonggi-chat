@@ -21,6 +21,6 @@ import java.util.UUID;
  * @param subject 변경 대상의 Keycloak subject — INVITED/REMOVED는 그 사람, OWNER_TRANSFERRED는
  *               새 OWNER
  */
-public record ParticipantChangedFrame(UUID sessionId, ParticipantChangeAction action, String subject,
+public record ParticipantChangedFrame(UUID threadId, ParticipantChangeAction action, String subject,
 		String displayName) implements WsFrame {
 }
