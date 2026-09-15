@@ -292,8 +292,8 @@ class CollabWebSocketHandlerUnitTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		CollabMessageDispatcher dispatcher = new CollabMessageDispatcher(registry, llm,
-				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
-				Schedulers.parallel());
+				mock(MsgPersistenceService.class), new CollabCitationSearchService(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
 		return new CollabWebSocketHandler(new JsonMapper(), registry, dispatcher, provisioning,
 				admittingMembership(), Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
 	}

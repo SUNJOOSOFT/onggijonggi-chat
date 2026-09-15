@@ -121,9 +121,9 @@ class CollabMessageDispatcherTest {
 				message(room, "@AI two"),
 				// 앞 턴이 실행 중이라 두 번째 턴은 기다린다고 알린다(이슈 #160).
 				new ChatQueuedFrame(room.threadId, null, ChatQueuedStatus.QUEUED),
-				answer(room, "first", ChatAnswerStatus.STREAMING),
+				firstAnswer(room, "one", "first", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE),
-				answer(room, "second", ChatAnswerStatus.STREAMING),
+				firstAnswer(room, "two", "second", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 	}
 
@@ -189,7 +189,7 @@ class CollabMessageDispatcherTest {
 		awaitFrameCount(room.frames, 4);
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").containsExactly(
 				message(room, "@AI hello"),
-				answer(room, " ", ChatAnswerStatus.STREAMING),
+				firstAnswer(room, "hello", " ", ChatAnswerStatus.STREAMING),
 				answer(room, "answer", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 	}
@@ -215,7 +215,7 @@ class CollabMessageDispatcherTest {
 			assertThat(((ErrorFrame) frame).code()).isEqualTo("MODEL_UNAVAILABLE");
 		});
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").contains(
-				answer(room, "next", ChatAnswerStatus.STREAMING),
+				firstAnswer(room, "second", "next", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 		verify(llm, times(2)).streamChat(any());
 	}
@@ -240,7 +240,7 @@ class CollabMessageDispatcherTest {
 			assertThat(((ErrorFrame) frame).code()).isEqualTo("INTERNAL_ERROR");
 		});
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").contains(
-				answer(room, "next", ChatAnswerStatus.STREAMING),
+				firstAnswer(room, "second", "next", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 	}
 
@@ -691,18 +691,19 @@ class CollabMessageDispatcherTest {
 		VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
 
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		CollabCitationSearchService citationSearchService = mock(CollabCitationSearchService.class);
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, " ",
-						Duration.ofSeconds(1), 0, 20, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService,
+						citationSearchService, " ", Duration.ofSeconds(1), 0, 20, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, "model",
-						Duration.ZERO, 0, 20, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService,
+						citationSearchService, "model", Duration.ZERO, 0, 20, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, "model",
-						Duration.ofSeconds(1), -1, 20, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService,
+						citationSearchService, "model", Duration.ofSeconds(1), -1, 20, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService, "model",
-						Duration.ofSeconds(1), 0, -1, scheduler));
+				.isThrownBy(() -> new CollabMessageDispatcher(registry, llm, msgPersistenceService,
+						citationSearchService, "model", Duration.ofSeconds(1), 0, -1, scheduler));
 	}
 
 	private static CollabMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm) {
@@ -711,14 +712,19 @@ class CollabMessageDispatcherTest {
 
 	private static CollabMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
 			Duration timeout, int maxPending, VirtualTimeScheduler scheduler) {
-		return new CollabMessageDispatcher(registry, llm, mock(MsgPersistenceService.class), "test-model", timeout,
-				maxPending, 20, scheduler);
+		return new CollabMessageDispatcher(registry, llm, mock(MsgPersistenceService.class),
+				fakeCitationSearchService(), "test-model", timeout, maxPending, 20, scheduler);
 	}
 
 	private static CollabMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
 			MsgPersistenceService msgPersistenceService) {
-		return new CollabMessageDispatcher(registry, llm, msgPersistenceService, "test-model",
-				Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
+		return new CollabMessageDispatcher(registry, llm, msgPersistenceService, fakeCitationSearchService(),
+				"test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
+	}
+
+	/** 근거 인용 자체는 이 테스트의 관심사가 아니다 — 고정 응답을 내는 실제 구현 그대로 쓴다. */
+	private static CollabCitationSearchService fakeCitationSearchService() {
+		return new CollabCitationSearchService();
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
@@ -749,6 +755,13 @@ class CollabMessageDispatcherTest {
 
 	private static ChatAnswerFrame answer(TestRoom room, String delta, ChatAnswerStatus status) {
 		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status);
+	}
+
+	/** 이 턴의 첫 스트리밍 프레임만 근거 인용을 싣는다(이슈 #163) — prompt는 그 턴을 부른 발화. */
+	private static ChatAnswerFrame firstAnswer(TestRoom room, String prompt, String delta, ChatAnswerStatus status) {
+		CollabCitationSearchService.CitationSearchResult result = new CollabCitationSearchService().search(prompt);
+		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, result.citations(),
+				result.restrictedResultsOmitted(), status);
 	}
 
 	private static void awaitFrameCount(List<WsFrame> frames, int expected) {

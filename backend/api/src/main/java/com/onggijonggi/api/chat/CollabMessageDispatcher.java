@@ -46,6 +46,8 @@ public class CollabMessageDispatcher {
 
 	private final MsgPersistenceService msgPersistenceService;
 
+	private final CollabCitationSearchService citationSearchService;
+
 	private final String modelId;
 
 	private final Duration turnTimeout;
@@ -77,17 +79,19 @@ public class CollabMessageDispatcher {
 	public CollabMessageDispatcher(RoomSessionRegistry roomSessionRegistry,
 			LlmChatStreamService llmChatStreamService,
 			MsgPersistenceService msgPersistenceService,
+			CollabCitationSearchService citationSearchService,
 			@Value("${app.collab.ai.model:${spring.ai.openai.chat.options.model}}") String modelId,
 			@Value("${app.collab.ai.turn-timeout:120s}") Duration turnTimeout,
 			@Value("${app.collab.ai.max-pending-per-room:20}") int maxPendingPerRoom,
 			@Value("${app.collab.ai.max-context-messages:20}") int maxContextMessages) {
-		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, modelId, turnTimeout,
-				maxPendingPerRoom, maxContextMessages, Schedulers.parallel());
+		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, citationSearchService, modelId,
+				turnTimeout, maxPendingPerRoom, maxContextMessages, Schedulers.parallel());
 	}
 
 	CollabMessageDispatcher(RoomSessionRegistry roomSessionRegistry, LlmChatStreamService llmChatStreamService,
-			MsgPersistenceService msgPersistenceService, String modelId, Duration turnTimeout,
-			int maxPendingPerRoom, int maxContextMessages, Scheduler deadlineScheduler) {
+			MsgPersistenceService msgPersistenceService, CollabCitationSearchService citationSearchService,
+			String modelId, Duration turnTimeout, int maxPendingPerRoom, int maxContextMessages,
+			Scheduler deadlineScheduler) {
 		if (modelId == null || modelId.isBlank()) {
 			throw new IllegalArgumentException("app.collab.ai.model must not be blank");
 		}
@@ -103,6 +107,7 @@ public class CollabMessageDispatcher {
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.llmChatStreamService = llmChatStreamService;
 		this.msgPersistenceService = msgPersistenceService;
+		this.citationSearchService = citationSearchService;
 		this.modelId = modelId;
 		this.turnTimeout = turnTimeout;
 		this.maxPendingPerRoom = maxPendingPerRoom;
@@ -324,6 +329,7 @@ public class CollabMessageDispatcher {
 		activeTurn.pendingMsgId.subscribe();
 
 		Disposable subscription = activeTurn.turn.context()
+				.doOnNext(ignored -> activeTurn.citations = citationSearchService.search(activeTurn.turn.prompt()))
 				.flatMapMany(context -> withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 						new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
 								buildPromptMessages(context, activeTurn.turn.prompt()))))))
@@ -389,12 +395,20 @@ public class CollabMessageDispatcher {
 		broadcastStreamingFrame(activeTurn, delta);
 	}
 
+	/**
+	 * 이 턴의 첫 스트리밍 프레임에는 근거 인용을 함께 싣는다(이슈 #163) — 델타가 아직 비어 있어도
+	 * (leading whitespace 등) 상관없다. 답변이 끝나기 전에 근거 패널이 먼저 채워지는 UX를 새
+	 * 프레임 없이 얻는다. 이후 델타에는 다시 싣지 않는다.
+	 */
 	private void broadcastStreamingFrame(ActiveTurn activeTurn, String delta) {
+		boolean firstFrame = activeTurn.citationsSent.compareAndSet(false, true);
+		List<Citation> citations = firstFrame ? activeTurn.citations.citations() : List.of();
+		boolean restrictedResultsOmitted = firstFrame && activeTurn.citations.restrictedResultsOmitted();
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
-							modelIdFor(activeTurn.turn), activeTurn.seq, delta, List.of(), false,
-							ChatAnswerStatus.STREAMING))) {
+							modelIdFor(activeTurn.turn), activeTurn.seq, delta, citations,
+							restrictedResultsOmitted, ChatAnswerStatus.STREAMING))) {
 				throw new StaleGenerationException();
 			}
 		} catch (StaleGenerationException error) {
@@ -659,6 +673,13 @@ public class CollabMessageDispatcher {
 		private final Disposable.Swap subscription = Disposables.swap();
 
 		private final AtomicBoolean hasNonBlankOutput = new AtomicBoolean();
+
+		/** 이 턴의 첫 스트리밍 프레임에만 근거 인용을 실었는지(이슈 #163) — 그 뒤 델타에는 매번
+		 * 다시 실을 필요가 없다. context() 완료 직후 채워지고, 실제로 쓸 때까지는 비어 있다. */
+		private final AtomicBoolean citationsSent = new AtomicBoolean();
+
+		private volatile CollabCitationSearchService.CitationSearchResult citations =
+				new CollabCitationSearchService.CitationSearchResult(List.of(), false);
 
 		private final Deque<String> leadingWhitespace = new ArrayDeque<>();
 
