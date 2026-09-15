@@ -14,6 +14,7 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Predicate;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import reactor.core.Disposable;
@@ -72,7 +73,7 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI 질문"), room.membership.generation());
 
-		awaitFrameCount(room.frames, 4);
+		awaitFrameCount(room.frames, 5);
 		ArgumentCaptor<UUID> storedId = ArgumentCaptor.forClass(UUID.class);
 		verify(msgPersistenceService, timeout(1000)).createPendingAgentMessageBlocking(storedId.capture(),
 				anyLong(), eq(room.threadId));
@@ -114,16 +115,27 @@ class CollabMessageDispatcherTest {
 		verify(llm, timeout(1000).times(2)).streamChat(requests.capture());
 		assertThat(requests.getAllValues()).extracting(request -> request.messages().get(0).content())
 				.containsExactly("one", "two");
-		awaitFrameCount(room.frames, 7);
-		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq")
+		awaitFrameCount(room.frames, 9);
+		// 근거 인용(이슈 #163)은 boundedElastic에서 비동기로 도착해 사람 메시지·QUEUED(워커가
+		// 동기로 내는 것들)와의 상대 순서가 레이스다 — 전체를 한 번에 순서 비교하지 않고, 그
+		// 레이스가 없는 두 부분열로 나눠 각각 검증한다.
+		assertThat(room.frames).filteredOn(frame -> !(frame instanceof ChatAnswerFrame))
+				.usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq")
 				.containsExactly(
 				message(room, "@AI one"),
 				message(room, "@AI two"),
 				// 앞 턴이 실행 중이라 두 번째 턴은 기다린다고 알린다(이슈 #160).
-				new ChatQueuedFrame(room.threadId, null, ChatQueuedStatus.QUEUED),
-				firstAnswer(room, "one", "first", ChatAnswerStatus.STREAMING),
+				new ChatQueuedFrame(room.threadId, null, ChatQueuedStatus.QUEUED));
+		// ChatAnswerFrame끼리는 순서가 레이스가 아니다 — 두 번째 턴은 첫 턴이 끝나야(advance())
+		// 시작되므로 같은 턴 안에서도, 턴 사이에서도 여기 순서 그대로다.
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq")
+				.containsExactly(
+				citationsFrame(room, "one"),
+				answer(room, "first", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE),
-				firstAnswer(room, "two", "second", ChatAnswerStatus.STREAMING),
+				citationsFrame(room, "two"),
+				answer(room, "second", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 	}
 
@@ -154,7 +166,7 @@ class CollabMessageDispatcherTest {
 		assertThat(dispatcher.dispatch(command(room, "@AI second"), room.membership.generation())).isEmpty();
 
 		// AI 대기열이 찼는지는 워커가 순서대로 처리해봐야 정확하다 — 동기 반환이 아니라 방송으로 온다(#190).
-		awaitFrameCount(room.frames, 3);
+		awaitFrameCount(room.frames, 4);
 		assertThat(room.frames).filteredOn(ErrorFrame.class::isInstance)
 				.extracting(frame -> ((ErrorFrame) frame).code())
 				.containsExactly("RATE_LIMITED");
@@ -169,12 +181,14 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI hello"), room.membership.generation());
 
-		awaitFrameCount(room.frames, 2);
-		assertThat(room.frames).hasSize(2);
+		awaitFrameCount(room.frames, 3);
+		assertThat(room.frames).hasSize(3);
 		assertThat(room.frames.get(0)).usingRecursiveComparison().ignoringFields("msgId", "seq")
 				.isEqualTo(message(room, "@AI hello"));
-		assertThat(room.frames.get(1)).isInstanceOf(ErrorFrame.class);
-		assertThat(((ErrorFrame) room.frames.get(1)).code()).isEqualTo("MODEL_UNAVAILABLE");
+		assertThat(room.frames.get(1)).usingRecursiveComparison().ignoringFields("msgId", "seq")
+				.isEqualTo(citationsFrame(room, "hello"));
+		assertThat(room.frames.get(2)).isInstanceOf(ErrorFrame.class);
+		assertThat(((ErrorFrame) room.frames.get(2)).code()).isEqualTo("MODEL_UNAVAILABLE");
 	}
 
 	@Test
@@ -186,10 +200,11 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI hello"), room.membership.generation());
 
-		awaitFrameCount(room.frames, 4);
+		awaitFrameCount(room.frames, 5);
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").containsExactly(
 				message(room, "@AI hello"),
-				firstAnswer(room, "hello", " ", ChatAnswerStatus.STREAMING),
+				citationsFrame(room, "hello"),
+				answer(room, " ", ChatAnswerStatus.STREAMING),
 				answer(room, "answer", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 	}
@@ -215,7 +230,8 @@ class CollabMessageDispatcherTest {
 			assertThat(((ErrorFrame) frame).code()).isEqualTo("MODEL_UNAVAILABLE");
 		});
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").contains(
-				firstAnswer(room, "second", "next", ChatAnswerStatus.STREAMING),
+				citationsFrame(room, "second"),
+				answer(room, "next", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 		verify(llm, times(2)).streamChat(any());
 	}
@@ -233,14 +249,15 @@ class CollabMessageDispatcherTest {
 		verify(llm, timeout(1000)).streamChat(any());
 		firstResponse.tryEmitError(new IllegalStateException("gateway failure"));
 
-		// 사람 메시지 2, 대기 알림 1, 오류 1, 다음 턴의 답변·done 2
-		awaitFrameCount(room.frames, 6);
+		// 사람 메시지 2, 첫 턴 근거 인용 1, 대기 알림 1, 오류 1, 다음 턴의 근거 인용·답변·done 3
+		awaitFrameCount(room.frames, 8);
 		assertThat(room.frames).anySatisfy(frame -> {
 			assertThat(frame).isInstanceOf(ErrorFrame.class);
 			assertThat(((ErrorFrame) frame).code()).isEqualTo("INTERNAL_ERROR");
 		});
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").contains(
-				firstAnswer(room, "second", "next", ChatAnswerStatus.STREAMING),
+				citationsFrame(room, "second"),
+				answer(room, "next", ChatAnswerStatus.STREAMING),
 				answer(room, "", ChatAnswerStatus.DONE));
 	}
 
@@ -545,7 +562,7 @@ class CollabMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI 질문", clientMsgId, turnId, null), room.membership.generation());
 
-		awaitFrameCount(room.frames, 3);
+		awaitFrameCount(room.frames, 4);
 		ChatMessageFrame echo = (ChatMessageFrame) room.frames.get(0);
 		assertThat(echo.clientMsgId()).isEqualTo(clientMsgId);
 		assertThat(echo.turnId()).isEqualTo(turnId);
@@ -574,17 +591,18 @@ class CollabMessageDispatcherTest {
 		dispatcher.dispatch(command(room, "@AI second", UUID.randomUUID()), room.membership.generation());
 		verify(llm, timeout(1000)).streamChat(any());
 		source.tryEmitNext("부분");
-		awaitFrameCount(room.frames, 4);
+		awaitFrameCount(room.frames, 5);
 		dispatcher.cancel(room.threadId, room.membership.generation(), first, room.connectionId);
 
 		awaitTrue(upstreamCancelled);
 		assertThat(upstreamCancelled).isTrue();
 		verify(msgPersistenceService, timeout(1000)).cancelBlocking(pending.getId(), "부분");
 		verify(llm, timeout(1000).times(2)).streamChat(any());
-		awaitFrameCount(room.frames, 7);
+		awaitFrameCount(room.frames, 9);
 		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
 				.extracting(frame -> ((ChatAnswerFrame) frame).delta(), frame -> ((ChatAnswerFrame) frame).status())
-				.containsExactly(tuple("부분", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE),
+				.containsExactly(tuple("", ChatAnswerStatus.STREAMING), tuple("부분", ChatAnswerStatus.STREAMING),
+						tuple("", ChatAnswerStatus.DONE), tuple("", ChatAnswerStatus.STREAMING),
 						tuple("next", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE));
 	}
 
@@ -604,7 +622,10 @@ class CollabMessageDispatcherTest {
 		dispatcher.cancel(room.threadId, room.membership.generation(), turnId, UUID.randomUUID());
 
 		assertThat(upstreamCancelled).isFalse();
-		assertThat(room.frames).noneMatch(ChatAnswerFrame.class::isInstance);
+		// 근거 인용 프레임(STREAMING)은 정상적으로 나간다 — 턴이 끝났다는 신호(DONE)만 없으면 된다.
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.extracting(frame -> ((ChatAnswerFrame) frame).status())
+				.doesNotContain(ChatAnswerStatus.DONE);
 	}
 
 	/** 앞 턴이 있으면 뒤 턴은 기다린다는 것을 방에 알리고, 기다리는 중에 취소하면 큐에서 빠진다. */
@@ -620,14 +641,18 @@ class CollabMessageDispatcherTest {
 		dispatcher.dispatch(command(room, "@AI first", UUID.randomUUID()), room.membership.generation());
 		dispatcher.dispatch(command(room, "@AI second", second), room.membership.generation());
 		verify(llm, timeout(1000)).streamChat(any());
-		awaitFrameCount(room.frames, 3);
-		assertThat(room.frames.get(2)).isEqualTo(new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.QUEUED));
+		// 근거 인용(이슈 #163)은 비동기라 QUEUED와의 상대 순서가 보장되지 않는다 — 타입별로 기다린다.
+		awaitFrameCount(room.frames, ChatQueuedFrame.class::isInstance, 1);
+		assertThat(room.frames).filteredOn(ChatQueuedFrame.class::isInstance)
+				.containsExactly(new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.QUEUED));
 
 		dispatcher.cancel(room.threadId, room.membership.generation(), second, room.connectionId);
 		firstResponse.tryEmitValue("first");
 
-		awaitFrameCount(room.frames, 6);
-		assertThat(room.frames.get(3)).isEqualTo(new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.CANCELLED));
+		awaitFrameCount(room.frames, ChatQueuedFrame.class::isInstance, 2);
+		assertThat(room.frames).filteredOn(ChatQueuedFrame.class::isInstance)
+				.containsExactly(new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.QUEUED),
+						new ChatQueuedFrame(room.threadId, second, ChatQueuedStatus.CANCELLED));
 		verify(llm, times(1)).streamChat(any());
 	}
 
@@ -678,10 +703,11 @@ class CollabMessageDispatcherTest {
 		verify(llm, timeout(1000).times(2)).streamChat(requests.capture());
 		assertThat(requests.getAllValues()).extracting(ChatStreamRequest::modelId)
 				.containsExactly("picked-model", "test-model");
-		awaitFrameCount(room.frames, 6);
+		awaitFrameCount(room.frames, 8);
 		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
 				.extracting(frame -> ((ChatAnswerFrame) frame).model())
-				.containsExactly("picked-model", "picked-model", "test-model", "test-model");
+				.containsExactly("picked-model", "picked-model", "picked-model", "test-model", "test-model",
+						"test-model");
 	}
 
 	@Test
@@ -757,16 +783,29 @@ class CollabMessageDispatcherTest {
 		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status);
 	}
 
-	/** 이 턴의 첫 스트리밍 프레임만 근거 인용을 싣는다(이슈 #163) — prompt는 그 턴을 부른 발화. */
-	private static ChatAnswerFrame firstAnswer(TestRoom room, String prompt, String delta, ChatAnswerStatus status) {
+	/**
+	 * 델타 스트림보다 먼저 도착하는 근거 인용 전용 프레임(delta="", status=STREAMING — 이슈
+	 * #163). prompt는 그 턴을 부른 발화.
+	 */
+	private static ChatAnswerFrame citationsFrame(TestRoom room, String prompt) {
 		CollabCitationSearchService.CitationSearchResult result = new CollabCitationSearchService().search(prompt);
-		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, result.citations(),
-				result.restrictedResultsOmitted(), status);
+		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, "", result.citations(),
+				result.restrictedResultsOmitted(), ChatAnswerStatus.STREAMING);
 	}
 
 	private static void awaitFrameCount(List<WsFrame> frames, int expected) {
+		awaitFrameCount(frames, ignored -> true, expected);
+	}
+
+	/**
+	 * 근거 인용(이슈 #163)은 boundedElastic에서 비동기로 도착해, 워커가 다음 메시지를 처리하며
+	 * 동기로 내는 프레임(사람 메시지·QUEUED 등)과의 상대 순서가 보장되지 않는다 — 전체 개수만
+	 * 기다리면 그 레이스 타이밍에 따라 통과·실패가 갈린다. 특정 타입의 프레임이 몇 개 도착했는지로
+	 * 기다려야 그 레이스와 무관해진다.
+	 */
+	private static void awaitFrameCount(List<WsFrame> frames, Predicate<WsFrame> predicate, int expected) {
 		long deadline = System.currentTimeMillis() + 2000;
-		while (frames.size() < expected && System.currentTimeMillis() < deadline) {
+		while (frames.stream().filter(predicate).count() < expected && System.currentTimeMillis() < deadline) {
 			try {
 				Thread.sleep(10);
 			} catch (InterruptedException interrupted) {
