@@ -40,7 +40,12 @@ export type FrameSource = AsyncIterable<string>;
  * citations가 비어 있어도 restrictedResultsOmitted가 true면(전부 걸러진 경우) 불린다 —
  * "이 패킷에 citation 관련 정보가 있다"는 기준은 둘 중 하나라도 참인지로 판단한다. */
 export interface FrameStreamCallbacks {
-  onChatCitation?: (payload: CitationsResponse) => void;
+  /** turnId는 이 citations가 어느 턴 것인지 호출부가 메시지에 정확히 짝지을 수 있게 실어
+   * 보낸다(이슈 #163 후속) — "지금 활성 턴"만 아는 단일 ref로 짝짓던 방식은 턴을 취소하고
+   * 바로 재전송하면 늦게 도착한 citations가 엉뚱한 메시지에 붙을 수 있었다. */
+  onChatCitation?: (
+    payload: CitationsResponse & { turnId: string | null },
+  ) => void;
   onChatMessage?: (frame: ChatMessageFrame) => void;
   onPresenceJoin?: (frame: PresenceJoinFrame) => void;
   /** chat.answer가 terminal 상태로 끝날 때 한 번 불린다(이슈 #162). useChat의 text 스트림
@@ -129,6 +134,7 @@ export async function frameSourceToResponse(
                 callbacks.onChatCitation?.({
                   citations: f.citations,
                   restrictedResultsOmitted: f.restrictedResultsOmitted,
+                  turnId: f.turnId,
                 });
               }
               // cancelled·denied는 DIRECT 전용 terminal 상태다(이슈 #162) — done과 같이 스트림을 닫는다.

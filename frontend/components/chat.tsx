@@ -114,13 +114,15 @@ function ChatSession({
   >(null);
 
   // 근거 인용 상태(이슈 #163). directChat(아래)의 onChatCitation이 채우므로 그보다 먼저
-  // 선언한다. pendingCitationMessageIdRef는 지금 도착하는 citations 패킷이 어느 useChat
-  // 메시지 것인지 잇는다 — WS 콜백은 turnId를 모르고 "지금 활성 턴"만 안다.
+  // 선언한다. turnIdToMessageIdRef는 onTurnStarted가 알려준 turnId→clientMsgId 짝을 들고
+  // 있다가, 도착한 citations 패킷의 turnId로 정확한 메시지를 찾는다 — "지금 활성 턴"만 아는
+  // 단일 ref로 짝짓던 예전 방식은 턴을 취소하고 바로 재전송하면 늦게 도착한 citations가
+  // 엉뚱한 메시지에 붙을 수 있었다.
   const [citationsByMessageId, setCitationsByMessageId] = useState<
     Record<string, CitationsState>
   >({});
   const requestedCitationsRef = useRef<Set<string>>(new Set());
-  const pendingCitationMessageIdRef = useRef<string | null>(null);
+  const turnIdToMessageIdRef = useRef(new Map<string, string>());
   const activeTurnIdsRef = useRef(new Set<string>());
   const lastSeqRef = useRef<number | undefined>(undefined);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
@@ -249,8 +251,10 @@ function ChatSession({
         onCurrentAnswerTerminal: (frame) => {
           lastTerminalServerMsgIdRef.current = frame.msgId;
         },
-        onChatCitation: ({ citations, restrictedResultsOmitted }) => {
-          const messageId = pendingCitationMessageIdRef.current;
+        onChatCitation: ({ citations, restrictedResultsOmitted, turnId }) => {
+          const messageId = turnId
+            ? turnIdToMessageIdRef.current.get(turnId)
+            : undefined;
           if (!messageId) return;
           setCitationsByMessageId((prev) => ({
             ...prev,
@@ -260,7 +264,10 @@ function ChatSession({
         onSystemNotice: handleSystemNotice,
         onChatMessage: mergeChatMessage,
         onChatAnswer: mergeOtherTurnAnswer,
-        onTurnStarted: ({ turnId }) => activeTurnIdsRef.current.add(turnId),
+        onTurnStarted: ({ clientMsgId, turnId }) => {
+          activeTurnIdsRef.current.add(turnId);
+          turnIdToMessageIdRef.current.set(turnId, clientMsgId);
+        },
         onOpenChange: (open) => {
           if (open) setConnectionEpoch((epoch) => epoch + 1);
         },
@@ -492,15 +499,14 @@ function ChatSession({
   );
 
   // 새 user 메시지가 오면 근거 인용을 'loading'으로 표시해두고, 실제 값은 WS의 chat.answer
-  // citations 전용 패킷(onChatCitation, 이슈 #163)이 채운다 — 더 이상 REST로 병렬 조회하지
-  // 않는다. ref로 이미 처리한 메시지 id를 추적해(state면 effect 의존성 순환 우려) 한 번만
-  // 표시한다.
+  // citations 전용 패킷(onChatCitation, 이슈 #163)이 turnId로 짝지어 채운다 — 더 이상 REST로
+  // 병렬 조회하지 않는다. ref로 이미 처리한 메시지 id를 추적해(state면 effect 의존성 순환
+  // 우려) 한 번만 표시한다.
   useEffect(() => {
     const lastMessage = messages.at(-1);
     if (!lastMessage || lastMessage.role !== 'user') return;
     if (requestedCitationsRef.current.has(lastMessage.id)) return;
     requestedCitationsRef.current.add(lastMessage.id);
-    pendingCitationMessageIdRef.current = lastMessage.id;
 
     setCitationsByMessageId((prev) => ({
       ...prev,

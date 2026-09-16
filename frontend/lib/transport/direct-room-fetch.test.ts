@@ -349,6 +349,7 @@ describe('createDirectChatFetch — DIRECT 전용 terminal 상태', () => {
         { docId: 'doc-001', title: '제목', snippet: '발췌', score: 0.9 },
       ],
       restrictedResultsOmitted: false,
+      turnId,
     });
   });
 
