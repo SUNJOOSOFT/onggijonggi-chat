@@ -319,14 +319,26 @@ public class CollabMessageDispatcher {
 	* 무엇을 보낼지 정해지므로, 여기서만 스트림 시작이 그만큼 지연된다(이슈 #100).
 	* 델타는 개별 저장하지 않고 activeTurn.content에 누적해 턴이 끝났을 때 한 번에 완료 처리한다
 	* (PersistingChatStreamService와 동일한 결).
+	*
+	* LLM 호출 직전에 abandoned()를 보는 이유(이슈 #205): context()는 .cache()된 Mono라, 아래
+	* .subscribe()가 불릴 때 이미 완료돼 있으면 그 호출 안에서 flatMapMany까지 동기로 실행된다.
+	* 그러면 아래 synchronized 블록의 닫힘 검사는 이미 나간 호출을 되돌리지 못한다 — dispose는 이후
+	* 신호만 끊지, 벌어진 부작용을 취소하지는 못하기 때문이다.
+	*
+	* 비워 돌려줄 때 Flux.empty()가 아니라 never()인 것도 의도된 것이다. empty()면 아래 concatWith가
+	* EmptyLlmOutputException을 만들어 handleTurnError로 가는데, 취소된 턴은 방이 살아 있어
+	* MODEL_UNAVAILABLE 프레임이 실제로 방송된다 — 취소했는데 잠시 뒤 오류가 뜨는 화면이 된다.
+	* never()는 아래 update()가 곧바로 dispose 한다(이미 dispose된 Swap은 새 값을 즉시 정리한다).
 	*/
 	private void startTurn(RoomKey key, RoomAiState state, ActiveTurn activeTurn) {
 		activeTurn.pendingMsgId.subscribe();
 
 		Disposable subscription = activeTurn.turn.context()
-				.flatMapMany(context -> withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
-						new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
-								buildPromptMessages(context, activeTurn.turn.prompt()))))))
+				.flatMapMany(context -> abandoned(activeTurn)
+						? Flux.<String>never()
+						: withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
+								new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
+										buildPromptMessages(context, activeTurn.turn.prompt()))))))
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
 					activeTurn.content.append(delta);
@@ -346,6 +358,15 @@ public class CollabMessageDispatcher {
 				subscription.dispose();
 			}
 		}
+	}
+
+	/**
+	* 이 턴이 이미 버려졌는지. 방 닫힘(closeGeneration)과 취소(cancel)가 공통으로 내리는 신호가
+	* 이 Swap 하나라, 둘을 한 번에 본다. state.closed나 state.active로는 취소를 걸러낼 수 없다 —
+	* cancel()은 다음 대기 턴이 시작되도록 state.active를 일부러 비우지 않기 때문이다.
+	*/
+	private static boolean abandoned(ActiveTurn activeTurn) {
+		return activeTurn.subscription.isDisposed();
 	}
 
 	/** 발화가 모델을 지정하지 않았으면 서버 기본값(app.collab.ai.model)으로 돌아간다(이슈 #160). */

@@ -388,6 +388,45 @@ class CollabMessageDispatcherTest {
 		assertThat(llmSubscribed.await(250, TimeUnit.MILLISECONDS)).isFalse();
 	}
 
+	/**
+	* 취소도 닫힘과 같은 구멍이 있다. cancel()은 state.active를 비우지 않으므로(다음 대기 턴을
+	* 막지 않기 위해서다) "방이 닫혔나 / 이 턴이 아직 활성인가"로는 걸러지지 않는다 — 두 경로가
+	* 공통으로 내리는 신호는 activeTurn.subscription.dispose() 하나뿐이다.
+	*
+	* 취소 쪽 피해가 더 크다: 방이 살아 있어 뒤늦게 시작된 턴의 오류 프레임이 실제로 방송된다.
+	*/
+	@Test
+	void doesNotStartTheLlmWhenTheTurnIsCancelledDuringContextLookup() throws InterruptedException {
+		TestRoom room = new TestRoom();
+		CountDownLatch contextStarted = new CountDownLatch(1);
+		CountDownLatch releaseContext = new CountDownLatch(1);
+		CountDownLatch llmSubscribed = new CountDownLatch(1);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.defer(() -> {
+			llmSubscribed.countDown();
+			return Flux.never();
+		}));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(any(), anyLong(), eq(room.threadId),
+				eq(room.userId), eq("@AI first"), anyInt())).thenAnswer(invocation -> {
+			contextStarted.countDown();
+			releaseContext.await(1, TimeUnit.SECONDS);
+			return List.of();
+		});
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+		UUID turnId = UUID.randomUUID();
+
+		try {
+			dispatcher.dispatch(command(room, "@AI first", turnId), room.membership.generation());
+			assertThat(contextStarted.await(1, TimeUnit.SECONDS)).isTrue();
+			dispatcher.cancel(room.threadId, room.membership.generation(), turnId, room.connectionId);
+		} finally {
+			releaseContext.countDown();
+		}
+
+		assertThat(llmSubscribed.await(250, TimeUnit.MILLISECONDS)).isFalse();
+	}
+
 	@Test
 	void disposesALateSubscriptionWhenTheGenerationClosedDuringSubscription() {
 		TestRoom room = new TestRoom();
@@ -586,6 +625,10 @@ class CollabMessageDispatcherTest {
 				.extracting(frame -> ((ChatAnswerFrame) frame).delta(), frame -> ((ChatAnswerFrame) frame).status())
 				.containsExactly(tuple("부분", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE),
 						tuple("next", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE));
+		// 취소는 done으로 끝난다 — 오류 프레임이 따라붙으면 화면은 "취소했는데 잠시 뒤 오류"가 된다.
+		// startTurn()이 버려진 턴에 Flux.empty()를 돌려주면 EmptyLlmOutputException을 거쳤
+		// MODEL_UNAVAILABLE이 여기 따라붙는다(이슈 #205).
+		assertThat(room.frames).noneMatch(ErrorFrame.class::isInstance);
 	}
 
 	/** turnId는 클라이언트가 만든 값이라 그 발화가 들어온 커넥션에서만 인정한다 — 다른 커넥션이 같은 값을 보내도 턴은 계속된다. */
