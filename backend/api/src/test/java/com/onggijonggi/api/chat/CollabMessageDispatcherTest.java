@@ -300,6 +300,45 @@ class CollabMessageDispatcherTest {
 		verify(llm).streamChat(any());
 	}
 
+	/**
+	* 아직 워커가 꺼내지 않은 @AI 발화도 취소 알림에 포함한다(이슈 #206).
+	*
+	* 위 attemptsOneCancellation... 테스트는 두 번째 발화가 이미 state.pending에 들어간 흔한
+	* 경우다. 여기서는 워커를 에코 방송에 붙잡아 두어, 두 번째 발화가 pending에는 없고
+	* inFlight에만 있는 창을 결정적으로 만든다 — 이슈 작성자가 200회 중 1회 관측한 그 상태다.
+	*/
+	@Test
+	void notifiesCancellationForAnAiTurnTheWorkerHasNotQueuedYet() throws InterruptedException {
+		FailingRoomSessionRegistry registry = new FailingRoomSessionRegistry();
+		TestRoom room = new TestRoom(registry);
+		Sinks.Many<String> source = Sinks.many().unicast().onBackpressureBuffer();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(source.asFlux());
+		CollabMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		// 첫 턴은 평소대로 시작시킨다 — 이게 뒤에 방송 실패로 방을 닫는 쪽이다.
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+		verify(llm, timeout(1000)).streamChat(any());
+
+		// 두 번째 발화를 워커가 에코 방송하는 자리에서 붙잡는다.
+		registry.blockOnContent = "@AI second";
+		try {
+			dispatcher.dispatch(command(room, "@AI second"), room.membership.generation());
+			assertThat(registry.workerBlocked.await(1, TimeUnit.SECONDS)).isTrue();
+
+			// 이 시점의 두 번째 발화는 pending에 없다. 여기서 첫 턴의 방송이 실패해 방이 닫힌다.
+			registry.failBroadcasts = true;
+			source.tryEmitNext("answer");
+
+			assertThat(registry.attemptedFrames)
+					.filteredOn(ErrorFrame.class::isInstance)
+					.extracting(frame -> ((ErrorFrame) frame).code())
+					.containsExactly("MESSAGE_DELIVERY_FAILED");
+		} finally {
+			registry.releaseWorker.countDown();
+		}
+	}
+
 	@Test
 	void closesTheGenerationWhenTheCurrentGenerationSinkKeepsFailing() {
 		FailingRoomSessionRegistry registry = new FailingRoomSessionRegistry();
@@ -861,6 +900,17 @@ class CollabMessageDispatcherTest {
 
 		private boolean failBroadcasts;
 
+		/**
+		* 이 내용의 사람 메시지를 방송하는 자리에서 워커를 붙잡아 둔다(이슈 #206 재현용). 워커가
+		* 여기 멈춰 있는 동안 그 발화는 inbox에서는 빠졌지만 아직 registerTurn에 닿지 않아
+		* state.pending에 없고 state.inFlight에만 있다 — 문제의 창이 바로 그 상태다.
+		*/
+		private volatile String blockOnContent;
+
+		private final CountDownLatch workerBlocked = new CountDownLatch(1);
+
+		private final CountDownLatch releaseWorker = new CountDownLatch(1);
+
 		FailingRoomSessionRegistry() {
 			super(Duration.ofMillis(50));
 		}
@@ -868,6 +918,14 @@ class CollabMessageDispatcherTest {
 		@Override
 		public boolean broadcastIfCurrent(UUID threadId, UUID roomGeneration, WsFrame frame) {
 			attemptedFrames.add(frame);
+			if (frame instanceof ChatMessageFrame message && message.content().equals(blockOnContent)) {
+				workerBlocked.countDown();
+				try {
+					releaseWorker.await(2, TimeUnit.SECONDS);
+				} catch (InterruptedException error) {
+					Thread.currentThread().interrupt();
+				}
+			}
 			if (failBroadcasts) {
 				throw new IllegalStateException("sink failure");
 			}
