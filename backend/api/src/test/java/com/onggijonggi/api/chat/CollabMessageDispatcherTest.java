@@ -607,7 +607,11 @@ class CollabMessageDispatcherTest {
 		registry.failBroadcasts = true;
 		source.tryEmitComplete();
 
-		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "answer");
+		// 여기만 다른 테스트보다 넓게 기다린다(이슈 #207). 완료 저장은 방송 실패로 예외가 한 번 더
+		// 오가는 경로라 스케줄링 편차가 누적되는데, 같은 JVM에서 클래스 전체를 연달아 돌리는 CI에서는
+		// 1초 창이 빠듯해 10회 중 1~2회 간헐 실패했다. 프로덕션 순서·로직 결함이 아니라는 것은
+		// 이슈에서 반복 측정으로 확인됐다(#207, Refs #197).
+		verify(msgPersistenceService, timeout(5000)).completeBlocking(pending.getId(), "answer");
 		verify(msgPersistenceService, never()).cancelBlocking(eq(pending.getId()), any());
 	}
 
