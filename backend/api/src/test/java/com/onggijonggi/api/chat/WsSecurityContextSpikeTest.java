@@ -39,7 +39,7 @@ import reactor.core.publisher.Mono;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class,
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class,
 		WsSecurityContextSpikeTest.WsSpikeConfig.class})
 class WsSecurityContextSpikeTest {
 

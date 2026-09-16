@@ -10,7 +10,6 @@ import org.springframework.boot.test.web.server.LocalServerPort;
 import org.springframework.context.annotation.Import;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.client.RestTestClient;
 import org.springframework.web.reactive.socket.CloseStatus;
@@ -35,7 +34,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 		properties = {"app.ratelimit.ws-handshake-per-minute=" + WsHandshakeRateLimitTest.WS_LIMIT,
 				"app.ratelimit.window-seconds=" + WsHandshakeRateLimitTest.TEST_WINDOW_SECONDS})
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class})
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class})
 class WsHandshakeRateLimitTest {
 
 	static final int WS_LIMIT = 2;
@@ -91,17 +90,9 @@ class WsHandshakeRateLimitTest {
 				.isInstanceOf(WebSocketClientHandshakeException.class)
 				.hasMessageContaining("429");
 
-		restTestClient.post()
-				.uri("/api/chat/stream")
-				.contentType(MediaType.APPLICATION_JSON)
+		restTestClient.get()
+				.uri("/api/chat/sessions")
 				.header(HttpHeaders.AUTHORIZATION, "Bearer " + TestJwtSupport.signedJwt(sub, List.of("USER")))
-				.body("""
-						{
-						  "sessionId": "11111111-1111-1111-1111-111111111111",
-						  "modelId": "test-model",
-						  "messages": [ { "role": "user", "content": "안녕" } ]
-						}
-						""")
 				.exchange()
 				.expectStatus().isOk();
 	}

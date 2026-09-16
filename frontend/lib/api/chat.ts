@@ -5,16 +5,8 @@
  공유하는 용도로 남는다.
  *********************************************************/
 
-import {
-  CHAT_SESSIONS_PATH,
-  CHAT_STREAM_PATH,
-  bffUrl,
-  chatSessionPath,
-} from './config';
+import { CHAT_SESSIONS_PATH, bffUrl, chatSessionPath } from './config';
 import { authFetch } from './http';
-
-/** 채팅 스트리밍 엔드포인트 URL (useChat `api` 에 사용). */
-export const CHAT_STREAM_URL = bffUrl(CHAT_STREAM_PATH);
 
 export interface ChatSessionSummary {
   id: string;

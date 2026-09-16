@@ -11,12 +11,10 @@ import com.onggijonggi.common.chat.persistence.ThrRepository;
 import jakarta.validation.Valid;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PatchMapping;
 import org.springframework.web.bind.annotation.PathVariable;
-import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
@@ -27,32 +25,26 @@ import reactor.core.scheduler.Schedulers;
 
 /**
  * Class Name : ChatController.java
- * Description : 개인 채팅 HTTP 스트림과 #164 전까지의 레거시 세션 별칭이다. 외부 URL·text/plain
- *               응답·ChatSessSummary/ChatMsgItem 모양은 유지하되, 읽기·이름변경·삭제의 정본은
- *               DIRECT thr/msg다. Thread 종류와 소유권은 항상 404로 감춘다.
+ * Description : 개인 채팅의 레거시 세션 별칭이다(이슈 #164로 HTTP 스트림은 제거됨 — 1:1 실시간은
+ *               WS로 통일됐다). 외부 URL·ChatSessSummary/ChatMsgItem 모양은 유지하되, 읽기·
+ *               이름변경·삭제의 정본은 DIRECT thr/msg다. Thread 종류와 소유권은 항상 404로 감춘다.
+ *               `/api/chat/sessions` 목록 조회를 대체할 `/api/threads` 목록 엔드포인트가 아직
+ *               없어 이 별칭은 당장은 계속 남는다.
  */
 @RestController
 public class ChatController {
 
-	private final ChatStreamService chatStreamService;
 	private final ThrRepository thrRepository;
 	private final ThrMbrRepository thrMbrRepository;
 	private final MsgRepository msgRepository;
 	private final CurrentActorProvider currentActorProvider;
 
-	public ChatController(ChatStreamService chatStreamService, ThrRepository thrRepository,
-			ThrMbrRepository thrMbrRepository, MsgRepository msgRepository, CurrentActorProvider currentActorProvider) {
-		this.chatStreamService = chatStreamService;
+	public ChatController(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
+			CurrentActorProvider currentActorProvider) {
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.currentActorProvider = currentActorProvider;
-	}
-
-	/** Stream protocol은 기존 프론트 useChat의 streamProtocol:text 호환을 위해 text/plain으로 유지한다. */
-	@PostMapping(value = "/api/chat/stream", produces = MediaType.TEXT_PLAIN_VALUE + ";charset=UTF-8")
-	public Flux<String> streamChat(@Valid @RequestBody ChatStreamRequest request) {
-		return chatStreamService.streamChat(request);
 	}
 
 	@GetMapping("/api/chat/sessions")

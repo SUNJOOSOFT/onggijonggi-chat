@@ -18,7 +18,6 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
-import org.springframework.http.MediaType;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
@@ -32,7 +31,7 @@ import org.springframework.test.web.servlet.client.RestTestClient;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT,
 		properties = {"app.ratelimit.per-minute=2", "app.ratelimit.window-seconds=" + RateLimitWebFilterTest.WINDOW_SECONDS})
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class,
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class,
 		RateLimitWebFilterTest.RateLimitClockTestConfig.class})
 class RateLimitWebFilterTest {
 
@@ -59,39 +58,27 @@ class RateLimitWebFilterTest {
 				.build();
 	}
 
-	private static String requestBody() {
-		return """
-				{
-				  "sessionId": "11111111-1111-1111-1111-111111111111",
-				  "modelId": "test-model",
-				  "messages": [ { "role": "user", "content": "안녕" } ]
-				}
-				""";
-	}
-
 	/**
 	* returnsRateLimitedAfterExceedingPerMinuteLimit: 한도(2회)까지는 200이 오고, 그다음 요청은
 	* 429 + Retry-After 헤더 + RATE_LIMITED 봉투가 오는지, 윈도우가 지나면 다시 200으로 리셋되는지 검증한다.
+	* 필터는 sub별 요청 수만 세므로 어느 인증 엔드포인트를 쓰든 결과는 같다(`/api/chat/stream`이
+	* 있던 시절 쓰던 것을 이슈 #164로 걷어낸 뒤 `/api/chat/sessions`로 옮겼다).
 	*/
 	@Test
 	void returnsRateLimitedAfterExceedingPerMinuteLimit() {
 		String token = "Bearer " + TestJwtSupport.signedJwt("ratelimit-window-reset-user", List.of("USER"));
 
 		for (int i = 0; i < 2; i++) {
-			restTestClient.post()
-					.uri("/api/chat/stream")
-					.contentType(MediaType.APPLICATION_JSON)
+			restTestClient.get()
+					.uri("/api/chat/sessions")
 					.header(HttpHeaders.AUTHORIZATION, token)
-					.body(requestBody())
 					.exchange()
 					.expectStatus().isOk();
 		}
 
-		restTestClient.post()
-				.uri("/api/chat/stream")
-				.contentType(MediaType.APPLICATION_JSON)
+		restTestClient.get()
+				.uri("/api/chat/sessions")
 				.header(HttpHeaders.AUTHORIZATION, token)
-				.body(requestBody())
 				.exchange()
 				.expectStatus().isEqualTo(HttpStatus.TOO_MANY_REQUESTS)
 				.expectHeader().valueEquals(HttpHeaders.RETRY_AFTER, "1")
@@ -100,11 +87,9 @@ class RateLimitWebFilterTest {
 
 		rateLimitClock.advance(Duration.ofSeconds(1));
 
-		restTestClient.post()
-				.uri("/api/chat/stream")
-				.contentType(MediaType.APPLICATION_JSON)
+		restTestClient.get()
+				.uri("/api/chat/sessions")
 				.header(HttpHeaders.AUTHORIZATION, token)
-				.body(requestBody())
 				.exchange()
 				.expectStatus().isOk();
 	}

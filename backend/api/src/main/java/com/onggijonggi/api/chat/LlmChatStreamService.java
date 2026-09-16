@@ -19,7 +19,7 @@ import java.util.List;
  *               Chain은 아직 없어 .advisors()는 빈 채로 호출한다(추후 advisor 삽입 지점).
  */
 @Service
-public class LlmChatStreamService implements ChatStreamService {
+public class LlmChatStreamService {
 
 	private final ChatClient chatClient;
 
@@ -32,7 +32,6 @@ public class LlmChatStreamService implements ChatStreamService {
 	 * 게이트웨이가 실제 공급자·모델을 찾아준다. 목록에 없는 이름이면 게이트웨이가 거절한다 —
 	 * 어떤 이름이 유효한지 아는 곳이 게이트웨이 하나뿐이라 BFF는 따로 대조하지 않는다.
 	 */
-	@Override
 	public Flux<String> streamChat(ChatStreamRequest request) {
 		List<Message> messages = request.messages().stream()
 				.map(this::toSpringAiMessage)

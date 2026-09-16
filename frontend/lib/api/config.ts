@@ -35,7 +35,6 @@ export const serverBffUrl = (path: string): string =>
   `${SERVER_BFF_BASE_URL}${path}`;
 
 export const MODELS_PATH = '/api/models';
-export const CHAT_STREAM_PATH = '/api/chat/stream';
 export const CHAT_SESSIONS_PATH = '/api/chat/sessions';
 export const THREADS_PATH = '/api/threads';
 

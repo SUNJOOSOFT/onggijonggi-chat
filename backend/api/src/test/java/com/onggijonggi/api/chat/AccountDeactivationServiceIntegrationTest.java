@@ -24,7 +24,7 @@ import reactor.test.StepVerifier;
  */
 @SpringBootTest
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
 class AccountDeactivationServiceIntegrationTest {
 
 	@Autowired

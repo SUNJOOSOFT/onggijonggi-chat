@@ -345,7 +345,7 @@ public class ThreadParticipantService {
 	*
 	* Keycloak 조회 실패는 삼키고 로그만 남긴다 — 이 시점엔 참가자 변경이 이미 DB에 커밋돼 있어,
 	* 통지 실패로 호출자에게 5xx를 돌려주면 실제로는 성공한 초대·제거·위임이 실패로 보인다
-	* (PersistingChatStreamService의 "저장 실패는 채팅을 막지 않는다"와 같은 원칙).
+	* (ThreadMessageDispatcher의 "저장 실패는 채팅을 막지 않는다"와 같은 원칙).
 	*/
 	private Mono<Void> notifyParticipantChanged(UUID threadId, ParticipantChangeAction action, String subject) {
 		return keycloakAdminClient.displayName(subject)

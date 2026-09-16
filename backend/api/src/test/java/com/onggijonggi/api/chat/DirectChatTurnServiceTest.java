@@ -3,6 +3,7 @@ package com.onggijonggi.api.chat;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -51,7 +52,7 @@ class DirectChatTurnServiceTest {
 	}
 
 	@Test
-	void createsDirectThreadOwnerAndHumanMessageAndReservesAgentSequence() {
+	void createsDirectThreadOwnerHumanMessageAndPendingAgentAndReservesAgentSequence() {
 		UUID threadId = UUID.randomUUID();
 		UUID userId = UUID.randomUUID();
 		when(thrRepository.findByIdForSeqUpdate(threadId)).thenReturn(Optional.empty());
@@ -59,7 +60,8 @@ class DirectChatTurnServiceTest {
 		when(thrMbrRepository.save(any(ThrMbr.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(msgRepository.save(any(Msg.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
-		DirectChatTurnService.StoredTurn turn = service.prepareOrCreateBlocking(threadId, userId, "안녕", "안녕");
+		DirectChatTurnService.StoredTurn turn = service.prepareOrCreateWithPendingAgentBlocking(threadId, userId,
+				"안녕", "안녕");
 
 		ArgumentCaptor<Thr> thread = ArgumentCaptor.forClass(Thr.class);
 		verify(thrRepository).save(thread.capture());
@@ -73,9 +75,11 @@ class DirectChatTurnServiceTest {
 		assertThat(owner.getValue().getStatus()).isEqualTo(ThrMbrStatus.ACTIVE);
 
 		ArgumentCaptor<Msg> messages = ArgumentCaptor.forClass(Msg.class);
-		verify(msgRepository).save(messages.capture());
-		assertThat(messages.getAllValues()).extracting(Msg::getSeq).containsExactly(0L);
+		verify(msgRepository, times(2)).save(messages.capture());
+		assertThat(messages.getAllValues()).extracting(Msg::getSeq).containsExactly(0L, 1L);
 		assertThat(messages.getAllValues()).extracting(Msg::getThrId).containsOnly(threadId);
+		assertThat(messages.getAllValues()).extracting(Msg::getAthKind).containsExactly(AthKind.HUMAN, AthKind.AGENT);
+		assertThat(messages.getAllValues().get(1).getStatus()).isEqualTo(MsgStatus.PENDING);
 		assertThat(turn.threadId()).isEqualTo(threadId);
 		assertThat(turn.agentSeq()).isEqualTo(1L);
 	}
@@ -88,29 +92,9 @@ class DirectChatTurnServiceTest {
 		Thr collab = Thr.collab(ownerId, "협업방");
 		when(thrRepository.findByIdForSeqUpdate(threadId)).thenReturn(Optional.of(collab));
 
-		assertThatThrownBy(() -> service.prepareExistingBlocking(threadId, actorId, "안녕"))
+		assertThatThrownBy(() -> service.prepareExistingWithPendingAgentBlocking(threadId, actorId, "안녕"))
 				.isInstanceOfSatisfying(ResponseStatusException.class,
 						status -> assertThat(status.getStatusCode()).isEqualTo(HttpStatus.NOT_FOUND));
-	}
-
-	@Test
-	void persistsCompletedAgentAtTheReservedSequenceOnlyAfterStreamCompletion() {
-		UUID agentMessageId = UUID.randomUUID();
-		UUID threadId = UUID.randomUUID();
-		DirectChatTurnService.StoredTurn turn = new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 6L,
-				agentMessageId, threadId, 7L);
-		when(msgRepository.save(any(Msg.class))).thenAnswer(invocation -> invocation.getArgument(0));
-
-		service.persistCompletedAgentReplyBlocking(turn, "완료된 응답");
-
-		ArgumentCaptor<Msg> message = ArgumentCaptor.forClass(Msg.class);
-		verify(msgRepository).save(message.capture());
-		assertThat(message.getValue().getId()).isEqualTo(agentMessageId);
-		assertThat(message.getValue().getThrId()).isEqualTo(threadId);
-		assertThat(message.getValue().getSeq()).isEqualTo(7L);
-		assertThat(message.getValue().getAthKind()).isEqualTo(AthKind.AGENT);
-		assertThat(message.getValue().getStatus()).isEqualTo(MsgStatus.COMPLETE);
-		assertThat(message.getValue().getContent()).isEqualTo("완료된 응답");
 	}
 
 }

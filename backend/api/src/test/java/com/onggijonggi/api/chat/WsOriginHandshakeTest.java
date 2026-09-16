@@ -32,7 +32,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
-@Import({ChatControllerTest.FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class})
 class WsOriginHandshakeTest {
 
 	private static final String ALLOWED_ORIGIN = "http://localhost:3000";
