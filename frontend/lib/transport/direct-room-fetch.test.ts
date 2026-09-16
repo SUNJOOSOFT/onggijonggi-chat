@@ -47,7 +47,7 @@ function chatAnswer(
   partial: Partial<
     Pick<
       Extract<WsFrame, { type: 'chat.answer' }>,
-      'delta' | 'status' | 'msgId'
+      'delta' | 'status' | 'msgId' | 'citations' | 'restrictedResultsOmitted'
     >
   >,
 ) {
@@ -59,8 +59,8 @@ function chatAnswer(
     model: 'm',
     seq: 1,
     delta: partial.delta ?? '',
-    citations: [],
-    restrictedResultsOmitted: false,
+    citations: partial.citations ?? [],
+    restrictedResultsOmitted: partial.restrictedResultsOmitted ?? false,
     status: partial.status ?? 'streaming',
   });
 }
@@ -313,6 +313,43 @@ describe('createDirectChatFetch — DIRECT 전용 terminal 상태', () => {
     expect(onCurrentAnswerTerminal).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ status: 'denied' }),
     );
+  });
+
+  it('onChatCitation은 delta보다 먼저 오는 citations 전용 패킷을 그대로 넘긴다(이슈 #163)', async () => {
+    const onChatCitation = vi.fn();
+    const direct = createDirectChatFetch(THREAD_ID, {
+      startPromoted: true,
+      onChatCitation,
+    });
+    const responsePromise = direct.fetch('ignored', {
+      body: JSON.stringify({ messages: [{ role: 'user', content: '안녕' }] }),
+    });
+    const sub: FakeSubscription = subscribeRoom.mock.results[0].value;
+    const { turnId } = await sentChatMessage(sub);
+
+    sub.onFrame(
+      JSON.parse(
+        chatAnswer(turnId, {
+          delta: '',
+          citations: [
+            { docId: 'doc-001', title: '제목', snippet: '발췌', score: 0.9 },
+          ],
+          restrictedResultsOmitted: false,
+        }),
+      ),
+    );
+    sub.onFrame(
+      JSON.parse(chatAnswer(turnId, { delta: '반가워요', status: 'done' })),
+    );
+    const response = await responsePromise;
+    await response.text();
+
+    expect(onChatCitation).toHaveBeenCalledExactlyOnceWith({
+      citations: [
+        { docId: 'doc-001', title: '제목', snippet: '발췌', score: 0.9 },
+      ],
+      restrictedResultsOmitted: false,
+    });
   });
 
   it('onSystemNotice는 턴 매칭 여부와 무관하게 방의 모든 notice를 전달한다', async () => {

@@ -781,6 +781,52 @@ class ThreadMessageDispatcherTest {
 		verify(msgPersistenceService, never()).createPendingAgentMessageBlocking(any(), anyLong(), any());
 	}
 
+	/** DIRECT는 delta보다 먼저 citations 전용 chat.answer(delta="", STREAMING)를 보낸다(이슈
+	 * #163) — 답변이 끝나기 전에 근거 패널이 먼저 채워지는 UX 계약이다. */
+	@Test
+	void directDispatchBroadcastsCitationsFrameBeforeTheFirstDeltaFrame() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.recentCompleteContextBlocking(eq(room.threadId), anyInt())).thenReturn(List.of());
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+		ChatMessageCommand.ReservedTurn reserved = reservedTurn();
+
+		dispatcher.dispatch(directCommand(room, "질문", null, reserved), room.membership.generation());
+
+		awaitFrameCount(room.frames, 4);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.extracting(frame -> ((ChatAnswerFrame) frame).delta(), frame -> ((ChatAnswerFrame) frame).status(),
+						frame -> ((ChatAnswerFrame) frame).citations().isEmpty())
+				.containsExactly(tuple("", ChatAnswerStatus.STREAMING, false), tuple("답", ChatAnswerStatus.STREAMING, true),
+						tuple("", ChatAnswerStatus.DONE, true));
+		ChatAnswerFrame citationsFrame = (ChatAnswerFrame) room.frames.get(1);
+		assertThat(citationsFrame.citations()).extracting(Citation::docId).containsExactly("doc-001", "doc-014");
+		assertThat(citationsFrame.restrictedResultsOmitted()).isFalse();
+	}
+
+	/** citations·restrictedResultsOmitted는 독립이다 — "기밀" 등 민감 질의는 고정 citations를
+	 * 그대로 두고 restrictedResultsOmitted만 true로 켠다(ChatAnswerFrame 계약). */
+	@Test
+	void directDispatchMarksRestrictedResultsOmittedForSensitiveQueries() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.recentCompleteContextBlocking(eq(room.threadId), anyInt())).thenReturn(List.of());
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+		ChatMessageCommand.ReservedTurn reserved = reservedTurn();
+
+		dispatcher.dispatch(directCommand(room, "이건 기밀 사항인가요", null, reserved), room.membership.generation());
+
+		awaitFrameCount(room.frames, 4);
+		ChatAnswerFrame citationsFrame = (ChatAnswerFrame) room.frames.get(1);
+		assertThat(citationsFrame.delta()).isEmpty();
+		assertThat(citationsFrame.citations()).isNotEmpty();
+		assertThat(citationsFrame.restrictedResultsOmitted()).isTrue();
+	}
+
 	/** AI FIFO 초과는 DIRECT만 예약된 PENDING AGENT를 즉시 DENIED로 닫고 chat.answer(denied)를
 	 * 방 전체에 방송한다 — COLLAB은 AGENT 행 자체를 안 만든다(대비는 기존 rejectsOnlyThe... 테스트). */
 	@Test

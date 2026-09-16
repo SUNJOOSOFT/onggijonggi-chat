@@ -1,10 +1,11 @@
 /********************************************************
  파일명 : chat.ts (lib/api)
- 설 명 : 채팅/인용 BFF 호출. 엔드포인트 URL·요청 바디 변환·인용 조회를 한 곳에 캡슐화한다.
+ 설 명 : 채팅 BFF 호출. 엔드포인트 URL·요청 바디 변환을 한 곳에 캡슐화한다. 인용은 이슈 #163부터
+ REST가 아니라 chat.answer WS 프레임으로 오므로, 여기 CitationsResponse 타입만 그 모양을
+ 공유하는 용도로 남는다.
  *********************************************************/
 
 import {
-  CHAT_CITATIONS_PATH,
   CHAT_SESSIONS_PATH,
   CHAT_STREAM_PATH,
   bffUrl,
@@ -65,24 +66,6 @@ export interface Citation {
 export interface CitationsResponse {
   citations: Citation[];
   restrictedResultsOmitted: boolean;
-}
-
-/** 근거 인용 조회. 검색 전용 엔드포인트(LLM 미호출)이며, chat.tsx가 채팅 전송과 병렬로 호출한다. */
-export async function fetchCitations(params: {
-  sessionId: string;
-  query: string;
-  modelId: string;
-}): Promise<CitationsResponse> {
-  const res = await authFetch(bffUrl(CHAT_CITATIONS_PATH), {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(params),
-  });
-  if (!res.ok) {
-    // resolveChatError가 그대로 파싱할 수 있도록 에러 봉투 원문을 담아 던진다.
-    throw new Error(await res.text());
-  }
-  return res.json() as Promise<CitationsResponse>;
 }
 
 /** 서버에 저장된 세션을 삭제한다. 스토어의 deleteSession(zustand 로컬 액션)과 이름이 겹치지

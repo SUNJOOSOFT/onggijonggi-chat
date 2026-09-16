@@ -3,7 +3,7 @@
  설 명 : BFF 호출용 얇은 fetch 계층. 액세스 토큰을 "매 요청 시점"에 fresh하게 주입해야 하므로
  정적 headers가 아니라 커스텀 fetch로 주입한다(getSession()은 호출마다 세션을 다시 조회).
  401은 세션을 다시 불러 1회 재시도 후 강제 재로그인, 429는 Retry-After 백오프 후 재시도(상한 있음).
- 이 전송 계층 재시도는 채팅 스트림(useChat)과 인용 호출(fetchCitations)이 함께 누린다.
+ 이 전송 계층 재시도는 채팅 스트림(useChat)을 비롯한 authFetch 호출부가 함께 누린다.
  *********************************************************/
 
 import { getSession, signIn } from 'next-auth/react';
