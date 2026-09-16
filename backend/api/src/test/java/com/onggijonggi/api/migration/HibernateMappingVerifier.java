@@ -30,7 +30,9 @@ public final class HibernateMappingVerifier {
 	// 없어서 조용히 성공해 버린다 — 이 검증기의 존재 이유(거짓 통과 방지)가 스스로에게는
 	// 적용 안 되는 사각지대라 최소 개수로 막는다. 하한선이라 엔티티가 늘어나는 쪽은 이 값을
 	// 안 올려도 계속 통과한다 — 올려야 하는 경우는 스캔 범위를 실수로 좁혔을 때뿐이다.
-	private static final int MIN_EXPECTED_ENTITIES = 9;
+	// 9에서 7로 내린 것은 스캔 범위 축소가 아니라, ChatSess·ChatMsg 엔티티가 실제로 죽은
+	// 코드가 되어 제거됐기 때문이다(이슈 #164).
+	private static final int MIN_EXPECTED_ENTITIES = 7;
 
 	private HibernateMappingVerifier() {
 	}
