@@ -36,6 +36,7 @@ describe('frameSourceToResponse — 정상 흐름', () => {
     expect(onChatCitation).toHaveBeenCalledExactlyOnceWith({
       citations: [{ docId: 'd1', title: '제목', snippet: '발췌', score: 0.9 }],
       restrictedResultsOmitted: false,
+      turnId: null,
     });
   });
 
@@ -50,6 +51,7 @@ describe('frameSourceToResponse — 정상 흐름', () => {
     expect(onChatCitation).toHaveBeenCalledExactlyOnceWith({
       citations: [],
       restrictedResultsOmitted: true,
+      turnId: null,
     });
   });
 
