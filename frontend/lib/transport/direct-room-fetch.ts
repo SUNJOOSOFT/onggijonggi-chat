@@ -16,6 +16,7 @@
  "배너를 보이면서 끝낸다"는 계약).
  *********************************************************/
 
+import type { CitationsResponse } from '@/lib/api/chat';
 import { generateUUID } from '@/lib/utils';
 import {
   type RoomListenSubscription,
@@ -150,6 +151,10 @@ export interface CreateDirectChatFetchOptions {
   onCurrentAnswerTerminal?: (frame: ChatAnswerFrame) => void;
 
   onTurnStarted?: (turn: { clientMsgId: string; turnId: string }) => void;
+
+  /** 이 턴의 근거 인용이 도착하면 한 번 불린다(이슈 #163). 기존 REST `fetchCitations`를 대신한다
+   * — 서버가 `delta`보다 먼저 보내는 citations 전용 chat.answer 패킷에서 나온다. */
+  onChatCitation?: (payload: CitationsResponse) => void;
 
   onOpenChange?: (open: boolean) => void;
   /** 이 방에서 온 system.notice를 턴 매칭 여부와 무관하게 전부 받는다(#29, 이슈 #162) — 배너·
@@ -318,6 +323,7 @@ export function createDirectChatFetch(
     }
 
     const callbacks: FrameStreamCallbacks = {
+      onChatCitation: options?.onChatCitation,
       onChatAnswerTerminal: (status) => {
         cleanup();
         options?.onAnswerTerminal?.(status);

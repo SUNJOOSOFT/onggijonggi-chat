@@ -36,7 +36,7 @@ export type FrameSource = AsyncIterable<string>;
  * 선택적이다 — 지금 chat.tsx가 실제로 쓸 건 onChatCitation 하나뿐이고, 나머지 둘은 협업
  * 채팅방(#13)이 붙을 때 쓰일 자리를 미리 비워둔 것이다. onChatCitation은 기존 REST
  * CitationsResponse와 같은 모양(citations + restrictedResultsOmitted)을 그대로 재사용한다 —
- * #47에서 chat.tsx의 citationsByMessageId 상태로 옮길 때 변환 없이 바로 쓸 수 있게 하기 위해서다.
+ * #163에서 chat.tsx의 citationsByMessageId 상태로 옮길 때 변환 없이 바로 쓸 수 있게 하기 위해서다.
  * citations가 비어 있어도 restrictedResultsOmitted가 true면(전부 걸러진 경우) 불린다 —
  * "이 패킷에 citation 관련 정보가 있다"는 기준은 둘 중 하나라도 참인지로 판단한다. */
 export interface FrameStreamCallbacks {

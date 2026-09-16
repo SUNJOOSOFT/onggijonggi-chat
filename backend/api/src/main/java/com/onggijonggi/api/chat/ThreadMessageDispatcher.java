@@ -19,6 +19,7 @@ import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.regex.Pattern;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -71,6 +72,10 @@ public class ThreadMessageDispatcher {
 	* 무게를 둔다.
 	*/
 	private static final int SEQ_BLOCK_SIZE = 100;
+
+	/** REST /api/chat/citations 목업(frontend/app/(chat)/api/chat/citations/route.ts)과 같은
+	* 질의로, RBAC 소프트 필터링이 걸린 것처럼 흉내낸다(이슈 #163). */
+	private static final Pattern RESTRICTED_QUERY_PATTERN = Pattern.compile("기밀|임원|대외비");
 
 	private final ConcurrentMap<RoomKey, RoomAiState> states = new ConcurrentHashMap<>();
 
@@ -452,13 +457,33 @@ public class ThreadMessageDispatcher {
 	*/
 	private void startTurn(RoomKey key, RoomAiState state, ActiveTurn activeTurn) {
 		activeTurn.pendingMsgId.subscribe();
+		boolean direct = activeTurn.turn.reservedTurn() != null;
 
 		Disposable subscription = activeTurn.turn.context()
-				.flatMapMany(context -> abandoned(activeTurn)
-						? Flux.<String>never()
-						: withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
+				.flatMapMany(context -> {
+					if (abandoned(activeTurn)) {
+						return Flux.<String>never();
+					}
+					// citations는 1:1(DIRECT)에만 채운다 — 협업방 @AI 답변은 이슈 #163 코멘트에서
+					// 스코프 밖으로 명시적으로 뺐다.
+					Mono<CitationResult> citations = direct
+							? searchCitations(activeTurn.turn.prompt()).onErrorReturn(CitationResult.EMPTY)
+							: Mono.just(CitationResult.EMPTY);
+					return citations.flatMapMany(result -> {
+						// delta보다 먼저(빈 delta + STREAMING) 보내 답변 완료 전에 근거 패널이 채워지는
+						// UX를 유지한다(ChatAnswerFrame 계약). abandoned 재확인은 citations 조회
+						// 사이에 취소·방 닫힘이 끼어들 수 있어서다.
+						if (direct && !abandoned(activeTurn)) {
+							broadcastQuietly(key, new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId,
+									activeTurn.turn.turnId(), modelIdFor(activeTurn.turn), activeTurn.seq, "",
+									result.citations(), result.restrictedResultsOmitted(),
+									ChatAnswerStatus.STREAMING));
+						}
+						return withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 								new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
-										buildPromptMessages(context, activeTurn.turn.prompt()))))))
+										buildPromptMessages(context, activeTurn.turn.prompt())))));
+					});
+				})
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
 					activeTurn.content.append(delta);
@@ -492,6 +517,27 @@ public class ThreadMessageDispatcher {
 	/** 발화가 모델을 지정하지 않았으면 서버 기본값(app.thread.ai.model)으로 돌아간다(이슈 #160). */
 	private String modelIdFor(PendingTurn turn) {
 		return turn.model() == null || turn.model().isBlank() ? modelId : turn.model();
+	}
+
+	/**
+	* 1:1 채팅 근거 인용 검색(이슈 #163). 옮겨올 REST `/api/chat/citations` 서버 구현이 애초에
+	* 없어 신규 구현이다 — 실제 문서 검색(RAG)은 로드맵 v0.4 범위라, 지금까지 프론트 목업
+	* (frontend/app/(chat)/api/chat/citations/route.ts)이 내던 것과 같은 고정 응답을 낸다.
+	*/
+	private Mono<CitationResult> searchCitations(String query) {
+		return Mono.fromSupplier(() -> new CitationResult(
+				List.of(
+						new Citation("doc-001", "사내 규정집 3장 — 계약 관리",
+								"\"" + query + "\" 관련 조항: 계약 체결은 담당 부서장의 승인을 거쳐...", 0.91),
+						new Citation("doc-014", "표준 계약서 템플릿 v2",
+								"위약금 조항은 제12조에 따라 계약금의 10%를 상한으로...", 0.82)),
+				RESTRICTED_QUERY_PATTERN.matcher(query).find()));
+	}
+
+	/** citations·restrictedResultsOmitted는 서로 독립이다 — citations가 비어도 후자가 true일 수
+	 * 있다(ChatAnswerFrame 계약, PR #50 리뷰). */
+	private record CitationResult(List<Citation> citations, boolean restrictedResultsOmitted) {
+		static final CitationResult EMPTY = new CitationResult(List.of(), false);
 	}
 
 	/** 저장된 이력의 HUMAN/AGENT를 user/assistant로 매핑하고, 이번 멘션의 발화를 마지막에 붙인다. */

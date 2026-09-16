@@ -16,7 +16,7 @@ import { saveModelId } from '@/app/(chat)/actions';
 import { ChatHeader } from '@/components/chat-header';
 import { LoaderIcon } from '@/components/icons';
 import { NoticeBanner } from '@/components/notice-banner';
-import { buildChatRequestBody, fetchCitations } from '@/lib/api/chat';
+import { buildChatRequestBody } from '@/lib/api/chat';
 import {
   STREAM_TRUNCATED_MESSAGE,
   isStreamTruncated,
@@ -112,6 +112,15 @@ function ChatSession({
     | ((messages: Message[] | ((messages: Message[]) => Message[])) => void)
     | null
   >(null);
+
+  // 근거 인용 상태(이슈 #163). directChat(아래)의 onChatCitation이 채우므로 그보다 먼저
+  // 선언한다. pendingCitationMessageIdRef는 지금 도착하는 citations 패킷이 어느 useChat
+  // 메시지 것인지 잇는다 — WS 콜백은 turnId를 모르고 "지금 활성 턴"만 안다.
+  const [citationsByMessageId, setCitationsByMessageId] = useState<
+    Record<string, CitationsState>
+  >({});
+  const requestedCitationsRef = useRef<Set<string>>(new Set());
+  const pendingCitationMessageIdRef = useRef<string | null>(null);
   const activeTurnIdsRef = useRef(new Set<string>());
   const lastSeqRef = useRef<number | undefined>(undefined);
   const [connectionEpoch, setConnectionEpoch] = useState(0);
@@ -239,6 +248,14 @@ function ChatSession({
         },
         onCurrentAnswerTerminal: (frame) => {
           lastTerminalServerMsgIdRef.current = frame.msgId;
+        },
+        onChatCitation: ({ citations, restrictedResultsOmitted }) => {
+          const messageId = pendingCitationMessageIdRef.current;
+          if (!messageId) return;
+          setCitationsByMessageId((prev) => ({
+            ...prev,
+            [messageId]: { status: 'success', citations, restrictedResultsOmitted },
+          }));
         },
         onSystemNotice: handleSystemNotice,
         onChatMessage: mergeChatMessage,
@@ -474,47 +491,22 @@ function ChatSession({
     [append],
   );
 
-  // 새 user 메시지가 오면 채팅 스트림과 별도로 근거 인용을 조회한다. ref로 이미 요청한
-  // 메시지 id를 추적해(state면 effect 의존성에 넣어야 해 순환·중복요청 우려) 한 번만 쏜다.
-  const [citationsByMessageId, setCitationsByMessageId] = useState<
-    Record<string, CitationsState>
-  >({});
-  const requestedCitationsRef = useRef<Set<string>>(new Set());
-
+  // 새 user 메시지가 오면 근거 인용을 'loading'으로 표시해두고, 실제 값은 WS의 chat.answer
+  // citations 전용 패킷(onChatCitation, 이슈 #163)이 채운다 — 더 이상 REST로 병렬 조회하지
+  // 않는다. ref로 이미 처리한 메시지 id를 추적해(state면 effect 의존성 순환 우려) 한 번만
+  // 표시한다.
   useEffect(() => {
     const lastMessage = messages.at(-1);
     if (!lastMessage || lastMessage.role !== 'user') return;
     if (requestedCitationsRef.current.has(lastMessage.id)) return;
     requestedCitationsRef.current.add(lastMessage.id);
+    pendingCitationMessageIdRef.current = lastMessage.id;
 
     setCitationsByMessageId((prev) => ({
       ...prev,
       [lastMessage.id]: { status: 'loading' },
     }));
-
-    fetchCitations({
-      sessionId: id,
-      query: lastMessage.content,
-      modelId: modelIdRef.current,
-    })
-      .then(({ citations, restrictedResultsOmitted }) => {
-        setCitationsByMessageId((prev) => ({
-          ...prev,
-          [lastMessage.id]: {
-            status: 'success',
-            citations,
-            restrictedResultsOmitted,
-          },
-        }));
-      })
-      .catch((error: Error) => {
-        const { message } = resolveChatError(error);
-        setCitationsByMessageId((prev) => ({
-          ...prev,
-          [lastMessage.id]: { status: 'error', errorMessage: message },
-        }));
-      });
-  }, [messages, id]);
+  }, [messages]);
 
   // 세션은 첫 메시지를 실제로 보낼 때만 스토어에 만든다(draft 화면 새로고침으로 빈 세션이 쌓이지 않도록).
   const handleChatSubmit = useCallback<typeof handleSubmit>(
