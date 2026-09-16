@@ -12,7 +12,7 @@
  프레임으로 줄지는 아직 #22에 미결이라 양쪽 다 대비해야 한다(프레임 쪽은 room-state.ts).
  *********************************************************/
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { fetchCollabMessages } from '@/lib/api/collab';
 import { type RoomSubscription, subscribeRoom } from '@/lib/api/ws-rooms';
@@ -27,6 +27,7 @@ import {
   dismissNotice as dismissNoticeIn,
   initialRoomState,
   isForbidden,
+  isPresenceNotice,
   noticeMessage,
 } from './room-state';
 
@@ -63,6 +64,11 @@ export interface CollabRoom {
    * chat.answer(done)나 chat.queued(cancelled)로 온다 — 이미 끝난 턴이면 아무것도 오지 않는다.
    * 끊겨 있으면 false. */
   cancel: (turnId: string) => boolean;
+  /**
+   * 지금 중지할 수 있는 턴, 없으면 null. 흐르는 중인 AI 답변 중 이 화면이 부른 것만 고른다 —
+   * 방에는 남이 부른 턴도 함께 흐르고, 서버는 자기 커넥션의 취소만 인정하기 때문이다.
+   */
+  cancellableTurnId: string | null;
   /** 방을 막지 않는 최신 오류 알림을 닫는다. */
   dismissError: () => void;
   /** 방 위에 얹힌 시스템 알림(#29) 하나를 닫는다. */
@@ -251,18 +257,24 @@ export function useCollabRoom(threadId: string): CollabRoom {
     [],
   );
 
+  // 내가 시작한 턴만 기억한다. 서버는 그 턴을 시작한 커넥션이 보낸 취소만 인정하므로
+  // (CollabMessageDispatcher.ignoresACancelFromAnotherConnection), 남의 답변에 중지 버튼을
+  // 달아도 눌리기만 할 뿐 아무 일도 일어나지 않는다.
+  const myTurnIdsRef = useRef<Set<string>>(new Set());
+
   const send = useCallback(
     (content: string, model?: string) => {
       const ids = { clientMsgId: generateUUID(), turnId: generateUUID() };
-      return sendFrame({
+      const sent = sendFrame({
         type: 'chat.message',
         threadId,
         content,
         model,
         ...ids,
-      })
-        ? ids
-        : null;
+      });
+      if (!sent) return null;
+      myTurnIdsRef.current.add(ids.turnId);
+      return ids;
     },
     [sendFrame, threadId],
   );
@@ -271,6 +283,26 @@ export function useCollabRoom(threadId: string): CollabRoom {
     (turnId: string) => sendFrame({ type: 'chat.cancel', threadId, turnId }),
     [sendFrame, threadId],
   );
+
+  /**
+   * 지금 중지할 수 있는 턴. 흐르는 중인 AI 답변 중 내가 부른 것을 뒤에서 찾는다 — 방에는 남이
+   * 부른 턴도 함께 흐르기 때문이다(이슈 #160).
+   *
+   * 아직 첫 delta가 오지 않은 턴은 말풍선이 없어 여기 잡히지 않는다. 그 구간을 취소하려면
+   * chat.queued까지 상태로 들고 있어야 하는데, 눌러도 화면에 멈출 것이 없는 짧은 구간이라
+   * 두지 않았다.
+   */
+  const cancellableTurnId = useMemo(() => {
+    for (let index = state.messages.length - 1; index >= 0; index -= 1) {
+      const entry = state.messages[index];
+      if (isPresenceNotice(entry)) continue;
+      if (!entry.streaming || entry.from !== null) continue;
+      if (entry.turnId !== null && myTurnIdsRef.current.has(entry.turnId)) {
+        return entry.turnId;
+      }
+    }
+    return null;
+  }, [state.messages]);
 
   const dismissError = useCallback(
     () => setState((current) => clearRoomError(current)),
@@ -287,6 +319,7 @@ export function useCollabRoom(threadId: string): CollabRoom {
     connection,
     send,
     cancel,
+    cancellableTurnId,
     dismissError,
     dismissNotice,
     participantsRevision,

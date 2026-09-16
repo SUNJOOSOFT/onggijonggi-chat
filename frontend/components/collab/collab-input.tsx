@@ -16,6 +16,7 @@
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { ArrowUpIcon, StopIcon } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { AI_MENTION, mentionsAi } from '@/lib/collab/mention';
@@ -23,11 +24,14 @@ import { AI_MENTION, mentionsAi } from '@/lib/collab/mention';
 export function CollabInput({
   canSend,
   onSend,
+  onCancel,
 }: {
   /** 연결이 열려 있는지. 닫혀 있으면 보내기를 막는다. */
   canSend: boolean;
   /** 실제 전송. 끊겨 있어 못 보냈으면 false를 돌려준다(큐잉하지 않는다). */
   onSend: (content: string) => boolean;
+  /** 내가 부른 AI 답변이 흐르는 동안만 주어진다. 있으면 보내기 대신 중지를 그린다. */
+  onCancel?: () => void;
 }) {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -102,14 +106,34 @@ export function CollabInput({
         />
 
         <div className="absolute bottom-0 right-0 flex w-fit flex-row justify-end p-2">
-          <Button
-            type="button"
-            className="h-fit rounded-full px-3 py-1.5 text-xs"
-            onClick={submit}
-            disabled={!canSend || input.trim() === ''}
-          >
-            보내기
-          </Button>
+          {/* 답변이 흐르는 동안에는 보내기 자리를 중지가 대신한다. 아이콘·모양은 1:1 입력창의
+              StopButton/SendButton과 같은 값을 쓴다 — 두 화면을 오갈 때 같은 자리에 같은 것이
+              있어야 한다. 그쪽 컴포넌트를 그대로 가져오지 않은 것은 setMessages·submitForm 등
+              1:1 전용 props와 memo 비교자(이슈 #94)에 묶여 있어서다.
+
+              자리를 나란히 두지 않은 것은, 답변 도중에 다시 보내면 턴이 대기열에 쌓여 중지가
+              무슨 턴을 멈추는지 흐려져서다. */}
+          {onCancel ? (
+            <Button
+              type="button"
+              className="h-fit rounded-full border p-1.5 dark:border-zinc-600"
+              aria-label="AI 응답 생성 중지"
+              onClick={onCancel}
+              disabled={!canSend}
+            >
+              <StopIcon size={14} />
+            </Button>
+          ) : (
+            <Button
+              type="button"
+              className="h-fit rounded-full border p-1.5 dark:border-zinc-600"
+              aria-label="메시지 보내기"
+              onClick={submit}
+              disabled={!canSend || input.trim() === ''}
+            >
+              <ArrowUpIcon size={14} />
+            </Button>
+          )}
         </div>
       </div>
     </div>

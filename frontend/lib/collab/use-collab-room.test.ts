@@ -267,3 +267,87 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
     expect(mocks.fetchCollabMessages).toHaveBeenNthCalledWith(3, THREAD, 3);
   });
 });
+
+/**
+ * 중지 버튼이 무엇을 고르는지(#205). 서버는 턴을 시작한 커넥션이 보낸 취소만 인정하므로
+ * (CollabMessageDispatcher.cancel), 화면도 "내가 부른 턴"만 멈출 수 있는 것으로 보여야 한다.
+ */
+describe('useCollabRoom — 중지할 수 있는 턴 고르기(#205)', () => {
+  /** chat.answer 패킷 한 장. status만 바꿔 흐름과 종료를 만든다. */
+  function answer(turnId: string | null, done: boolean, msgId = 'ans-1') {
+    return {
+      type: 'chat.answer' as const,
+      threadId: THREAD,
+      msgId,
+      turnId,
+      model: 'gemma',
+      seq: 10,
+      delta: '답',
+      citations: [],
+      restrictedResultsOmitted: false,
+      status: done ? ('done' as const) : ('streaming' as const),
+    };
+  }
+
+  async function openedRoom() {
+    mocks.fetchCollabMessages.mockResolvedValue([]);
+    const { result } = renderHook(() => useCollabRoom(THREAD));
+    await act(async () => {
+      latestListener().onOpenChange?.(true);
+    });
+    return result;
+  }
+
+  it('내가 부른 턴이 흐르는 동안에는 그 turnId를 돌려준다', async () => {
+    const result = await openedRoom();
+
+    let turnId = '';
+    await act(async () => {
+      turnId = result.current.send('@AI 질문')?.turnId ?? '';
+    });
+    expect(turnId).not.toBe('');
+
+    await act(async () => {
+      latestListener().onFrame(answer(turnId, false));
+    });
+
+    expect(result.current.cancellableTurnId).toBe(turnId);
+  });
+
+  it('턴이 끝나면 다시 null이다 — 멈출 것이 없다', async () => {
+    const result = await openedRoom();
+
+    let turnId = '';
+    await act(async () => {
+      turnId = result.current.send('@AI 질문')?.turnId ?? '';
+    });
+    await act(async () => {
+      latestListener().onFrame(answer(turnId, false));
+    });
+    await act(async () => {
+      latestListener().onFrame(answer(turnId, true));
+    });
+
+    expect(result.current.cancellableTurnId).toBeNull();
+  });
+
+  it('남이 부른 턴은 고르지 않는다 — 눌러도 서버가 인정하지 않는다', async () => {
+    const result = await openedRoom();
+
+    await act(async () => {
+      latestListener().onFrame(answer('남의-턴', false));
+    });
+
+    expect(result.current.cancellableTurnId).toBeNull();
+  });
+
+  it('turnId 없이 온 답변도 고르지 않는다 — 지목할 대상이 없다', async () => {
+    const result = await openedRoom();
+
+    await act(async () => {
+      latestListener().onFrame(answer(null, false));
+    });
+
+    expect(result.current.cancellableTurnId).toBeNull();
+  });
+});

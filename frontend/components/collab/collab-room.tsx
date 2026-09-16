@@ -170,6 +170,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
     state,
     connection,
     send,
+    cancel,
+    cancellableTurnId,
     dismissError,
     dismissNotice,
     participantsRevision,
@@ -262,6 +264,11 @@ export function CollabRoom({ threadId }: { threadId: string }) {
             <CollabInput
               canSend={connection === 'open'}
               onSend={(content) => send(content) !== null}
+              onCancel={
+                cancellableTurnId === null
+                  ? undefined
+                  : () => cancel(cancellableTurnId)
+              }
             />
           </div>
         </main>

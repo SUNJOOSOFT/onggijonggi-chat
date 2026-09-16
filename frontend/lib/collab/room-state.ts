@@ -43,6 +43,15 @@ export interface CollabMessage {
   content: string;
   /** AI 답변이 아직 흐르는 중인지. 사람 메시지는 언제나 false다. */
   streaming: boolean;
+  /**
+   * 이 AI 답변을 불러낸 턴의 식별자(이슈 #160). 사람 메시지와 REST 이력은 null이다 —
+   * 이력에는 저장되지 않는 값이고, 지나간 턴은 어차피 중지할 수 없기 때문이다.
+   *
+   * 중지 버튼이 "내가 부른 턴"만 골라내는 근거다 — 서버는 그 턴을 시작한 커넥션이 보낸
+   * 취소만 받으므로(CollabMessageDispatcher.cancel), 남의 답변에 버튼을 달면 눌러도 아무 일도
+   * 일어나지 않는다.
+   */
+  turnId: string | null;
   citations: Citation[];
   restrictedResultsOmitted: boolean;
 }
@@ -176,6 +185,7 @@ function appendMessage(
   from: PresenceParticipant | null,
   content: string,
   streaming: boolean,
+  turnId: string | null,
 ): RoomState {
   return {
     ...state,
@@ -187,6 +197,7 @@ function appendMessage(
         from,
         content,
         streaming,
+        turnId,
         citations: [],
         restrictedResultsOmitted: false,
       },
@@ -306,6 +317,7 @@ function toCollabMessage(item: CollabMessageItem): CollabMessage {
         : null,
     content: item.content,
     streaming: false,
+    turnId: null,
     citations: [],
     restrictedResultsOmitted: false,
   };
@@ -468,6 +480,7 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         { subject: frame.from, displayName: frame.fromDisplayName },
         frame.content,
         false,
+        null,
       );
 
     case 'chat.answer': {
@@ -501,6 +514,7 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         null,
         frame.delta,
         !done,
+        frame.turnId,
       );
       return extendAnswer(
         appended,
