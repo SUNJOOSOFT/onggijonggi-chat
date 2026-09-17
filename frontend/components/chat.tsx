@@ -25,6 +25,7 @@ import { saveModelId } from '@/app/(chat)/actions';
 import { ChatHeader } from '@/components/chat-header';
 import { LoaderIcon } from '@/components/icons';
 import { NoticeBanner } from '@/components/notice-banner';
+import { friendlyMessageForCode } from '@/lib/api/errors';
 import {
   type ThreadMessageItem,
   fetchThreadMessages,
@@ -43,6 +44,23 @@ import { MultimodalInput } from './multimodal-input';
 
 /** 이력을 읽을 수 없는 방. 404·403을 "잠깐 실패"와 가르려고 타입으로 구분한다. */
 class RoomInaccessibleError extends Error {}
+
+/** 잠깐 실패한 이력 조회. 문구를 고르려고 상태 코드를 들고 다닌다. */
+class RoomHistoryError extends Error {
+  constructor(readonly status: number) {
+    super(`history status ${status}`);
+  }
+}
+
+/**
+ * 이력 조회 실패를 사용자에게 알릴 문구. 상태 코드를 BFF 에러 코드로 옮겨 기존 문구 표를
+ * 그대로 쓴다 — 실패 응답의 봉투는 fetchThreadMessages가 이미 버린 뒤라 코드를 못 읽는다.
+ */
+function historyErrorMessage(error: unknown): string {
+  const status = error instanceof RoomHistoryError ? error.status : undefined;
+  if (status === 429) return friendlyMessageForCode('RATE_LIMITED');
+  return friendlyMessageForCode(undefined);
+}
 
 /** localStorage 복원 전엔 빈 스토어를 보고 매번 새 세션을 만들어버리므로, 복원이 끝날 때까지
  * 로딩 스피너만 보여주는 게이트. */
@@ -119,14 +137,25 @@ function ChatSession({
         if (isNewDraft) return [];
         throw new RoomInaccessibleError(`history status ${status}`);
       }
-      if (status >= 400) throw new Error(`history status ${status}`);
+      if (status >= 400) throw new RoomHistoryError(status);
       return messages;
     },
     [isNewDraft],
   );
 
+  /**
+   * 여기 닿았다면 authFetch의 재시도(429는 Retry-After 백오프로 2회)까지 소진한 뒤다.
+   *
+   * 조용히 넘기면 안 된다 — 과거 대화가 하나도 없는 빈 방이 뜨는데, 사용자에게는 대화가
+   * 사라진 것처럼 보인다. 방 자체는 열려 있고 새 발화는 보낼 수 있으므로 화면을 막지는 않고
+   * 토스트로만 알린다.
+   */
   const handleHistoryError = useCallback((error: unknown) => {
-    if (error instanceof RoomInaccessibleError) setIsInaccessible(true);
+    if (error instanceof RoomInaccessibleError) {
+      setIsInaccessible(true);
+      return;
+    }
+    toast.error(historyErrorMessage(error));
   }, []);
 
   const room = useRoom(id, {
