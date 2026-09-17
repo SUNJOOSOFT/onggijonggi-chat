@@ -323,9 +323,9 @@ function ChatSession({
   // 갈라졌다(이슈 #94). page.tsx가 key={id}로 리마운트하므로 세션을 옮기면 쿠키 값으로 초기화된다.
   const [modelId, setModelId] = useState(selectedModelId);
 
-  // 전송 시점에 읽을 최신 값. useChat이 돌려주는 handleSubmit은 memo된 입력창에 붙잡혀 낡을 수
-  // 있는데, 클로저가 낡아도 ref는 최신을 가리키므로 방금 고른 모델로 나간다. 위 reloadRef와
-  // 같은 패턴이다.
+  // 전송 시점에 읽을 최신 값. 전송 경로의 클로저는 memo된 입력창에 붙잡혀 낡을 수 있는데,
+  // 클로저가 낡아도 ref는 최신을 가리키므로 방금 고른 모델로 나간다. 위 reloadRef와 같은
+  // 패턴이다.
   const modelIdRef = useRef(modelId);
   modelIdRef.current = modelId;
 
@@ -352,9 +352,9 @@ function ChatSession({
     }
   }, [id]);
 
-  // useChat에 넘기는 콜백은 useCallback으로 고정한다. 이것들이 매 렌더 새 객체면 useChat 내부의
-  // triggerRequest → handleSubmit이 매 렌더 새로 만들어져, 입력창의 memo 비교자가 무력화되고
-  // 스트리밍 중 100ms(experimental_throttle)마다 입력창이 다시 그려진다.
+  // useChat에 넘기는 콜백은 useCallback으로 고정한다. 이것들이 매 렌더 새 객체면 useChat 내부가
+  // 전송 경로를 매 렌더 새로 만들어, 스트리밍 중 100ms(experimental_throttle)마다 그 영향이
+  // 아래로 퍼진다.
   const prepareRequestBody = useCallback(
     ({ messages }: { messages: Message[] }) => ({
       ...buildChatRequestBody({
@@ -436,16 +436,9 @@ function ChatSession({
     }
   }, []);
 
-  const {
-    messages,
-    setMessages,
-    handleSubmit,
-    input,
-    setInput,
-    append,
-    isLoading,
-    stop,
-  } = useChat({
+  // input·setInput·handleSubmit은 더 이상 꺼내지 않는다 — 입력 텍스트와 전송 트리거는
+  // 입력창이 직접 들고, 이쪽은 append로 완성된 발화만 받는다.
+  const { messages, setMessages, append, isLoading, stop } = useChat({
     id,
     initialMessages,
     // api는 실제로 안 불린다 — fetch를 완전히 대체해 WS 기반 direct-room-fetch.ts로 보낸다
@@ -514,16 +507,20 @@ function ChatSession({
     }));
   }, [messages]);
 
-  // 세션은 첫 메시지를 실제로 보낼 때만 스토어에 만든다(draft 화면 새로고침으로 빈 세션이 쌓이지 않도록).
-  const handleChatSubmit = useCallback<typeof handleSubmit>(
-    (event, options) => {
+  // 입력창이 완성한 발화 하나를 받아 보낸다. 입력 텍스트는 입력창이 직접 들고 있어 이쪽으로
+  // 올라오지 않는다 — useChat의 input·handleSubmit 대신 append를 쓰는 이유가 그것이다.
+  //
+  // 세션은 첫 메시지를 실제로 보낼 때만 스토어에 만든다(draft 화면 새로고침으로 빈 세션이
+  // 쌓이지 않도록).
+  const handleSend = useCallback(
+    (content: string) => {
       const { sessions, createSession } = useChatSessionsStore.getState();
       if (!sessions.some((session) => session.id === id)) {
         createSession({ id, modelId: modelIdRef.current });
       }
-      handleSubmit(event, options);
+      append({ role: 'user', content });
     },
-    [handleSubmit, id],
+    [append, id],
   );
 
   return (
@@ -563,13 +560,9 @@ function ChatSession({
       <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
         <MultimodalInput
           chatId={id}
-          input={input}
-          setInput={setInput}
-          handleSubmit={handleChatSubmit}
+          onSend={handleSend}
           isLoading={isLoading || isInaccessible}
           stop={stop}
-          messages={messages}
-          append={append}
         />
       </form>
     </div>

@@ -3,12 +3,15 @@
 /********************************************************
  파일명 : multimodal-input.tsx
  설 명 : 채팅 입력창(Textarea)과 전송/중지 버튼. 입력 중 텍스트를 localStorage에도 보관해 새로고침해도 잃지 않게 한다.
+
+ 입력 중인 텍스트는 이 컴포넌트가 직접 들고, 바깥에는 onSend(content)로 완성된 발화만 넘긴다.
+ 예전에는 useChat의 input·setInput·handleSubmit을 그대로 받아 전송이 AI SDK에 묶여 있었다 —
+ 협업방이 이 입력창을 재사용하지 못하고 collab-input.tsx를 따로 둔 이유가 그 결합이었다.
  *********************************************************/
 
-import type { ChatRequestOptions, CreateMessage, Message } from 'ai';
 import cx from 'classnames';
 import type React from 'react';
-import { memo, useCallback, useEffect, useRef } from 'react';
+import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useLocalStorage, useWindowSize } from 'usehooks-ts';
 
@@ -36,33 +39,19 @@ const resetHeight = (ref: React.RefObject<HTMLTextAreaElement>) => {
  * 전송 시 URL을 `/chat/{chatId}`로 바꿔(history.replaceState) 새로고침해도 같은 세션을 유지한다. */
 function PureMultimodalInput({
   chatId,
-  input,
-  setInput,
   isLoading,
   stop,
-  messages,
-  append,
-  handleSubmit,
+  onSend,
   className,
 }: {
   chatId: string;
-  input: string;
-  setInput: (value: string) => void;
   isLoading: boolean;
   stop: () => void;
-  messages: Array<Message>;
-  append: (
-    message: Message | CreateMessage,
-    chatRequestOptions?: ChatRequestOptions,
-  ) => Promise<string | null | undefined>;
-  handleSubmit: (
-    event?: {
-      preventDefault?: () => void;
-    },
-    chatRequestOptions?: ChatRequestOptions,
-  ) => void;
+  /** 완성된 발화 하나. 어떻게 보낼지는 바깥이 정한다. */
+  onSend: (content: string) => void;
   className?: string;
 }) {
+  const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
 
@@ -85,7 +74,8 @@ function PureMultimodalInput({
       setInput(finalValue);
       adjustHeight(textareaRef);
     }
-  }, [setInput, localStorageInput]);
+    // setInput은 useState 세터라 항상 같은 참조다 — 의존성에 넣을 필요가 없다.
+  }, [localStorageInput]);
 
   useEffect(() => {
     setLocalStorageInput(input);
@@ -97,17 +87,20 @@ function PureMultimodalInput({
   };
 
   const submitForm = useCallback(() => {
+    // 빈 발화는 보내지 않는다. 버튼은 disabled라 여기 오지 않지만 Enter는 막는 곳이 없다.
+    if (input.length === 0) return;
     window.history.replaceState({}, '', `/chat/${chatId}`);
 
-    handleSubmit(undefined);
+    onSend(input);
 
+    setInput('');
     setLocalStorageInput('');
     resetHeight(textareaRef);
 
     if (width && width > 768) {
       textareaRef.current?.focus();
     }
-  }, [handleSubmit, setLocalStorageInput, width, chatId]);
+  }, [input, onSend, setLocalStorageInput, width, chatId]);
 
   return (
     <div className="relative w-full flex flex-col gap-4">
@@ -154,12 +147,15 @@ function PureMultimodalInput({
 export const MultimodalInput = memo(
   PureMultimodalInput,
   (prevProps, nextProps) => {
-    if (prevProps.input !== nextProps.input) return false;
+    // 입력 텍스트는 이제 내부 state라 여기서 비교하지 않는다 — state가 바뀌면 memo와 무관하게
+    // 다시 그려진다.
     if (prevProps.isLoading !== nextProps.isLoading) return false;
+    if (prevProps.chatId !== nextProps.chatId) return false;
+    if (prevProps.stop !== nextProps.stop) return false;
     // 전송에 쓰이는 값(모델 등)은 chat.tsx가 ref로 읽으므로 낡은 클로저를 들고 있어도 정확하다.
-    // 여기 비교는 그 위의 안전망이다 — useChat 옵션이 불안정해지면 handleSubmit이 다시 매 렌더
-    // 새로 만들어지는데, 그때도 화면이 낡은 채로 남지는 않게 한다(이슈 #94).
-    if (prevProps.handleSubmit !== nextProps.handleSubmit) return false;
+    // 여기 비교는 그 위의 안전망이다 — 바깥 사정으로 onSend가 매 렌더 새로 만들어지는 때가
+    // 와도 화면이 낡은 채로 남지는 않게 한다(이슈 #94).
+    if (prevProps.onSend !== nextProps.onSend) return false;
 
     return true;
   },
