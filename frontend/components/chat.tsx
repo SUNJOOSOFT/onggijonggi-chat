@@ -311,10 +311,14 @@ function ChatSession({
   // 만든다(draft 화면 새로고침으로 빈 세션이 쌓이지 않도록).
   const handleSend = useCallback(
     (content: string) => {
-      const { sessions, createSession } = useChatSessionsStore.getState();
+      const { sessions, createSession, applyFirstMessageTitle } =
+        useChatSessionsStore.getState();
       if (!sessions.some((session) => session.id === id)) {
         createSession({ id, modelId: modelIdRef.current });
       }
+      // 서버도 첫 발화로 제목을 정하지만 사이드바는 마운트당 한 번만 서버 목록을 읽는다 —
+      // 여기서 정해 두지 않으면 새 대화가 새로고침 전까지 "새 대화"로 남는다.
+      applyFirstMessageTitle(id, content);
       sendTurn(content);
     },
     [id, sendTurn],

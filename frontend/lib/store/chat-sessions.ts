@@ -1,14 +1,14 @@
 /********************************************************
  파일명 : chat-sessions.ts (lib/store)
- 설 명 : 다중 채팅 세션 상태 스토어. 세션 목록·현재 세션·세션별 메시지를 zustand로 관리하고
- localStorage로 지속한다. isLoading(스트리밍 여부)은 useChat이 컴포넌트 로컬로 관리하므로
- 여긴 두지 않는다 — 여러 세션 동시 백그라운드 스트리밍은 스코프 밖.
+ 설 명 : 다중 채팅 세션 상태 스토어. 세션 목록과 현재 세션을 zustand로 관리하고 localStorage로
+ 지속한다. 대화 내용은 여기 두지 않는다 — 이력의 정본은 서버이고(이슈 #218), 로컬 사본은 서버
+ 이력과 id가 어긋나 같은 메시지를 두 벌로 보이게 하던 원인이었다. 스트리밍 여부도 방 상태
+ (lib/chat/room-state)에서 나오므로 여긴 두지 않는다.
  failedMessageIds는 재로그인 리다이렉트 후에도 "전송 실패 + 재전송" 표시가 남아야 해서 이 스토어에 둔다.
  하이드레이션: 서버 평가 시점엔 localStorage가 없어 skipHydration으로 자동 복원을 끄고,
  클라이언트 마운트 후 useChatSessionsHydrated가 명시적으로 복원한다.
  *********************************************************/
 
-import type { Message } from 'ai';
 import { useEffect, useState } from 'react';
 import { create } from 'zustand';
 import { createJSONStorage, persist } from 'zustand/middleware';
@@ -24,7 +24,6 @@ export interface ChatSession {
   id: string;
   title: string;
   modelId: string;
-  messages: Message[];
   createdAt: number;
   failedMessageIds: string[];
   /** true면 renameSession으로 사용자가 직접 정한 제목 — 자동 파생·서버 동기화가 덮어쓰지 않는다. */
@@ -39,12 +38,11 @@ export const TITLE_MAX_LENGTH = 40;
  * zustand가 "바뀐 값"으로 보고 매 렌더 재구독을 트리거해 무한 리렌더로 이어진다. */
 export const EMPTY_FAILED_MESSAGE_IDS: string[] = [];
 
-/** 첫 user 메시지로 세션 탭 제목을 만든다. 없으면 기본 제목, TITLE_MAX_LENGTH 초과 시 말줄임표로 자른다. */
-export function deriveTitle(messages: Message[]): string {
-  const firstUserMessage = messages.find((message) => message.role === 'user');
-  if (!firstUserMessage?.content) return DEFAULT_TITLE;
+/** 첫 발화로 세션 탭 제목을 만든다. 비었으면 기본 제목, TITLE_MAX_LENGTH 초과 시 말줄임표로 자른다. */
+export function deriveTitle(content: string): string {
+  const trimmed = content.trim();
+  if (!trimmed) return DEFAULT_TITLE;
 
-  const trimmed = firstUserMessage.content.trim();
   return trimmed.length > TITLE_MAX_LENGTH
     ? `${trimmed.slice(0, TITLE_MAX_LENGTH)}…`
     : trimmed;
@@ -68,12 +66,38 @@ interface ChatSessionsState {
   createSession: (params: { id: string; modelId: string }) => void;
   switchSession: (id: string) => void;
   deleteSession: (id: string) => void;
-  setSessionMessages: (id: string, messages: Message[]) => void;
+  applyFirstMessageTitle: (id: string, content: string) => void;
   clearCurrentSession: () => void;
   setSessions: (serverSessions: ServerChatSession[]) => void;
   markMessageFailed: (sessionId: string, messageId: string) => void;
   clearMessageFailed: (sessionId: string, messageId: string) => void;
   renameSession: (id: string, title: string) => void;
+}
+
+/**
+ * v0 → v1: 세션마다 들고 있던 messages 배열을 버린다.
+ *
+ * 그냥 두면 코드를 고쳐도 기존 사용자 화면의 중복이 그대로 남는다. 그 사본은 임시 id(useChat이
+ * 만들던 nanoid)로 저장돼 있어 서버 이력의 msgId와 짝이 맞지 않고, 합치는 쪽은 id로만 같은
+ * 메시지를 알아보기 때문이다. 버려도 잃는 것은 없다 — 이력의 정본은 서버다(이슈 #218).
+ *
+ * persist 옵션 안에 두지 않고 밖으로 뺀 이유는 시험하기 위해서다. vitest 환경이 'node'라
+ * localStorage가 없어 persist가 아예 안 붙고, 그러면 스토어를 통해서는 이 함수에 닿을 수 없다.
+ */
+export function migrateChatSessions(persisted: unknown, version: number) {
+  if (version >= 1) return persisted;
+  const state = persisted as { sessions?: unknown[] } | null;
+  if (state?.sessions === undefined) return persisted;
+  return {
+    ...state,
+    sessions: state.sessions.map((session) => {
+      const { messages: _dropped, ...rest } = session as Record<
+        string,
+        unknown
+      >;
+      return rest;
+    }),
+  };
 }
 
 export const useChatSessionsStore = create<ChatSessionsState>()(
@@ -90,7 +114,6 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
               id,
               title: DEFAULT_TITLE,
               modelId,
-              messages: [],
               createdAt: Date.now(),
               failedMessageIds: [],
               titleCustomized: false,
@@ -119,26 +142,24 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
           ),
         })),
 
-      // 제목은 첫 user 메시지 도착 시 한 번만 확정한다(계속 바뀌면 탭을 못 찾는 UX가 됨).
-      // titleCustomized면 사용자가 직접 정한 제목이라 손대지 않는다.
-      setSessionMessages: (id, messages) =>
+      // 제목은 첫 발화를 보낼 때 한 번만 확정한다(계속 바뀌면 탭을 못 찾는 UX가 됨).
+      // titleCustomized면 사용자가 직접 정한 제목이라 손대지 않고, 이미 확정된 제목도 그대로 둔다.
+      //
+      // 서버도 첫 발화로 제목을 정하지만(ThreadWebSocketHandler.titleFor) 사이드바는 마운트당
+      // 한 번만 서버 목록을 읽는다 — 로컬에서도 정해 두지 않으면 새 대화가 새로고침 전까지
+      // "새 대화"로 남는다.
+      applyFirstMessageTitle: (id, content) =>
         set((state) => ({
           sessions: state.sessions.map((session) =>
-            session.id === id
-              ? {
-                  ...session,
-                  messages,
-                  title:
-                    !session.titleCustomized && session.title === DEFAULT_TITLE
-                      ? deriveTitle(messages)
-                      : session.title,
-                }
+            session.id === id &&
+            !session.titleCustomized &&
+            session.title === DEFAULT_TITLE
+              ? { ...session, title: deriveTitle(content) }
               : session,
           ),
         })),
 
-      // 서버가 진실의 원천이라 서버 목록에 없는 로컬 세션은 제거한다. messages는 서버 응답에
-      // 없으므로(메타데이터만) 로컬에 이미 로드돼 있으면 보존한다. title도 titleCustomized면
+      // 서버가 진실의 원천이라 서버 목록에 없는 로컬 세션은 제거한다. title은 titleCustomized면
       // 로컬 값을 지킨다 — 그러지 않으면 PATCH 실패 시 새로고침마다 이름이 되돌아간다.
       setSessions: (serverSessions) =>
         set((state) => {
@@ -154,7 +175,6 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
                 // 서버 응답에는 모델이 없다. 로컬 기록이 없으면 비워둔다 — 이 값은 세션을 만든
                 // 시점의 기록일 뿐이고, 실제 전송에 쓰이는 모델은 chat.tsx가 쥔 modelId 상태다.
                 modelId: local?.modelId ?? '',
-                messages: local?.messages ?? [],
                 createdAt: new Date(server.createdAt).getTime(),
                 failedMessageIds: local?.failedMessageIds ?? [],
                 titleCustomized: local?.titleCustomized ?? false,
@@ -213,6 +233,8 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
       name: 'chat-sessions',
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
+      version: 1,
+      migrate: migrateChatSessions,
     },
   ),
 );

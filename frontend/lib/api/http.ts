@@ -104,7 +104,7 @@ export async function authFetchWithRetry(
   }
 }
 
-/** BFF 호출용 커스텀 fetch. useChat의 `fetch` 옵션 및 일반 BFF 호출에 사용한다. */
+/** BFF 호출용 커스텀 fetch. 이력·세션 등 모든 BFF 호출이 이 경로를 쓴다. */
 export const authFetch: typeof fetch = (input, init) =>
   authFetchWithRetry(input, init);
 
