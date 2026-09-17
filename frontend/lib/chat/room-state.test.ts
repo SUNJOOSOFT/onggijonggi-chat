@@ -1,6 +1,6 @@
-import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
+import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import type { PresenceParticipant, WsFrame } from '@/lib/transport/frames';
 import {
   type RoomMessage,
@@ -77,7 +77,7 @@ function notice(
 
 function answer(
   delta: string,
-  status: 'streaming' | 'done',
+  status: 'streaming' | 'done' | 'cancelled' | 'denied',
   metadata: {
     citations?: Citation[];
     restrictedResultsOmitted?: boolean;
@@ -204,6 +204,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
         from: person('sujin'),
         content: '안녕하세요',
         streaming: false,
+        terminalStatus: null,
         turnId: null,
         citations: [],
         restrictedResultsOmitted: false,
@@ -253,6 +254,7 @@ describe('applyFrame - chat.message', () => {
         from: person('sujin'),
         content: '이 계약서 확인 부탁해요',
         streaming: false,
+        terminalStatus: null,
         turnId: null,
         citations: [],
         restrictedResultsOmitted: false,
@@ -274,6 +276,7 @@ describe('applyFrame - chat.answer', () => {
       from: null,
       content: '제12조에 따르면 상한은 10%입니다.',
       streaming: false,
+      terminalStatus: null,
     });
   });
 
@@ -307,6 +310,7 @@ describe('applyFrame - chat.answer', () => {
     expect(state.messages[0]).toMatchObject({
       content: '제12조에 따르면 10%입니다.',
       streaming: false,
+      terminalStatus: null,
     });
   });
 
@@ -348,8 +352,49 @@ describe('applyFrame - chat.answer', () => {
     expect(state.messages[0]).toMatchObject({
       content: '답변',
       streaming: false,
+      terminalStatus: null,
       citations: [updated, second],
       restrictedResultsOmitted: true,
+    });
+  });
+});
+
+describe('applyFrame - chat.answer의 중지·거부(이슈 #162, §3.2)', () => {
+  it('취소는 흐름을 끝내고 사유를 남긴다', () => {
+    const state = fold([
+      answer('쓰다 만 답', 'streaming'),
+      answer('', 'cancelled'),
+    ]);
+    expect(chats(state)[0]).toMatchObject({
+      content: '쓰다 만 답',
+      streaming: false,
+      terminalStatus: 'cancelled',
+    });
+  });
+
+  it('거부도 같은 자리에 남는다', () => {
+    const state = fold([answer('', 'streaming', { citations: [] })]);
+    // streaming 빈 패킷은 말풍선을 만들지 않으므로 아직 아무것도 없다.
+    expect(chats(state)).toHaveLength(0);
+    expect(chats(fold([answer('', 'denied')]))[0]).toMatchObject({
+      streaming: false,
+      terminalStatus: 'denied',
+    });
+  });
+
+  it('본문이 비어도 말풍선을 만든다 — 없으면 중지된 사실이 사라진다', () => {
+    // DENIED는 언제나 본문이 비고, 즉시 취소도 조각이 하나도 오지 않는다. 빈 패킷 필터가
+    // 이것까지 걸러 버리면 화면에는 아무 일도 없었던 것처럼 보인다.
+    const state = fold([answer('', 'cancelled')]);
+    expect(chats(state)).toHaveLength(1);
+    expect(chats(state)[0].content).toBe('');
+  });
+
+  it('평범하게 끝난 답변은 사유를 남기지 않는다', () => {
+    const state = fold([answer('다 썼다', 'done')]);
+    expect(chats(state)[0]).toMatchObject({
+      streaming: false,
+      terminalStatus: null,
     });
   });
 });
@@ -399,6 +444,7 @@ describe('applyFrame - error', () => {
     expect(state.messages[0]).toMatchObject({
       content: '부분 답변',
       streaming: false,
+      terminalStatus: null,
     });
   });
 
@@ -542,6 +588,27 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
     expect(chats(state).map((m) => m.content)).toEqual(['먼저', '나중']);
   });
 
+  it('중지·거부된 답변은 사유까지 복원한다 — 방을 다시 열어도 표시가 남아야 한다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 1, '쓰다 만 답', {
+        athKind: 'AGENT',
+        status: 'CANCELLED',
+      }),
+      historyItem('b', 2, '', { athKind: 'AGENT', status: 'DENIED' }),
+    ]);
+    expect(chats(state).map((m) => m.terminalStatus)).toEqual([
+      'cancelled',
+      'denied',
+    ]);
+  });
+
+  it('FAILED는 사유로 남기지 않는다 — 사용자가 고른 결말이 아니다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 1, '끊긴 답', { athKind: 'AGENT', status: 'FAILED' }),
+    ]);
+    expect(chats(state)[0].terminalStatus).toBeNull();
+  });
+
   it('seq가 띄엄띄엄해도 그대로 받는다 — 블록 예약이 남긴 구멍이다', () => {
     const state = applyHistory(initialRoomState, [
       historyItem('a', 0, '하나'),
@@ -573,9 +640,9 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
     expect(chats(state)[0].from).toBeNull();
   });
 
-  it('본문이 빈 행(PENDING·CANCELLED)은 빈 말풍선을 만들지 않는다', () => {
+  it('아직 안 채워진 빈 예약 행(PENDING)은 빈 말풍선을 만들지 않는다', () => {
     const state = applyHistory(initialRoomState, [
-      historyItem('a', 0, '', { athKind: 'AGENT', status: 'CANCELLED' }),
+      historyItem('a', 0, '', { athKind: 'AGENT', status: 'PENDING' }),
     ]);
     expect(state.messages).toEqual([]);
   });
