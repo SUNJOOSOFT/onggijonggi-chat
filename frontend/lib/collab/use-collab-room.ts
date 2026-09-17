@@ -29,7 +29,7 @@ import {
   isForbidden,
   isPresenceNotice,
   noticeMessage,
-} from './room-state';
+} from '@/lib/chat/room-state';
 
 /** 첫 연결이 이만큼 지나도 열리지 않으면 화면이 "붙지 못하고 있다"고 말한다. #4의 백오프가
  * 0·1·3초에 재시도하므로, 5초면 세 번은 두드려 본 뒤다. */

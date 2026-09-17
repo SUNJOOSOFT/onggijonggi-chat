@@ -6,7 +6,7 @@
  자리라 컴포넌트를 공유한다.
  *********************************************************/
 
-import type { SystemNotice } from '@/lib/collab/room-state';
+import type { SystemNotice } from '@/lib/chat/room-state';
 
 export function NoticeBanner({
   notice,

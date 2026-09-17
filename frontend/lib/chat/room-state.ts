@@ -1,6 +1,8 @@
 /********************************************************
- 파일명 : room-state.ts (lib/collab)
- 설 명 : 협업방에 도착한 WS 프레임(#8 계약)을 화면이 그릴 수 있는 상태로 축약한다(이슈 #19).
+ 파일명 : room-state.ts (lib/chat)
+ 설 명 : 방에 도착한 WS 프레임(#8 계약)을 화면이 그릴 수 있는 상태로 축약한다(이슈 #19).
+ 협업방과 1:1 방이 같은 프레임 계약을 쓰므로 축약 규칙도 하나다 — 그래서 lib/collab이 아니라
+ lib/chat에 둔다. 방 종류를 가르는 것은 이 파일이 아니라 구독을 거는 훅 쪽이다.
 
  React 밖의 순수 함수로 둔 이유는 두 가지다. 하나는 vitest 환경이 'node'라 컴포넌트를 띄우지
  않고 프레임 순서에 따른 결과만 시험할 수 있다는 것이고, 다른 하나는 이 축약이 화면보다 오래
@@ -17,8 +19,8 @@
  *********************************************************/
 
 import type { Citation } from '@/lib/api/chat';
-import type { CollabMessageItem } from '@/lib/api/collab';
 import { friendlyMessageForCode } from '@/lib/api/errors';
+import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import type {
   PresenceParticipant,
   SystemNoticeFrame,
@@ -33,7 +35,7 @@ const TERMINAL_AI_ERROR_CODES = new Set([
 ]);
 
 /** 메시지 하나. 사람과 AI를 role이 아니라 보낸 사람 유무로 가른다 — 협업방에는 보낸 사람이 여럿이다. */
-export interface CollabMessage {
+export interface RoomMessage {
   /** 서버가 준 msgId(이슈 #190). 이력과 실시간이 같은 메시지를 가리키는 근거다. */
   id: string;
   /** 방 안에서의 순서. 정렬과 따라잡기 커서로만 쓰고 연속성은 가정하지 않는다. */
@@ -67,20 +69,20 @@ export interface CollabMessage {
  * 붙는 순간 받는 참여자 명단(presence.snapshot)도 여기에 줄을 만들지 않는다 — 명단은
  * 사건이 아니라 상태다.
  */
-export interface CollabPresenceNotice {
+export interface RoomPresenceNotice {
   id: string;
   event: 'join' | 'leave';
   participant: PresenceParticipant;
 }
 
 /** 대화 흐름에 놓이는 것. 사람·AI 메시지이거나, 입퇴장 시스템 라인이다. */
-export type CollabEntry = CollabMessage | CollabPresenceNotice;
+export type RoomEntry = RoomMessage | RoomPresenceNotice;
 
 /** 시스템 라인인지. 판별 태그를 따로 두지 않고 event 유무로 가른다 — 메시지 쪽 모양을
  * 건드리지 않으려는 것이다. */
 export function isPresenceNotice(
-  entry: CollabEntry,
-): entry is CollabPresenceNotice {
+  entry: RoomEntry,
+): entry is RoomPresenceNotice {
   return 'event' in entry;
 }
 
@@ -117,7 +119,7 @@ export interface RoomError {
 export interface RoomState {
   /** 입장 순서대로의 참여자. 같은 사람의 join이 두 번 도착해도(재연결·스냅샷 재생) 한 번만 센다. */
   participants: PresenceParticipant[];
-  messages: CollabEntry[];
+  messages: RoomEntry[];
   /** 닫기 전까지 방 위에 남아 있는 알림. 도착 순서대로다. */
   notices: SystemNotice[];
   error: RoomError | null;
@@ -227,10 +229,10 @@ function messageIndexById(state: RoomState, id: string): number | null {
  * 흐름 안에 없다.
  */
 function insertBySeq(
-  messages: CollabEntry[],
-  incoming: CollabMessage[],
+  messages: RoomEntry[],
+  incoming: RoomMessage[],
   cursor: number | null,
-): CollabEntry[] {
+): RoomEntry[] {
   const merged = [...messages];
   for (const message of incoming) {
     let index: number | null = null;
@@ -275,7 +277,7 @@ export function advanceCursor(current: number | null, seq: number): number {
  */
 export function applyHistory(
   state: RoomState,
-  items: CollabMessageItem[],
+  items: ThreadMessageItem[],
 ): RoomState {
   const known = new Set(
     state.messages
@@ -287,7 +289,7 @@ export function applyHistory(
     .filter((item) => item.athKind !== 'SYSTEM')
     .filter((item) => item.content !== '')
     .sort((left, right) => left.seq - right.seq)
-    .map(toCollabMessage);
+    .map(toRoomMessage);
 
   // 건너뛴 줄(SYSTEM·빈 본문)도 커서는 지나쳐야 한다 — 그러지 않으면 다음 따라잡기가 같은
   // 것을 또 받아온다.
@@ -304,7 +306,7 @@ export function applyHistory(
 }
 
 /** 이력 한 줄을 화면이 아는 모양으로. subject는 WS 프레임의 from과 같은 값이다(이슈 #190). */
-function toCollabMessage(item: CollabMessageItem): CollabMessage {
+function toRoomMessage(item: ThreadMessageItem): RoomMessage {
   return {
     id: item.id,
     seq: item.seq,
@@ -401,7 +403,7 @@ function extendAnswer(
 ): RoomState {
   const messages = [...state.messages];
   // index는 streamingAnswerIndex가 고른 자리라 언제나 흐르는 중인 AI 답변이다.
-  const target = messages[index] as CollabMessage;
+  const target = messages[index] as RoomMessage;
   messages[index] = {
     ...target,
     content: target.content + delta,

@@ -11,10 +11,10 @@
  안 된다 — 목업이 그 상황을 기본값으로 보여준다.
  *********************************************************/
 
-import type { CollabMessageItem } from '@/lib/api/collab';
 import { isMockMode } from '@/lib/api/config';
+import type { ThreadMessageItem } from '@/lib/api/thread-history';
 
-const MESSAGES: CollabMessageItem[] = [
+const MESSAGES: ThreadMessageItem[] = [
   {
     id: 'mock-msg-1',
     seq: 0,

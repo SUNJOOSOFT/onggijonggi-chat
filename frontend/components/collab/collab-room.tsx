@@ -35,11 +35,8 @@ import { NoticeBanner } from '@/components/notice-banner';
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import { fetchCollabThreads } from '@/lib/api/collab';
-import type {
-  CollabMessage,
-  CollabPresenceNotice,
-} from '@/lib/collab/room-state';
-import { isForbidden, isPresenceNotice } from '@/lib/collab/room-state';
+import type { RoomMessage, RoomPresenceNotice } from '@/lib/chat/room-state';
+import { isForbidden, isPresenceNotice } from '@/lib/chat/room-state';
 import {
   type RoomConnection,
   useCollabRoom,
@@ -56,7 +53,7 @@ const CONNECTION_LABEL: Record<RoomConnection, string> = {
 
 /** 입퇴장 시스템 라인(#111). 말풍선도 작성자 머리글도 없이 흐름 가운데에 옅게 남긴다 —
  * 사람이 한 말이 아니기 때문이다. */
-function PresenceRow({ notice }: { notice: CollabPresenceNotice }) {
+function PresenceRow({ notice }: { notice: RoomPresenceNotice }) {
   return (
     <p
       title={notice.participant.subject}
@@ -69,7 +66,7 @@ function PresenceRow({ notice }: { notice: CollabPresenceNotice }) {
 }
 
 /** 사람 메시지는 보낸 사람 이름을, AI 답변은 "AI"를 머리에 달고 배경으로 구분한다. */
-function MessageRow({ message }: { message: CollabMessage }) {
+function MessageRow({ message }: { message: RoomMessage }) {
   const isAi = message.from === null;
   return (
     <div

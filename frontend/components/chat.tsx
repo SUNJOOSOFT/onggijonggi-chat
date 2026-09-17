@@ -26,7 +26,7 @@ import {
   type ThreadMessageItem,
   fetchThreadMessages,
 } from '@/lib/api/thread-history';
-import { type SystemNotice, noticeMessage } from '@/lib/collab/room-state';
+import { type SystemNotice, noticeMessage } from '@/lib/chat/room-state';
 import { createDirectChatFetch } from '@/lib/transport/direct-room-fetch';
 import type {
   ChatAnswerFrame,

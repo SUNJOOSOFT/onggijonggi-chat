@@ -13,7 +13,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import type { CollabMessageItem } from '@/lib/api/collab';
+import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import type { RoomListener } from '@/lib/api/ws-rooms';
 import { useCollabRoom } from './use-collab-room';
 
@@ -47,7 +47,7 @@ function latestListener(): RoomListener {
 }
 
 /** 이력 REST 응답 한 줄. */
-function item(id: string, seq: number): CollabMessageItem {
+function item(id: string, seq: number): ThreadMessageItem {
   return {
     id,
     seq,
@@ -86,7 +86,7 @@ mocks.subscribeRoom.mockImplementation(
 
 describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
   it('이력이 WS open보다 먼저 끝나면, open 시 커서 있는 따라잡기가 1회 나간다', async () => {
-    const history = deferred<CollabMessageItem[]>();
+    const history = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(history.promise);
 
     renderHook(() => useCollabRoom(THREAD));
@@ -98,7 +98,7 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
       // 이펙트라 한 틱 더 걸릴 수 있어 open은 이 이후에 보낸다.
     });
 
-    const catchUp = deferred<CollabMessageItem[]>();
+    const catchUp = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(catchUp.promise);
 
     act(() => {
@@ -112,7 +112,7 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
   });
 
   it('WS open이 이력보다 먼저 오면, open 시점엔 추가 호출이 없다가 이력이 끝나는 순간 커서 있는 따라잡기가 1회 나간다', async () => {
-    const history = deferred<CollabMessageItem[]>();
+    const history = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(history.promise);
 
     renderHook(() => useCollabRoom(THREAD));
@@ -124,7 +124,7 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
     // 이력이 아직 안 끝났다 — 커서 없는 전체 재조회가 나가면 안 된다(#208의 핵심).
     expect(mocks.fetchCollabMessages).toHaveBeenCalledTimes(1);
 
-    const catchUp = deferred<CollabMessageItem[]>();
+    const catchUp = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(catchUp.promise);
 
     history.resolve([item('m1', 7)]);
@@ -136,7 +136,7 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
   });
 
   it('이력 REST가 실패해도 최초 따라잡기가 켜진다(안전망) — 커서 없이 나간다', async () => {
-    const history = deferred<CollabMessageItem[]>();
+    const history = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(history.promise);
 
     renderHook(() => useCollabRoom(THREAD));
@@ -144,7 +144,7 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
     history.reject(new Error('network error'));
     await history.promise.catch(() => {});
 
-    const catchUp = deferred<CollabMessageItem[]>();
+    const catchUp = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(catchUp.promise);
 
     act(() => {
@@ -230,9 +230,9 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
     // 소켓은 cleanup에서 close()가 불리므로 실제로는 그 뒤 open을 내지 않는다(WebSocket
     // 스펙상 CONNECTING 중 close()하면 open 없이 닫힌다) — 여기서는 그 마운트가 실제로 낼 수
     // 있는 유일한 뒤늦은 결과, 즉 이미 나간 이력 REST 응답만 재현한다.
-    const firstHistory = deferred<CollabMessageItem[]>();
+    const firstHistory = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(firstHistory.promise); // 1차(버려질) 마운트 이력
-    const secondHistory = deferred<CollabMessageItem[]>();
+    const secondHistory = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(secondHistory.promise); // 2차(생존) 마운트 이력
 
     const { result } = renderHook(() => useCollabRoom(THREAD), {
@@ -257,7 +257,7 @@ describe('useCollabRoom — 최초 연결 따라잡기(#208)', () => {
     act(() => {
       secondListener.onOpenChange?.(true);
     });
-    const realCatchUp = deferred<CollabMessageItem[]>();
+    const realCatchUp = deferred<ThreadMessageItem[]>();
     mocks.fetchCollabMessages.mockReturnValueOnce(realCatchUp.promise);
     secondHistory.resolve([item('real', 3)]);
 

@@ -1,9 +1,9 @@
-import type { CollabMessageItem } from '@/lib/api/collab';
+import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
 import type { PresenceParticipant, WsFrame } from '@/lib/transport/frames';
 import {
-  type CollabMessage,
+  type RoomMessage,
   type RoomState,
   applyFrame,
   applyHistory,
@@ -100,9 +100,9 @@ function answer(
 }
 
 /** 입퇴장 시스템 라인(#111)을 뺀 사람·AI 메시지만. 대화 쪽을 보는 테스트가 쓴다. */
-function chats(state: RoomState): CollabMessage[] {
+function chats(state: RoomState): RoomMessage[] {
   return state.messages.filter(
-    (entry): entry is CollabMessage => !isPresenceNotice(entry),
+    (entry): entry is RoomMessage => !isPresenceNotice(entry),
   );
 }
 
@@ -520,8 +520,8 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
     id: string,
     seq: number,
     content: string,
-    overrides: Partial<CollabMessageItem> = {},
-  ): CollabMessageItem => ({
+    overrides: Partial<ThreadMessageItem> = {},
+  ): ThreadMessageItem => ({
     id,
     seq,
     athKind: 'HUMAN',
@@ -600,8 +600,8 @@ describe('재접속 따라잡기 커서(#190)', () => {
     id: string,
     seq: number,
     content: string,
-    overrides: Partial<CollabMessageItem> = {},
-  ): CollabMessageItem => ({
+    overrides: Partial<ThreadMessageItem> = {},
+  ): ThreadMessageItem => ({
     id,
     seq,
     athKind: 'HUMAN',
