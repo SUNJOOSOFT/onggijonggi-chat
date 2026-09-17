@@ -22,31 +22,6 @@ export async function fetchChatSessions(): Promise<ChatSessionSummary[]> {
 }
 
 /** 와이어 메시지 모양. */
-export interface WireMessage {
-  role: string;
-  content: string;
-}
-
-/** AI SDK UI 메시지를 와이어 모양 {role, content}으로 트리밍한다(id·parts 등 잉여 필드 제거). */
-export function toWireMessages(
-  messages: ReadonlyArray<{ role: string; content: string }>,
-): WireMessage[] {
-  return messages.map(({ role, content }) => ({ role, content }));
-}
-
-/** 채팅 요청 바디. */
-export function buildChatRequestBody(params: {
-  sessionId: string;
-  modelId: string;
-  messages: ReadonlyArray<{ role: string; content: string }>;
-}) {
-  return {
-    sessionId: params.sessionId,
-    modelId: params.modelId,
-    messages: toWireMessages(params.messages),
-  };
-}
-
 /** 인용 응답. */
 export interface Citation {
   docId: string;

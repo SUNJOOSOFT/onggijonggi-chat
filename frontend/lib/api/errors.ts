@@ -83,19 +83,8 @@ export function parseErrorEnvelope(
   return null;
 }
 
-// 스트림 시작 후 오류는 서버가 이미 200을 보낸 뒤라 연결 종료로만 신호되고 에러 봉투가 없다
-// — resolveChatError로는 "첫 바이트 이전 오류"와 구분이 안 돼 별도 문구를 둔다.
-export const STREAM_TRUNCATED_MESSAGE = '응답이 중단되었습니다.';
-
-/** 직전 메시지가 이미 내용을 쌓고 있던 assistant 응답인지로 스트림 중단 여부를 판정한다. */
-export function isStreamTruncated(
-  lastMessage: { role: string; content: string } | undefined,
-): boolean {
-  return lastMessage?.role === 'assistant' && lastMessage.content.length > 0;
-}
-
-/** useChat onError가 받는 Error를 친화 문구로 변환한다. AI SDK는 non-2xx 시 응답 바디 텍스트를
- * Error.message에 실으므로, 그 안의 에러 봉투를 파싱해 code→문구로 매핑한다. 봉투가 아니면 제네릭 문구로 폴백한다. */
+/** BFF가 돌려준 Error를 친화 문구로 변환한다. non-2xx 응답의 바디 텍스트가 Error.message에
+ * 실려 오므로, 그 안의 에러 봉투를 파싱해 code→문구로 매핑한다. 봉투가 아니면 제네릭 문구로 폴백한다. */
 export function resolveChatError(error: Error): {
   message: string;
   code?: string;
