@@ -3,7 +3,7 @@
  설 명 : 메시지 목록 스크롤 영역. 대화가 없으면 Overview를, 있으면 메시지들을, 응답 대기 중이면 ThinkingMessage를 렌더링한다.
  *********************************************************/
 
-import { Message } from 'ai';
+import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import equal from 'fast-deep-equal';
 import { memo, useEffect, useRef, useState } from 'react';
 
@@ -15,7 +15,7 @@ import { useScrollToBottom } from './use-scroll-to-bottom';
 interface MessagesProps {
   chatId: string;
   isLoading: boolean;
-  messages: Array<Message>;
+  messages: Array<RenderedMessage>;
   citationsByMessageId: Record<string, CitationsState>;
   /** DIRECT 전용(이슈 #162, §3.2) — done이 아닌 message.id만 들어 있다. */
   terminalStatusByMessageId: Record<string, 'cancelled' | 'denied'>;

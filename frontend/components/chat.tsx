@@ -27,6 +27,7 @@ import {
   fetchThreadMessages,
 } from '@/lib/api/thread-history';
 import { type SystemNotice, noticeMessage } from '@/lib/chat/room-state';
+import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import { createDirectChatFetch } from '@/lib/transport/direct-room-fetch';
 import type {
   ChatAnswerFrame,
@@ -462,6 +463,19 @@ function ChatSession({
     useChatSessionsStore.getState().setSessionMessages(id, messages);
   }, [id, messages]);
 
+  // 렌더 계층은 user·assistant 둘만 그린다. useChat의 role에는 system·data도 있지만 이 화면에
+  // 오지 않으므로, 좁은 계약(RenderedMessage)을 지키려고 여기서 한 번만 좁힌다. 매 렌더 새
+  // 배열을 만들면 아래 Messages가 헛되이 다시 그려져 useMemo로 고정한다.
+  const renderedMessages = useMemo<RenderedMessage[]>(
+    () =>
+      messages.map((message) => ({
+        id: message.id,
+        role: message.role === 'user' ? 'user' : 'assistant',
+        content: message.content,
+      })),
+    [messages],
+  );
+
   // EMPTY_FAILED_MESSAGE_IDS는 고정 참조 — 매번 새 배열을 반환하면 zustand가 값이 바뀐
   // 것으로 보고 무한 리렌더로 이어진다.
   const failedMessageIds = useChatSessionsStore(
@@ -543,7 +557,7 @@ function ChatSession({
       <Messages
         chatId={id}
         isLoading={isLoading}
-        messages={messages}
+        messages={renderedMessages}
         citationsByMessageId={citationsByMessageId}
         terminalStatusByMessageId={terminalStatusByMessageId}
         failedMessageIds={failedMessageIds}

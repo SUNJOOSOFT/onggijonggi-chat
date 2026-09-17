@@ -6,7 +6,7 @@
  스트리밍 대기 중 보여주는 ThinkingMessage도 이 파일에서 함께 관리한다.
  *********************************************************/
 
-import type { Message } from 'ai';
+import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import cx from 'classnames';
 import equal from 'fast-deep-equal';
 import { AnimatePresence, motion } from 'framer-motion';
@@ -36,7 +36,7 @@ const PurePreviewMessage = ({
   regenerateContent,
 }: {
   chatId: string;
-  message: Message;
+  message: RenderedMessage;
   isLoading: boolean;
   isLastMessage: boolean;
   citations?: CitationsState;

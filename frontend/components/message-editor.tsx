@@ -6,14 +6,14 @@
  잘라내고 수정된 내용으로 교체한 뒤 reload()로 재생성한다.
  *********************************************************/
 
-import { Message } from 'ai';
+import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import { Dispatch, SetStateAction, useEffect, useRef, useState } from 'react';
 
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
 
 export type MessageEditorProps = {
-  message: Message;
+  message: RenderedMessage;
   setMode: Dispatch<SetStateAction<'view' | 'edit'>>;
   onAppendTurn: (content: string) => void;
 };
