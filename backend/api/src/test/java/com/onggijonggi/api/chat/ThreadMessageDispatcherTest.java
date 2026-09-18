@@ -783,10 +783,11 @@ class ThreadMessageDispatcherTest {
 		verify(msgPersistenceService, never()).createPendingAgentMessageBlocking(any(), anyLong(), any());
 	}
 
-	/** DIRECT는 delta보다 먼저 빈 citations 전용 chat.answer(delta="", STREAMING)를 보내 loading을
-	 * 끝내고, RAG가 생길 때까지 근거 패널은 숨긴다. */
+	/** DIRECT는 delta 앞에 아무것도 덧붙이지 않는다. RAG가 없어(로드맵 v0.4) 근거가 실릴 일이
+	 * 없으므로 citations 전용 chat.answer(delta="", STREAMING)를 보내지 않는다 — 그 프레임은 프런트
+	 * loading을 끄기 위한 것이었고, 상태를 파생하는 지금 프런트는 loading을 켜지 않는다(PR #231·#232). */
 	@Test
-	void directDispatchBroadcastsEmptyCitationsFrameBeforeTheFirstDeltaFrame() {
+	void directDispatchDoesNotBroadcastAnEmptyCitationsFrameBeforeTheFirstDelta() {
 		TestRoom room = new TestRoom();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
@@ -797,35 +798,10 @@ class ThreadMessageDispatcherTest {
 
 		dispatcher.dispatch(directCommand(room, "질문", null, reserved), room.membership.generation());
 
-		awaitFrameCount(room.frames, 4);
+		awaitFrameCount(room.frames, 3);
 		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
-				.extracting(frame -> ((ChatAnswerFrame) frame).delta(), frame -> ((ChatAnswerFrame) frame).status(),
-						frame -> ((ChatAnswerFrame) frame).citations().isEmpty())
-				.containsExactly(tuple("", ChatAnswerStatus.STREAMING, true), tuple("답", ChatAnswerStatus.STREAMING, true),
-						tuple("", ChatAnswerStatus.DONE, true));
-		ChatAnswerFrame citationsFrame = (ChatAnswerFrame) room.frames.get(1);
-		assertThat(citationsFrame.citations()).isEmpty();
-		assertThat(citationsFrame.restrictedResultsOmitted()).isFalse();
-	}
-
-	/** RAG와 권한 필터가 없으므로 질의 내용과 관계없이 빈 citations와 false를 보낸다. */
-	@Test
-	void directDispatchDoesNotMarkRestrictedResultsOmittedWithoutRag() {
-		TestRoom room = new TestRoom();
-		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
-		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		when(msgPersistenceService.recentCompleteContextBlocking(eq(room.threadId), anyInt())).thenReturn(List.of());
-		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
-		ChatMessageCommand.ReservedTurn reserved = reservedTurn();
-
-		dispatcher.dispatch(directCommand(room, "이건 기밀 사항인가요", null, reserved), room.membership.generation());
-
-		awaitFrameCount(room.frames, 4);
-		ChatAnswerFrame citationsFrame = (ChatAnswerFrame) room.frames.get(1);
-		assertThat(citationsFrame.delta()).isEmpty();
-		assertThat(citationsFrame.citations()).isEmpty();
-		assertThat(citationsFrame.restrictedResultsOmitted()).isFalse();
+				.extracting(frame -> ((ChatAnswerFrame) frame).delta(), frame -> ((ChatAnswerFrame) frame).status())
+				.containsExactly(tuple("답", ChatAnswerStatus.STREAMING), tuple("", ChatAnswerStatus.DONE));
 	}
 
 	/** AI FIFO 초과는 DIRECT만 예약된 PENDING AGENT를 즉시 DENIED로 닫고 chat.answer(denied)를

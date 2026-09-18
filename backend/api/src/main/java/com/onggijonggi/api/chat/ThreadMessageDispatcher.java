@@ -452,18 +452,11 @@ public class ThreadMessageDispatcher {
 	*/
 	private void startTurn(RoomKey key, RoomAiState state, ActiveTurn activeTurn) {
 		activeTurn.pendingMsgId.subscribe();
-		boolean direct = activeTurn.turn.reservedTurn() != null;
 
 		Disposable subscription = activeTurn.turn.context()
 				.flatMapMany(context -> {
 					if (abandoned(activeTurn)) {
 						return Flux.<String>never();
-					}
-					// RAG가 아직 없으므로 DIRECT는 빈 citation 결과를 먼저 방송해 프런트 loading만 종료한다.
-					if (direct && !abandoned(activeTurn)) {
-						broadcastQuietly(key, new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId,
-								activeTurn.turn.turnId(), modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false,
-								ChatAnswerStatus.STREAMING));
 					}
 					return withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 							new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
