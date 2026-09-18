@@ -219,9 +219,14 @@ function ChatSession({
    * 근거 인용은 AI 답변이 들고 오지만 패널은 그 답변을 부른 사람 메시지 아래에 붙는다 —
    * 그래서 직전 사람 메시지의 id로 옮겨 단다(이슈 #163).
    *
-   * 답변이 아직 흐르는 중이고 근거가 비었으면 "검색 중"으로 둔다. 끝났는데도 비어 있으면
-   * 아무것도 걸지 않는다 — 예전에는 사람 메시지가 마지막이기만 하면 무조건 검색 중으로
-   * 칠해, 답변이 실패하거나 이력에서 되살아난 메시지에 스피너가 영영 남았다.
+   * "검색 중" 표시는 두지 않는다. RAG가 아직 없어(로드맵 v0.4) DIRECT 답변에 근거가 실릴
+   * 일이 없으므로, 켤 이유가 없는 표시다 — PR #231이 없애려던 것이 바로 이것이다. 그 PR은
+   * useChat 어댑터가 이미 켜 둔 로딩을 백엔드의 빈 citation 신호 프레임으로 껐지만
+   * (allowInitialEmptyCitationResult), 상태를 파생하는 지금 구조에서는 켜지 않는 것이 같은
+   * 답이다. 그래서 그 신호 프레임은 applyFrame이 빈 패킷으로 버린다.
+   *
+   * 근거가 실제로 실려 오면 그때 success로 건다. RAG가 들어와 검색에 시간이 걸리게 되면
+   * 그 시점에 로딩 표시를 다시 판단해야 한다.
    */
   const citationsByMessageId = useMemo(() => {
     const byId: Record<string, CitationsState> = {};
@@ -241,8 +246,6 @@ function ChatSession({
           citations: message.citations,
           restrictedResultsOmitted: message.restrictedResultsOmitted,
         };
-      } else if (message.streaming) {
-        byId[askedBy] = { status: 'loading' };
       }
     });
     return byId;
