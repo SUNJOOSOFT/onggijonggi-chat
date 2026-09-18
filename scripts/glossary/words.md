@@ -23,6 +23,7 @@
 | 영문 | 뜻 |
 |---|---|
 | `access` | 접근 |
+| `agent` | 에이전트 |
 | `answer` | 답변 |
 | `app` | 애플리케이션 |
 | `author` | 작성자 |
@@ -51,6 +52,7 @@
 | `error` | 오류 |
 | `file` | 파일 |
 | `first` | 첫 |
+| `human` | 사람 |
 | `idempotency` | 멱등성 |
 | `inactive` | 비활성 |
 | `indexed` | 색인됨 |

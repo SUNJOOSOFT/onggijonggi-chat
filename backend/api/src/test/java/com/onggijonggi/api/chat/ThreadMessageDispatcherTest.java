@@ -890,6 +890,37 @@ class ThreadMessageDispatcherTest {
 				.noneMatch(frame -> ((ChatQueuedFrame) frame).status() == ChatQueuedStatus.CANCELLED);
 	}
 
+	/**
+	* 재검토로 확인한 버그(이슈 #233) — activeTurnContentIfMatches가 state.active만 보면, 아직
+	* 시작 전이라 FIFO 대기 중인(state.pending) 정상 턴을 "고아"로 오판한다. DIRECT는 같은
+	* OWNER가 첫 턴이 스트리밍 중인 동안 다음 발화를 보낼 수 있고 그 발화도 정상적으로
+	* 큐잉된다 — 이 상태에서 재시도가 오면 그 턴을 FAILED로 잘못 닫고 중복 턴을 새로
+	* 시작하게 된다.
+	*/
+	@Test
+	void activeTurnContentIfMatchesRecognizesAQueuedDirectTurnAsStillAlive() {
+		TestRoom room = new TestRoom();
+		Sinks.One<String> firstResponse = Sinks.one();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(firstResponse.asMono().flux());
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.recentCompleteContextBlocking(eq(room.threadId), anyInt())).thenReturn(List.of());
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+		ChatMessageCommand.ReservedTurn first = reservedTurn();
+		ChatMessageCommand.ReservedTurn queued = reservedTurn();
+
+		dispatcher.dispatch(directCommand(room, "first", UUID.randomUUID(), first), room.membership.generation());
+		verify(llm, timeout(1000)).streamChat(any());
+		dispatcher.dispatch(directCommand(room, "second", UUID.randomUUID(), queued), room.membership.generation());
+
+		assertThat(dispatcher.activeTurnContentIfMatches(room.threadId, room.membership.generation(),
+				queued.agentMsgId())).contains("");
+		// active 쪽도 여전히 정상 동작해야 한다 — pending 지원을 더하면서 active 분기를
+		// 깨뜨리지 않았는지 같은 테스트에서 함께 확인한다.
+		assertThat(dispatcher.activeTurnContentIfMatches(room.threadId, room.membership.generation(),
+				first.agentMsgId())).isPresent();
+	}
+
 	@Test
 	void closingTheLastDirectConnectionCancelsReservedTurnsStillInTheInbox() throws InterruptedException {
 		FailingRoomSessionRegistry registry = new FailingRoomSessionRegistry();

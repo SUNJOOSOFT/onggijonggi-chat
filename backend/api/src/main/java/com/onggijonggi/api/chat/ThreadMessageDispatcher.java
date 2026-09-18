@@ -326,6 +326,51 @@ public class ThreadMessageDispatcher {
 		}
 	}
 
+	/**
+	* replay(이슈 #233)가 지금 이 방·세대에서 아직 살아있는 턴(진행 중이거나, FIFO 대기 중이거나,
+	* 워커가 아직 꺼내지 않은)과 같은 AGENT 메시지를 가리키는지 확인한다. active만 보면 안 되는
+	* 이유: DIRECT는 여러 탭이 같은 OWNER로 동시에 붙을 수 있고 턴이 큐잉되는 게 정상 동작이라
+	* (cancel()의 pending·inFlight 처리와 같은 전제), 아직 시작 전인 정상 대기 턴을 여기서
+	* "고아"로 잘못 판정하면 호출부가 그 msg를 FAILED로 닫고 중복 턴을 새로 시작한다 — 원래
+	* 턴이 나중에 실제로 끝나도 msg_block_terminal_update 트리거가 그 저장을 막아 응답이
+	* 조용히 유실된다.
+	*
+	* active면 지금까지 누적된 내용을, pending·inFlight면(아직 한 글자도 안 만들어졌다) 빈
+	* 문자열을 돌려준다 — 셋 다 아니면 empty(호출부가 DB 상태로 마저 분기한다: 이미 끝났거나
+	* 진짜 고아).
+	*/
+	Optional<String> activeTurnContentIfMatches(UUID threadId, UUID roomGeneration, UUID agentMsgId) {
+		RoomAiState state = states.get(new RoomKey(threadId, roomGeneration));
+		if (state == null) {
+			return Optional.empty();
+		}
+		synchronized (state) {
+			if (state.closed) {
+				return Optional.empty();
+			}
+			if (state.active != null && agentMsgId.equals(state.active.msgId)) {
+				return Optional.of(state.active.content.toString());
+			}
+			for (PendingTurn candidate : state.pending) {
+				if (candidate.reservedTurn() != null && agentMsgId.equals(candidate.reservedTurn().agentMsgId())) {
+					return Optional.of("");
+				}
+			}
+			for (InFlightTurn inFlight : state.inFlight.values()) {
+				ChatMessageCommand.ReservedTurn reserved = inFlight.queued().command().reservedTurn();
+				if (reserved != null && agentMsgId.equals(reserved.agentMsgId())) {
+					return Optional.of("");
+				}
+			}
+			return Optional.empty();
+		}
+	}
+
+	/** replay 응답 구성용(이슈 #233) — modelIdFor(PendingTurn)와 같은 기본값 규칙을 외부에 노출한다. */
+	String resolveModelId(String requestedModel) {
+		return requestedModel == null || requestedModel.isBlank() ? modelId : requestedModel;
+	}
+
 	/** 마지막 연결이 퇴장한 generation의 활성·대기 AI 작업을 즉시 취소한다. */
 	public void closeGeneration(UUID threadId, UUID roomGeneration) {
 		RoomKey key = new RoomKey(threadId, roomGeneration);
@@ -494,7 +539,7 @@ public class ThreadMessageDispatcher {
 
 	/** 발화가 모델을 지정하지 않았으면 서버 기본값(app.thread.ai.model)으로 돌아간다(이슈 #160). */
 	private String modelIdFor(PendingTurn turn) {
-		return turn.model() == null || turn.model().isBlank() ? modelId : turn.model();
+		return resolveModelId(turn.model());
 	}
 
 	/** 저장된 이력의 HUMAN/AGENT를 user/assistant로 매핑하고, 이번 멘션의 발화를 마지막에 붙인다. */

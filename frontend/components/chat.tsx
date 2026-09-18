@@ -284,23 +284,43 @@ function ChatSession({
     }
   }, [id]);
 
+  // 직전에 보낸 발화의 {content, clientMsgId}(이슈 #233). 렌더된 메시지는 서버 msgId만
+  // 달고 clientMsgId는 에코 매칭 뒤 어디에도 안 남으므로(room-state.ts의 RoomMessage에
+  // 이 필드가 없다), retryLatestTurn이 재시도인지 판단하려면 여기 따로 기억해 둬야 한다.
+  const lastSentRef = useRef<{ content: string; clientMsgId: string } | null>(
+    null,
+  );
+
   const sendTurn = useCallback(
-    (content: string) => {
-      const ids = send(content, modelIdRef.current);
+    (content: string, reuseClientMsgId?: string) => {
+      const ids = send(content, modelIdRef.current, reuseClientMsgId);
       if (ids === null) {
         toast.error('연결이 끊겨 있어 메시지를 보내지 못했습니다.');
         return;
       }
+      lastSentRef.current = { content, clientMsgId: ids.clientMsgId };
       setPendingTurnIds((previous) => [...previous, ids.turnId]);
     },
     [send],
   );
 
+  // room.state.error(아래)로만 불린다 — 그 프레임을 받았다는 것 자체가 같은 연결로 사람
+  // 메시지 전송·에코까지 이미 성공했다는 뜻이라(연결이 끊겼으면 에코도 에러 프레임도
+  // 도착 자체를 못 한다), latestUser는 항상 방금 보낸 그 메시지다. 그 content가
+  // lastSentRef와 같으면 같은 clientMsgId로 재시도해 서버 idempotency(#233,
+  // DirectChatTurnService)가 중복 HUMAN 메시지를 만들지 않게 한다 — 다르면(예: 그 사이
+  // 다른 메시지를 보냄) 새 id로 보낸다. 서버 idempotency는 방어적 장치일 뿐이라 이
+  // 매칭이 항상 맞을 필요는 없다.
   const retryLatestTurn = useCallback(() => {
     const latestUser = [...renderedMessages]
       .reverse()
       .find((message) => message.role === 'user');
-    if (latestUser) sendTurn(latestUser.content);
+    if (!latestUser) return;
+    const reuseClientMsgId =
+      lastSentRef.current?.content === latestUser.content
+        ? lastSentRef.current.clientMsgId
+        : undefined;
+    sendTurn(latestUser.content, reuseClientMsgId);
   }, [renderedMessages, sendTurn]);
 
   // 서버가 돌려준 오류는 방 상태에 쌓인다(room-state의 error). 토스트로 알리고 그 자리에서

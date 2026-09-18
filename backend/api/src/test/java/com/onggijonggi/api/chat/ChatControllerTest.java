@@ -370,7 +370,7 @@ class ChatControllerTest {
 	private void sendChatMessage(String sessionId, String subject, String content) {
 		UUID userId = userIdentityService.resolveOrProvision(subject).block();
 		directChatTurnService.prepareOrCreateWithPendingAgentBlocking(UUID.fromString(sessionId), userId, content,
-				content);
+				content, UUID.randomUUID().toString());
 	}
 
 }

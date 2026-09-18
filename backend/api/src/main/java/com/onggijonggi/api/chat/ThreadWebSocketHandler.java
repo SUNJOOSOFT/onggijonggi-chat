@@ -5,6 +5,7 @@ import com.onggijonggi.api.auth.FixedWindowRateLimiter;
 import com.onggijonggi.api.auth.JwtDisplayNames;
 import com.onggijonggi.api.auth.WsSubProtocolBearerTokenConverter;
 import com.onggijonggi.api.auth.UserIdentityService;
+import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import java.security.Principal;
 import java.time.Duration;
@@ -289,13 +290,19 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 						}
 						return threadMembershipService.isActiveDirectOwner(threadId, connection.userId())
 								.flatMap(owner -> owner
-										? reserveDirectTurn(threadId, connection.userId(), inbound.content())
-								.flatMap(reserved -> rejectIfLocked(
-										new ChatMessageCommand(threadId, kind.get(), connection.userId(),
-												actor.subject(), actor.displayName(), inbound.content(),
-												inbound.model(), inbound.clientMsgId(), inbound.turnId(),
-												connection.id(), traceId, reserved),
-										roomGeneration.get(), traceId))
+										? prepareDirectTurn(threadId, connection.userId(), inbound.content(),
+												inbound.clientMsgId())
+								.flatMap(stored -> stored.replay()
+										? handleDirectReplay(threadId, roomGeneration.get(), connection, actor,
+												inbound, traceId, stored)
+										: rejectIfLocked(
+												new ChatMessageCommand(threadId, kind.get(), connection.userId(),
+														actor.subject(), actor.displayName(), inbound.content(),
+														inbound.model(), inbound.clientMsgId(), inbound.turnId(),
+														connection.id(), traceId, toReservedTurn(stored)),
+												roomGeneration.get(), traceId))
+								.onErrorResume(IdempotencyKeyConflictException.class,
+										error -> Mono.just(idempotencyConflict(threadId, traceId)))
 								.onErrorResume(error -> reportDirectReserveFailure(threadId, roomGeneration.get(),
 										inbound.turnId(), traceId, error))
 										: Mono.just(new ErrorFrame(threadId, "FORBIDDEN",
@@ -318,13 +325,98 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 기존 DIRECT 방에 이어 쓰는 발화마다 HUMAN·PENDING AGENT를 미리 예약한다(이슈 #162) — dispatcher가
 	* 이 값을 그대로 재사용해 중복 PENDING·seq를 만들지 않는다. bootstrap(첫 발화)은 별도 경로에서
 	* 이미 예약을 마친 뒤에만 이 핸들러로 들어오므로 여기서는 "기존 방 이어쓰기"만 다룬다.
+	*
+	* idempotencyKey가 이미 쓰인 적 있으면(이슈 #233) 새로 저장하지 않고 StoredTurn.replay()=true로
+	* 기존 값을 그대로 돌려준다 — 호출부가 그 경우를 보고 별도로 분기한다.
 	*/
-	private Mono<ChatMessageCommand.ReservedTurn> reserveDirectTurn(UUID threadId, UUID userId, String content) {
-		return Mono.fromCallable(
-						() -> directChatTurnService.prepareExistingWithPendingAgentBlocking(threadId, userId, content))
+	private Mono<DirectChatTurnService.StoredTurn> prepareDirectTurn(UUID threadId, UUID userId, String content,
+			String idempotencyKey) {
+		return Mono.fromCallable(() -> directChatTurnService.prepareExistingWithPendingAgentBlocking(threadId,
+						userId, content, idempotencyKey))
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	private static ChatMessageCommand.ReservedTurn toReservedTurn(DirectChatTurnService.StoredTurn stored) {
+		return new ChatMessageCommand.ReservedTurn(stored.humanMessageId(), stored.humanSeq(),
+				stored.agentMessageId(), stored.agentSeq());
+	}
+
+	private static ErrorFrame idempotencyConflict(UUID threadId, String traceId) {
+		return new ErrorFrame(threadId, "IDEMPOTENCY_KEY_CONFLICT", "이미 다른 내용으로 쓰인 요청 id입니다.", traceId);
+	}
+
+	/**
+	* replay 응답(이슈 #233) — echo는 정상 발화와 같은 경로(room 방송)로 보내고(멱등이라 다른 탭이
+	* 다시 받아도 무해하다), AGENT 턴의 현재 상태에 따라 이 커넥션에만 보낼 응답을 유니캐스트로
+	* 돌려준다. rejectIfLocked·dispatcher 큐에는 들어가지 않는다 — 새 발화가 아니라 기존 결과를
+	* 돌려주는 것뿐이라 FIFO·레이트리밋(#74)을 소모하지 않는다.
+	*
+	* 그 턴이 아직 살아있으면(진행 중이거나 FIFO 대기 중이거나 워커가 아직 안 꺼낸 —
+	* ThreadMessageDispatcher.activeTurnContentIfMatches 참고) 지금까지 누적된 내용(대기
+	* 중이면 빈 문자열)을 그 turnId로 담아 보낸다 — mergeOtherTurnAnswer(프런트)의 "처음 본
+	* 프레임=시작 텍스트" 경로가 캐치업 역할을 한다. 이미 끝났으면(COMPLETE·CANCELLED·DENIED)
+	* 저장된 결과를, FAILED면 ChatAnswerStatus에 FAILED가 없어 ErrorFrame을 대신 보낸다. DB는
+	* PENDING인데 메모리 어디에도(활성·대기·인플라이트) 없으면(서버 재시작 등으로 진짜 고아)
+	* 새 발화로 복구한다.
+	*/
+	private Mono<WsFrame> handleDirectReplay(UUID threadId, UUID roomGeneration, Connection connection,
+			PresenceParticipant actor, InboundChatMessage inbound, String traceId,
+			DirectChatTurnService.StoredTurn stored) {
+		try {
+			roomSessionRegistry.broadcastIfCurrent(threadId, roomGeneration,
+					new ChatMessageFrame(threadId, stored.humanMessageId(), inbound.clientMsgId(), inbound.turnId(),
+							stored.humanSeq(), actor.subject(), actor.displayName(), inbound.content()));
+		} catch (RuntimeException ignored) {
+			// echo 재방송 실패는 무시한다 — 낙관적 렌더링이 이미 화면에 있어 치명적이지 않다.
+		}
+
+		Optional<String> streaming = threadMessageDispatcher.activeTurnContentIfMatches(threadId, roomGeneration,
+				stored.agentMessageId());
+		if (streaming.isPresent()) {
+			return Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(), inbound.turnId(),
+					threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), streaming.get(),
+					List.of(), false, ChatAnswerStatus.STREAMING));
+		}
+
+		return switch (stored.agentStatus()) {
+			case COMPLETE -> Mono
+					.fromCallable(() -> directChatTurnService.findAgentMessage(stored.agentMessageId()))
+					.subscribeOn(Schedulers.boundedElastic())
+					.map(msg -> (WsFrame) new ChatAnswerFrame(threadId, stored.agentMessageId(), inbound.turnId(),
+							threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(),
+							msg.map(Msg::getContent).orElse(""), List.of(), false, ChatAnswerStatus.DONE));
+			case CANCELLED -> Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(),
+					inbound.turnId(), threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), "",
+					List.of(), false, ChatAnswerStatus.CANCELLED));
+			case DENIED -> Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(),
+					inbound.turnId(), threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), "",
+					List.of(), false, ChatAnswerStatus.DENIED));
+			case FAILED -> Mono.<WsFrame>just(new ErrorFrame(threadId, "MODEL_UNAVAILABLE",
+					"이전 시도에서 응답을 만들지 못했습니다.", traceId));
+			case PENDING -> recoverOrphanedDirect(threadId, roomGeneration, connection, actor, inbound, traceId,
+					stored);
+		};
+	}
+
+	/**
+	* DB는 PENDING인데 메모리상 활성 턴이 어디에도 없는(서버 재시작 등으로 고아가 된) 경우를
+	* 복구한다(이슈 #233) — 그 msg를 FAILED로 닫고 이번 요청을 처음부터 다시(키가 없었던 것처럼)
+	* 진행한다. 결과는 평범한 첫 이어쓰기 발화와 완전히 같다 — 프런트가 이 경로를 구분해서 처리할
+	* 필요가 없다.
+	*/
+	private Mono<WsFrame> recoverOrphanedDirect(UUID threadId, UUID roomGeneration, Connection connection,
+			PresenceParticipant actor, InboundChatMessage inbound, String traceId,
+			DirectChatTurnService.StoredTurn orphaned) {
+		return Mono.fromCallable(() -> directChatTurnService.recoverOrphanedTurnBlocking(threadId,
+						connection.userId(), inbound.content(), inbound.clientMsgId(), orphaned.agentMessageId()))
 				.subscribeOn(Schedulers.boundedElastic())
-				.map(turn -> new ChatMessageCommand.ReservedTurn(turn.humanMessageId(), turn.humanSeq(),
-						turn.agentMessageId(), turn.agentSeq()));
+				.flatMap(fresh -> rejectIfLocked(
+						new ChatMessageCommand(threadId, ThrKind.DIRECT, connection.userId(), actor.subject(),
+								actor.displayName(), inbound.content(), inbound.model(), inbound.clientMsgId(),
+								inbound.turnId(), connection.id(), traceId, toReservedTurn(fresh)),
+						roomGeneration, traceId))
+				.onErrorResume(error -> reportDirectReserveFailure(threadId, roomGeneration, inbound.turnId(),
+						traceId, error));
 	}
 
 	/**
@@ -361,14 +453,16 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		String title = titleFor(inbound.content());
 		return Mono
 				.fromCallable(() -> directChatTurnService.prepareOrCreateWithPendingAgentBlocking(threadId,
-						connection.userId(), inbound.content(), title))
+						connection.userId(), inbound.content(), title, inbound.clientMsgId()))
 				.subscribeOn(Schedulers.boundedElastic())
 				.onErrorResume(DataIntegrityViolationException.class,
 						error -> Mono.fromCallable(() -> directChatTurnService
 										.prepareExistingWithPendingAgentBlocking(threadId, connection.userId(),
-												inbound.content()))
+												inbound.content(), inbound.clientMsgId()))
 								.subscribeOn(Schedulers.boundedElastic()))
 				.flatMap(stored -> completeBootstrap(threadId, connection, actor, inbound, traceId, stored))
+				.onErrorResume(IdempotencyKeyConflictException.class,
+						error -> Mono.just(idempotencyConflict(threadId, traceId)))
 				.onErrorResume(ResponseStatusException.class, error -> Mono.just(notSubscribed(threadId, traceId)))
 				.onErrorResume(error -> {
 					log.error("DIRECT bootstrap 실패 threadId={} traceId={}", threadId, traceId, error);
@@ -385,11 +479,12 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 			// subscribe() 도중 커넥션이 이미 닫혀 leaveRoom으로 빠졌다 — 보낼 곳이 없다.
 			return Mono.empty();
 		}
-		ChatMessageCommand.ReservedTurn reserved = new ChatMessageCommand.ReservedTurn(stored.humanMessageId(),
-				stored.humanSeq(), stored.agentMessageId(), stored.agentSeq());
+		if (stored.replay()) {
+			return handleDirectReplay(threadId, generation.get(), connection, actor, inbound, traceId, stored);
+		}
 		ChatMessageCommand command = new ChatMessageCommand(threadId, ThrKind.DIRECT, connection.userId(),
 				actor.subject(), actor.displayName(), inbound.content(), inbound.model(), inbound.clientMsgId(),
-				inbound.turnId(), connection.id(), traceId, reserved);
+				inbound.turnId(), connection.id(), traceId, toReservedTurn(stored));
 		return rejectIfLocked(command, generation.get(), traceId);
 	}
 

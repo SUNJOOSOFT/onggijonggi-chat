@@ -8,6 +8,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | 축약 | 원형 | 뜻 | 출처 | 비고 |
 |---|---|---|---|---|
 | `acc` | `access` | 접근 | 알고리즘 | - |
+| `agn` | `agent` | 에이전트 | 알고리즘 | - |
 | `ans` | `answer` | 답변 | 알고리즘 | - |
 | `app` | `app` | 애플리케이션 | 알고리즘 | - |
 | `archived` | `archived` | 보관됨 | 예외 | 관용 유지 — `archived_at` 대칭, 기존 `created`/`updated`/`deleted`와 동일 패턴 |
@@ -40,6 +41,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `file` | `file` | 파일 | 알고리즘 | - |
 | `fgpt` | `fingerprint` | - | 예외 | 관용어 — 알고리즘 결과 `fng`가 의미 불명확, 4자로 늘려 가독성 확보 |
 | `frs` | `first` | 첫 | 알고리즘 | - |
+| `hmn` | `human` | 사람 | 알고리즘 | - |
 | `idm` | `idempotency` | 멱등성 | 알고리즘 | - |
 | `id` | `identifier` | - | 예외 | 관용어(팀 합의) |
 | `inactive` | `inactive` | 비활성 | 예외 | 관용 유지 — 알고리즘 결과 `inc`는 increment·include와 혼동. `inactive_at` 대칭, 기존 `created`/`updated`/`deleted`/`locked`/`archived`와 동일 패턴 |

@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import java.security.Principal;
 import java.time.Clock;
@@ -287,7 +288,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just(principal));
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("unsubscribed-user")).thenReturn(Mono.just(UUID.randomUUID()));
-		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any()))
+		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(), any()))
 				.thenThrow(new org.springframework.web.server.ResponseStatusException(
 						org.springframework.http.HttpStatus.NOT_FOUND));
 		stubTextMessages(session);
@@ -320,7 +321,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(membership.kindOf(any())).thenReturn(Mono.just(Optional.of(ThrKind.DIRECT)));
 		when(membership.isActiveDirectOwner(any(), any())).thenReturn(Mono.just(true));
 		when(membership.isOpenForWriting(any())).thenReturn(Mono.just(true));
-		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any()))
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), any()))
 				.thenThrow(new IllegalStateException("database unavailable"));
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -370,6 +371,67 @@ class ThreadWebSocketHandlerUnitTest {
 	}
 
 	/**
+	* 재시도(이슈 #233)가 이미 COMPLETE인 턴을 가리키면(활성 턴도 없다 — 이 테스트의 dispatcher는
+	* 방금 만들어져 아무 턴도 진행 중이지 않다) 저장된 최종 답변을 이 커넥션에만 DONE 상태
+	* ChatAnswerFrame으로 돌려주고, 새 LLM 호출이나 dispatcher 큐 진입은 없다.
+	*/
+	@Test
+	void replaysTheFinalAnswerWhenTheStoredTurnIsAlreadyComplete() throws Exception {
+		UUID threadId = UUID.randomUUID();
+		UUID userId = UUID.randomUUID();
+		UUID humanMsgId = UUID.randomUUID();
+		UUID agentMsgId = UUID.randomUUID();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
+		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
+		var directChatTurnService = mock(DirectChatTurnService.class);
+		ThreadMembershipService membership = mock(ThreadMembershipService.class);
+		when(membership.isActiveParticipant(any(), any())).thenReturn(Mono.just(true));
+		when(membership.kindOf(any())).thenReturn(Mono.just(Optional.of(ThrKind.DIRECT)));
+		when(membership.isActiveDirectOwner(any(), any())).thenReturn(Mono.just(true));
+		when(membership.isOpenForWriting(any())).thenReturn(Mono.just(true));
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), any()))
+				.thenReturn(new DirectChatTurnService.StoredTurn(humanMsgId, 0L, agentMsgId, threadId, 1L, true,
+						MsgStatus.COMPLETE));
+		com.onggijonggi.common.chat.domain.Msg agentMsg = com.onggijonggi.common.chat.domain.Msg
+				.pendingAgent(agentMsgId, threadId, 1L);
+		agentMsg.complete("이전에 이미 완료된 답변");
+		when(directChatTurnService.findAgentMessage(agentMsgId)).thenReturn(Optional.of(agentMsg));
+		WebSocketSession session = mock(WebSocketSession.class);
+		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
+		Principal principal = () -> "direct-user";
+		List<String> sent = new CopyOnWriteArrayList<>();
+
+		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just(principal));
+		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
+		when(provisioning.resolveOrProvision("direct-user")).thenReturn(Mono.just(userId));
+		stubTextMessages(session);
+		when(session.receive()).thenReturn(Flux.just(inboundText(WsTestExchange.subscribeFrame(threadId)),
+				inboundText(WsTestExchange.chatMessageFrame(threadId, "안녕"))));
+		when(session.send(any())).thenAnswer(invocation -> Flux.from(
+				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
+				.doOnNext(message -> sent.add(message.getPayloadAsText())).then());
+		when(session.close(any(CloseStatus.class))).thenReturn(Mono.empty());
+
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.never());
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
+				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
+				Schedulers.parallel());
+		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
+				provisioning, membership, directChatTurnService, Clock.systemUTC(), WINDOW_SECONDS,
+				MESSAGES_PER_WINDOW);
+
+		handler.handle(session).block();
+
+		assertThat(sent).anyMatch(frame -> frame.contains("\"type\":\"chat.answer\"")
+				&& frame.contains("\"status\":\"done\"") && frame.contains("이전에 이미 완료된 답변")
+				&& frame.contains("\"msgId\":\"" + agentMsgId + "\""));
+		assertThat(sent).anyMatch(frame -> frame.contains("\"type\":\"chat.message\"")
+				&& frame.contains("\"msgId\":\"" + humanMsgId + "\""));
+		verify(llm, never()).streamChat(any());
+	}
+
+	/**
 	* 새 DIRECT 방 동시 생성 경합(이슈 #162, §2.1) — 첫 시도가 PK 충돌로 실패하면
 	* `prepareExistingWithPendingAgentBlocking`으로 재조회해 이어쓴다. 재조회까지 성공하면
 	* bootstrap이 정상 완료돼 발화가 방송된다.
@@ -381,11 +443,11 @@ class ThreadWebSocketHandlerUnitTest {
 		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		var directChatTurnService = mock(DirectChatTurnService.class);
-		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any()))
+		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(), any()))
 				.thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate"));
-		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any()))
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), any()))
 				.thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L, UUID.randomUUID(), threadId,
-						1L));
+						1L, false, MsgStatus.PENDING));
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
 		Principal principal = () -> "collision-user";
@@ -414,7 +476,8 @@ class ThreadWebSocketHandlerUnitTest {
 			handler.handle(session).block();
 
 			assertThat(messageBroadcast.await(1, TimeUnit.SECONDS)).isTrue();
-			verify(directChatTurnService).prepareExistingWithPendingAgentBlocking(threadId, userId, "안녕");
+			verify(directChatTurnService).prepareExistingWithPendingAgentBlocking(eq(threadId), eq(userId),
+					eq("안녕"), any());
 		} finally {
 			observerSubscription.dispose();
 			registry.leave(threadId, observerId, new PresenceParticipant("observer", "관찰자"));
@@ -433,8 +496,8 @@ class ThreadWebSocketHandlerUnitTest {
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		var directChatTurnService = mock(DirectChatTurnService.class);
 		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(eq(threadId), eq(userId), eq("안녕"),
-				any())).thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L, UUID.randomUUID(),
-				threadId, 1L));
+				any(), any())).thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L,
+				UUID.randomUUID(), threadId, 1L, false, MsgStatus.PENDING));
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
 		Principal principal = () -> "bootstrap-user";
@@ -538,7 +601,8 @@ class ThreadWebSocketHandlerUnitTest {
 		handler(registry, provisioning, MESSAGES_PER_WINDOW, directChatTurnService).handle(session).block();
 
 		assertThat(sent).singleElement().asString().contains("\"code\":\"MALFORMED_REQUEST\"");
-		verify(directChatTurnService, never()).prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any());
+		verify(directChatTurnService, never()).prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(),
+				any());
 	}
 
 	/** 클라이언트가 올려보내는 텍스트 프레임 한 장. */
