@@ -234,6 +234,10 @@ public class CollabThreadController {
 	* 참가 행을 먼저 읽고 그 id로 Thread를 가져온다. thr_mbr에 연관관계를 매핑하지 않아(ChatSess와
 	* 같은 이유) 조인 대신 두 번 조회하지만, 두 번째는 findAllById 한 번이라 건수만큼 늘지 않는다.
 	* statusFilter로 일반 목록(ACTIVE·LOCKED)과 보관함(ARCHIVED)을 같은 조회 로직으로 가른다(#131).
+	*
+	* Casbin 도입 전 목록 필터링 기준(#209): thr_mbr ACTIVE 참가 여부만으로 거른다 — OWNER든
+	* 초대받은 MEMBER든 참가 행이 있어야 보인다. Casbin이 들어오면(v0.3) 이 자리가 정책 판정
+	* 호출로 바뀌지만, 그 전까지는 이 최소 스코프가 최종 필터링 기준이다.
 	*/
 	private List<Thr> joinedThreads(UUID userId, Predicate<Thr> statusFilter) {
 		List<UUID> joinedIds = thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
