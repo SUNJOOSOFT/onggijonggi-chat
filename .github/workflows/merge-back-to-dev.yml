@@ -22,14 +22,13 @@ jobs:
             echo "이미 역머지 PR #$existing 이 열려 있다 — head가 main이라 최신 커밋이 자동 반영된다."
             exit 0
           fi
+          body=$(printf '%s\n' \
+            "main에 직접 머지된 핫픽스를 dev로 역머지한다(CONTRIBUTING.md #긴급-수정hotfix)." \
+            "" \
+            "이 PR을 빼먹으면 dev가 이미 나간 릴리스 태그에 도달하지 못해 compute-next-version.mjs가" \
+            "다음 버전을 잘못 계산하고, 수정 내용 자체도 dev에 없어 후속 작업이 그 위에서 진행되지 않는다." \
+            "" \
+            "충돌이 없으면 그대로 머지하면 되고, 있으면 이 PR에서 직접 해결한다.")
           gh pr create --repo "${{ github.repository }}" --base dev --head main \
             --title "merge: main을 dev로 역머지한다" \
-            --body "$(cat <<'EOF'
-main에 직접 머지된 핫픽스를 dev로 역머지한다(CONTRIBUTING.md #긴급-수정hotfix).
-
-이 PR을 빼먹으면 dev가 이미 나간 릴리스 태그에 도달하지 못해 compute-next-version.mjs가
-다음 버전을 잘못 계산하고, 수정 내용 자체도 dev에 없어 후속 작업이 그 위에서 진행되지 않는다.
-
-충돌이 없으면 그대로 머지하면 되고, 있으면 이 PR에서 직접 해결한다.
-EOF
-)"
+            --body "$body"
