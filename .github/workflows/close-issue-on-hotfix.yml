@@ -1,0 +1,31 @@
+name: Close Issue on Hotfix Merge
+
+on:
+  pull_request:
+    types: [closed]
+    branches: [main]
+
+permissions:
+  issues: write
+
+jobs:
+  close-issues:
+    if: github.event.pull_request.merged == true
+    runs-on: ubuntu-latest
+    steps:
+      - name: PR 본문의 Closes #를 읽어 이슈를 닫는다
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          set -euo pipefail
+          issues=$(grep -oiE 'closes[[:space:]]+#[0-9]+' <<< "$PR_BODY" | grep -oE '[0-9]+' || true)
+          if [ -z "$issues" ]; then
+            echo "본문에 Closes #가 없다 — 닫을 이슈 없음"
+            exit 0
+          fi
+          for n in $issues; do
+            gh issue close "$n" --repo "${{ github.repository }}" \
+              --comment "PR #${PR_NUMBER}에서 main에 머지되어 닫는다."
+          done
