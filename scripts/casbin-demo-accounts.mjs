@@ -2,7 +2,8 @@
 // casbin 프로필을 켜고 권한 판정을 확인할 시험 계정(demo1~demo7)을 로컬 Keycloak에 만든다.
 // 사용: node scripts/casbin-demo-accounts.mjs
 //
-// 계정만 만든다. 팀·직급 배정은 CSV 임포트나 데모 배정 화면으로 따로 넣는다(demo7은 미배정 확인용이라 넣지 않는다).
+// 계정만 만든다. 팀·직급 배정은 따로 넣는다 — node scripts/import-members.mjs infra/config/demo-members.csv --apply
+// (demo7은 미배정 확인용이라 CSV에 없다).
 // 이미 있는 계정은 이메일·이름·비밀번호를 아래 표대로 덮어쓰고 USER 역할을 붙인다 — 여러 번 돌려도 결과가 같다.
 // 비밀번호는 계정 이름과 같다. realm-app.json에 적지 않은 이유: 이미 만든 로컬 realm에는 반영되지 않아서다.
 //
@@ -96,5 +97,6 @@ async function main() {
 
 main().catch((error) => {
 	console.error(error.message);
-	process.exit(1);
+	// process.exit()는 쓰지 않는다 — Windows의 Node에서 fetch 연결이 닫히는 중에 부르면 libuv 단언으로 죽는다.
+	process.exitCode = 1;
 });

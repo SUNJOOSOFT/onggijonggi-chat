@@ -146,6 +146,26 @@ public class KeycloakAdminClient {
 	 * @param query 부분 일치 검색어. Keycloak이 username·email·firstName·lastName을 함께 본다
 	 * @param max 최대 결과 수. 상한은 호출부가 정한다
 	 */
+	/**
+	 * 이메일이 정확히 같은 계정의 subject 목록(팀·직급 CSV 임포트). search()는 부분 일치라 쓸 수 없다.
+	 * 보통 하나다. 비어 있으면 없는 계정, 둘 이상이면 realm이 이메일 중복을 허용한 것이라 호출부가 오류로 본다.
+	 * 오류는 search()처럼 전파한다 — 장애를 "없는 계정"으로 보면 임포트가 멀쩡한 사람을 잘못된 행으로 알린다.
+	 */
+	public Mono<List<String>> subjectsByEmail(String email) {
+		return adminToken()
+				.flatMapMany(token -> webClient.get()
+						.uri(builder -> builder.path("/admin/realms/{realm}/users")
+								.queryParam("email", email)
+								.queryParam("exact", true)
+								.queryParam("briefRepresentation", true)
+								.build(realm))
+						.headers(headers -> headers.setBearerAuth(token))
+						.retrieve()
+						.bodyToFlux(SearchedUser.class))
+				.map(SearchedUser::id)
+				.collectList();
+	}
+
 	public Mono<List<KeycloakUserSummary>> search(String query, int max) {
 		return adminToken()
 				.flatMapMany(token -> webClient.get()
