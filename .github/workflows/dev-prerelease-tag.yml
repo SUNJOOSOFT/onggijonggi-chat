@@ -1,0 +1,33 @@
+name: Dev Prerelease Tag
+
+on:
+  push:
+    branches: [dev]
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 다음 prerelease 태그 계산
+        id: version
+        run: |
+          set -euo pipefail
+          target=$(node scripts/compute-next-version.mjs | jq -r .nextVersion)
+          count=$(git tag -l "${target}-dev.*" | wc -l | tr -d ' ')
+          echo "new_tag=${target}-dev.$((count + 1))" >> "$GITHUB_OUTPUT"
+
+      - name: 태그 생성 및 push
+        run: |
+          git tag "${{ steps.version.outputs.new_tag }}"
+          git push origin "${{ steps.version.outputs.new_tag }}"

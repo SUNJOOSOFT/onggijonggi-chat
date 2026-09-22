@@ -37,6 +37,13 @@ public class Thr {
 	@Column(name = "drc_own_user_id")
 	private UUID drcOwnUserId;
 
+	/** 한 번 정해진 Tenant는 바뀌지 않는다. 절체 backfill은 SQL로 채우고 엔티티는 갱신하지 않는다. */
+	@Column(name = "tnn_id", updatable = false)
+	private UUID tenantId;
+
+	@Column(name = "wrk_node_id")
+	private UUID workspaceNodeId;
+
 	@Column(name = "created_user_id", nullable = false)
 	private UUID createdUserId;
 
@@ -105,6 +112,14 @@ public class Thr {
 
 	public UUID getDrcOwnUserId() {
 		return drcOwnUserId;
+	}
+
+	public UUID getTenantId() {
+		return tenantId;
+	}
+
+	public UUID getWorkspaceNodeId() {
+		return workspaceNodeId;
 	}
 
 	public UUID getCreatedUserId() {

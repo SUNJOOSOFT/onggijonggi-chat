@@ -65,6 +65,7 @@ public class SecurityConfig {
 				.authorizeExchange(exchange -> exchange
 						.pathMatchers(HttpMethod.OPTIONS).permitAll()
 						.pathMatchers("/actuator/health").permitAll()
+						.pathMatchers("/api/platform/**").hasRole("PLATFORM_ADMIN")
 						.pathMatchers("/api/**").hasRole("USER")
 						.anyExchange().denyAll())
 				.oauth2ResourceServer(oauth2 -> oauth2
