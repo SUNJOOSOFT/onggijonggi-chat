@@ -612,6 +612,33 @@ class RbacSchemaPostgresTest {
 	}
 
 	@Test
+	void aRankGrantMayNameATeamWhichMustBeActiveAndFixed() throws SQLException {
+		try (Connection c = connect()) {
+			UUID tenant = tenant(c, "rank-teams");
+			UUID root = root(c, tenant);
+			UUID lead = node(c, tenant, root, "lead", "ORG", "Lead");
+			UUID hr = orgUnit(c, tenant, "hr");
+			UUID fin = orgUnit(c, tenant, "fin");
+			UUID idle = orgUnit(c, tenant, "idle");
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", idle);
+
+			UUID teamRule = teamRankGrant(c, tenant, lead, hr, "K");
+			teamRankGrant(c, tenant, lead, fin, "K");
+			rankGrant(c, tenant, lead, "K");
+			// 팀이 없는 규칙끼리도, 같은 팀 규칙끼리도 중복을 막는다(null을 같은 값으로 본다).
+			assertRejected("23505", "uq_rank_grn_policy", () -> rankGrant(c, tenant, lead, "K"));
+			assertRejected("23505", "uq_rank_grn_policy", () -> teamRankGrant(c, tenant, lead, hr, "K"));
+			assertRejected("P0001", "active organization unit", () -> teamRankGrant(c, tenant, lead, idle, "K"));
+			assertRejected("P0001", "only the rank of a rank grant can change",
+					() -> execute(c, "update rank_grn set org_unit_id = ? where id = ?", fin, teamRule));
+			// 팀이 꺼져도 규칙 행은 남고 직급은 고칠 수 있다.
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", hr);
+			execute(c, "update rank_grn set rank = 'B' where id = ?", teamRule);
+			assertThat(query(c, "select rank from rank_grn where id = ?", teamRule)).isEqualTo("B");
+		}
+	}
+
+	@Test
 	void assignmentGuardsAreNotBypassedByReplicationRole() throws SQLException {
 		try (Connection c = connect()) {
 			UUID tenant = tenant(c, "assign-bypass");
@@ -681,6 +708,12 @@ class RbacSchemaPostgresTest {
 	private UUID rankGrant(Connection c, UUID tenant, UUID node, String rank) throws SQLException {
 		UUID id = UUID.randomUUID();
 		execute(c, "insert into rank_grn (id, tnn_id, wrk_node_id, rank) values (?, ?, ?, ?)", id, tenant, node, rank);
+		return id;
+	}
+
+	private UUID teamRankGrant(Connection c, UUID tenant, UUID node, UUID unit, String rank) throws SQLException {
+		UUID id = UUID.randomUUID();
+		execute(c, "insert into rank_grn (id, tnn_id, wrk_node_id, org_unit_id, rank) values (?, ?, ?, ?, ?)", id, tenant, node, unit, rank);
 		return id;
 	}
 

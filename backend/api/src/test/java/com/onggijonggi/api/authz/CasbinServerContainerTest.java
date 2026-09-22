@@ -46,6 +46,7 @@ class CasbinServerContainerTest {
 	private static final UUID HR_NODE = UUID.randomUUID();
 	private static final UUID FIN_NODE = UUID.randomUUID();
 	private static final UUID EXEC_NODE = UUID.randomUUID();
+	private static final UUID HR_LEAD_NODE = UUID.randomUUID();
 
 	private CasbinClient client;
 	private CasbinRuleLoader loader;
@@ -60,7 +61,8 @@ class CasbinServerContainerTest {
 				new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.ADMIN),
 				new WorkspaceGrant(TENANT, FIN, FIN_NODE, WorkspaceRole.ADMIN)));
 		RankGrantRepository rankGrants = mock(RankGrantRepository.class);
-		when(rankGrants.findAll()).thenReturn(List.of(new RankGrant(TENANT, EXEC_NODE, Rank.K)));
+		when(rankGrants.findAll()).thenReturn(List.of(new RankGrant(TENANT, EXEC_NODE, Rank.K),
+				new RankGrant(TENANT, HR_LEAD_NODE, HR, Rank.K)));
 		RbacProperties rbac = new RbacProperties();
 		rbac.setEnforce(true);
 		loader = new CasbinRuleLoader(rbac, client, workspaceGrants, rankGrants);
@@ -76,6 +78,16 @@ class CasbinServerContainerTest {
 		assertThat(sees(HR, Rank.D)).containsExactly(HR_NODE);
 		assertThat(sees(HR, Rank.S)).containsExactly(HR_NODE);
 		assertThat(sees(FIN, Rank.B)).containsExactly(FIN_NODE, EXEC_NODE);
+	}
+
+	@Test
+	void aTeamScopedRankRuleNeedsBothTheTeamAndTheRank() {
+		loader.ensureLoaded();
+
+		// 인사팀의 과장 이상만. 재무팀 부장은 서열은 되지만 팀이 달라 거부된다.
+		assertThat(client.enforce(attributes(HR, Rank.K), HR_LEAD_NODE.toString(), "view")).isTrue();
+		assertThat(client.enforce(attributes(HR, Rank.D), HR_LEAD_NODE.toString(), "view")).isFalse();
+		assertThat(client.enforce(attributes(FIN, Rank.B), HR_LEAD_NODE.toString(), "view")).isFalse();
 	}
 
 	@Test

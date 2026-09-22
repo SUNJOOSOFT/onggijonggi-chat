@@ -42,6 +42,15 @@ class CasbinPolicyTest {
 	}
 
 	@Test
+	void aRankGrantWithATeamRequiresBothTheTeamAndTheRank() {
+		// "인사팀의 과장 이상". 팀이 없으면 다른 팀의 과장 이상도 통과한다.
+		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(List.of(), List.of(new RankGrant(TENANT, EXEC_NODE, HR, Rank.K)));
+
+		assertThat(rules).containsExactly(
+				new CasbinPolicy.Rule("r.sub.OrgUnit == '" + HR + "' && r.sub.Rank <= 4", EXEC_NODE.toString(), "view"));
+	}
+
+	@Test
 	void severalRolesOfTheSameTeamAndNodeCollapseIntoOneRule() {
 		// role은 지금 판정에 쓰지 않는다. #264 bootstrap은 같은 (팀, 노드)에 VIEWER와 ADMIN을 함께 둘 수 있다.
 		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(List.of(

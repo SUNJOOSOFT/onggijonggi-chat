@@ -28,5 +28,7 @@ class WorkspaceSetupFileTest {
 		assertThat(new RbacBootstrapValidator().validate(spec)).isEmpty();
 		TenantSpec tenant = spec.tenants().get(0);
 		assertThat(tenant.orgUnits()).extracting(RbacBootstrapSpec.OrgUnitSpec::key).containsExactly("hr", "legal", "fin");
+		assertThat(tenant.rankGrants()).extracting(RbacBootstrapSpec.RankGrantSpec::node)
+				.containsExactly("hr-lead", "legal-lead", "fin-lead", "leaders", "notice");
 	}
 }

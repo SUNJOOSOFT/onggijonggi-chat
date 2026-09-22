@@ -360,6 +360,60 @@ class RbacBootstrapValidatorTest {
 		assertOne(problems, "선언이 상한");
 	}
 
+	// ------------------------------------------------------------------ 직급 규칙(rank_grants)
+
+	private static RbacBootstrapSpec.TenantSpec withRankGrants(List<RbacBootstrapSpec.NodeSpec> extraNodes,
+			List<RbacBootstrapSpec.GrantSpec> extraGrants, RbacBootstrapSpec.RankGrantSpec... rankGrants) {
+		RbacBootstrapSpec.TenantSpec base = baseline();
+		List<RbacBootstrapSpec.NodeSpec> nodes = new ArrayList<>(base.nodes());
+		nodes.addAll(extraNodes);
+		List<RbacBootstrapSpec.GrantSpec> grants = new ArrayList<>(base.grants());
+		grants.addAll(extraGrants);
+		return new RbacBootstrapSpec.TenantSpec(base.key(), base.name(), base.status(), base.orgUnits(), nodes, grants,
+				List.of(rankGrants));
+	}
+
+	private static RbacBootstrapSpec.RankGrantSpec rank(String unit, String rank, String node) {
+		return new RbacBootstrapSpec.RankGrantSpec(unit, rank, node);
+	}
+
+	@Test
+	void rankGrantsWithOrWithoutATeamAreAccepted() {
+		assertThat(problemsOf(withRankGrants(List.of(node("sales-lead", "sales-hq", "Sales Lead")), List.of(),
+				rank("sales", "K", "sales-lead"), rank(null, "TL", "sales-lead")))).isEmpty();
+	}
+
+	@Test
+	void aTopLevelNodeUsedOnlyByRankGrantsNeedsNoAdminGrant() {
+		// "전사"처럼 팀 부여 없이 하위 방을 직급 규칙으로만 여는 공간. ADMIN 부여를 두면 그 팀 전원이 보게 된다.
+		assertThat(problemsOf(withRankGrants(
+				List.of(node("company", "root", "Company"), node("leaders", "company", "Leaders")), List.of(),
+				rank(null, "TL", "leaders")))).isEmpty();
+	}
+
+	@Test
+	void theTopLevelExemptionNeedsBothNoTeamGrantAndARankGrant() {
+		// 직급 규칙이 없는(빠뜨린) 최상위 노드는 지금처럼 거부한다.
+		assertOne(problemsOf(withRankGrants(List.of(node("company", "root", "Company")), List.of())),
+				"최상위 노드에 ADMIN 부여가 선언돼 있지 않다");
+		// 팀 부여가 있는데 ADMIN만 빠진 최상위 노드도 거부한다.
+		assertOne(problemsOf(withRankGrants(List.of(node("company", "root", "Company")),
+				List.of(grant("sales", "VIEWER", "company")), rank(null, "TL", "company"))),
+				"최상위 노드에 ADMIN 부여가 선언돼 있지 않다");
+	}
+
+	@Test
+	void rankGrantsMustPointAtDeclaredActiveTargets() {
+		assertOne(problemsOf(withRankGrants(List.of(), List.of(), rank("sales", "X", "sales-hq"))), "rank는 TL·B·C·K·D·S");
+		assertOne(problemsOf(withRankGrants(List.of(), List.of(), rank("nobody", "K", "sales-hq"))), "org_unit이 같은 Tenant에");
+		assertOne(problemsOf(withRankGrants(List.of(), List.of(), rank("sales", "K", "root"))), "node가 같은 Tenant에 선언된 노드가 아니다");
+		assertOne(problemsOf(withRankGrants(List.of(), List.of(), rank("sales", "K", "common"))), "node가 같은 Tenant에 선언된 노드가 아니다");
+		assertOne(problemsOf(withRankGrants(List.of(new RbacBootstrapSpec.NodeSpec("old", "WORK", "sales-hq", "Old", "INACTIVE")),
+				List.of(), rank("sales", "K", "old"))), "INACTIVE node");
+		assertOne(problemsOf(withRankGrants(List.of(), List.of(), rank(null, "K", "sales-hq"), rank(null, "K", "sales-hq"))),
+				"같은 직급 규칙이 중복");
+	}
+
 	@Test
 	void problemsFromDifferentTenantsAreAllReported() {
 		RbacBootstrapSpec.TenantSpec broken = new RbacBootstrapSpec.TenantSpec("globex", "Globex", "ACTIVE",

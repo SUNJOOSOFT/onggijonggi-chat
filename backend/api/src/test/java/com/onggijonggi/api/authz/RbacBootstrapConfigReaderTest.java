@@ -197,6 +197,25 @@ class RbacBootstrapConfigReaderTest {
 	// ------------------------------------------------------------------ 지문
 
 	@Test
+	void rankGrantsAreParsedWithAnOptionalTeam() throws IOException {
+		RbacBootstrapSpec.TenantSpec tenant = load(VALID + "    rank_grants:\n"
+				+ "      - { org_unit: sales, rank: K, node: team }\n"
+				+ "      - { rank: TL, node: team }\n").spec().tenants().get(0);
+
+		assertThat(tenant.rankGrants()).containsExactly(new RbacBootstrapSpec.RankGrantSpec("sales", "K", "team"),
+				new RbacBootstrapSpec.RankGrantSpec(null, "TL", "team"));
+		assertRejected(VALID + "    rank_grants:\n      - { rank: K, node: team, role: ADMIN }\n", "알 수 없는 키");
+	}
+
+	@Test
+	void aConfigurationWithoutRankGrantsKeepsItsFingerprint() throws IOException {
+		// 직급 규칙을 지원하기 전에 배포된 설정의 cnf_fgpt가 바뀌지 않아야 한다. 빈 목록도 없는 것과 같다.
+		assertThat(load(VALID + "    rank_grants: []\n").fingerprint()).isEqualTo(load(VALID).fingerprint());
+		assertThat(load(VALID + "    rank_grants:\n      - { rank: TL, node: team }\n").fingerprint())
+				.isNotEqualTo(load(VALID).fingerprint());
+	}
+
+	@Test
 	void theFingerprintIsAStableSha256Hex() throws IOException {
 		String first = load(VALID).fingerprint();
 		assertThat(first).matches("[0-9a-f]{64}");
