@@ -68,3 +68,13 @@ tasks.register('verifyHibernateMapping', JavaExec) {
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'com.onggijonggi.api.migration.HibernateMappingVerifier'
 }
+
+tasks.register('verifyThreadDeleteCascade', JavaExec) {
+	group = 'verification'
+	description = 'Verifies DIRECT/COLLAB Thread deletion succeeds with idempotency key rows present (#251).'
+	dependsOn testClasses
+	// verifyFlywayMigrations가 적용을 끝낸 같은 DB 위에서 fixture를 심고 지운다.
+	mustRunAfter tasks.named('verifyFlywayMigrations')
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = 'com.onggijonggi.api.migration.ThreadDeleteCascadeVerifier'
+}
