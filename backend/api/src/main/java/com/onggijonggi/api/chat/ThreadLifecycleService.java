@@ -67,7 +67,9 @@ public class ThreadLifecycleService {
 
 	/**
 	* 상태와 무관하게 지울 수 있다. thr_mbr·msg는 FK on delete cascade(V10__thread_participant.sql,
-	* V11__message.sql)로 함께 지워진다 — 1:1 채팅의 chat_sess 삭제와 같은 정책이다.
+	* V11__message.sql)로 함께 지워진다 — 1:1 채팅의 chat_sess 삭제와 같은 정책이다. thr_idm_key·
+	* msg_idm_key도 같은 방식으로 cascade된다(#251) — idempotency 키 행이 남아 있다는 이유로
+	* 삭제가 FK 위반으로 막히지 않는다.
 	*/
 	public Mono<Void> delete(UUID threadId, UUID actorUserId) {
 		return Mono.<Void>fromCallable(() -> {
