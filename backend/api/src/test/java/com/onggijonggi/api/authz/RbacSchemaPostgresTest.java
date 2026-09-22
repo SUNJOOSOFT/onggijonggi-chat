@@ -463,10 +463,12 @@ class RbacSchemaPostgresTest {
 			for (String event : new String[] {"TENANT_CREATED", "TENANT_RENAMED", "TENANT_DEACTIVATED", "TENANT_REACTIVATED",
 					"ORG_UNIT_CREATED", "ORG_UNIT_RENAMED", "ORG_UNIT_DEACTIVATED", "ORG_UNIT_REACTIVATED", "NODE_CREATED",
 					"NODE_RENAMED", "NODE_REPARENTED", "NODE_DEACTIVATED", "NODE_REACTIVATED", "POLICY_ADDED", "POLICY_REMOVED",
-					"POLICY_REPLACED", "THREAD_MOVED", "OWNER_TRANSFERRED", "TENANT_DRIFT_DETECTED"}) {
+					"POLICY_REPLACED", "THREAD_MOVED", "OWNER_TRANSFERRED", "TENANT_DRIFT_DETECTED",
+					"MEMBER_ASSIGNED", "MEMBER_CHANGED", "MEMBER_UNASSIGNED"}) {
 				audit(c, tenant, event, "TENANT");
 			}
-			assertThat(query(c, "select count(*) from authz_adt where tnn_id = ?", tenant)).isEqualTo(19L);
+			audit(c, tenant, "MEMBER_ASSIGNED", "MEMBER");
+			assertThat(query(c, "select count(*) from authz_adt where tnn_id = ?", tenant)).isEqualTo(23L);
 		}
 	}
 

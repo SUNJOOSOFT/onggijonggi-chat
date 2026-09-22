@@ -9,5 +9,6 @@ public enum AuthorizationAuditTargetKind {
 	ORG_UNIT,
 	WORKSPACE,
 	POLICY,
-	THREAD
+	THREAD,
+	MEMBER
 }

@@ -48,6 +48,14 @@ public class OrgUnitMember {
 		this.updatedAt = now;
 	}
 
+	/** 인사이동·직급 변경. 팀이 다른 Tenant면 Tenant도 따라간다(팀이 Tenant에 속한다). */
+	public void moveTo(UUID tenantId, UUID orgUnitId, Rank rank) {
+		this.tenantId = tenantId;
+		this.orgUnitId = orgUnitId;
+		this.rank = rank;
+		this.updatedAt = Instant.now();
+	}
+
 	public UUID getId() { return id; }
 	public UUID getTenantId() { return tenantId; }
 	public UUID getOrgUnitId() { return orgUnitId; }
