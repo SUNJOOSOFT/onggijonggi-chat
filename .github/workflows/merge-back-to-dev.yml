@@ -5,31 +5,45 @@ on:
     branches: [main]
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 jobs:
   merge-back:
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4
+
+      # head를 main 자체로 두면(예전 방식) main이 보호된 브랜치라 PR 화면의 Update branch도,
+      # 관리자 bypass 머지도 전부 "보호된 브랜치를 건드린다"는 이유로 막힌다 — 매번 새 PR을
+      # 파서 우회해야 했다. 일회용 브랜치(보호 대상 아님)를 main과 같은 지점으로 force-push해
+      # 그걸 head로 쓰면, 이후 main이 또 push될 때 이 브랜치만 다시 맞추면 되므로 기존 PR이
+      # 그대로 최신 커밋을 반영하고 Update branch·머지 모두 정상 작동한다.
+      - name: 일회용 브랜치를 main과 맞춘다
+        run: |
+          set -euo pipefail
+          git push origin HEAD:refs/heads/merge-back-to-dev --force
+
       - name: main -> dev 역머지 PR 생성
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          existing=$(gh pr list --repo "${{ github.repository }}" --base dev --head main --state open --json number --jq '.[0].number // empty')
+          existing=$(gh pr list --repo "${{ github.repository }}" --base dev --head merge-back-to-dev --state open --json number --jq '.[0].number // empty')
           if [ -n "$existing" ]; then
-            echo "이미 역머지 PR #$existing 이 열려 있다 — head가 main이라 최신 커밋이 자동 반영된다."
+            echo "이미 역머지 PR #$existing 이 열려 있다 — 브랜치를 방금 맞췄으니 최신 커밋이 반영된다."
             exit 0
           fi
-          gh pr create --repo "${{ github.repository }}" --base dev --head main \
+          body=$(printf '%s\n' \
+            "main에 직접 머지된 핫픽스를 dev로 역머지한다(CONTRIBUTING.md #긴급-수정hotfix)." \
+            "" \
+            "이 PR을 빼먹으면 dev가 이미 나간 릴리스 태그에 도달하지 못해 compute-next-version.mjs가" \
+            "다음 버전을 잘못 계산하고, 수정 내용 자체도 dev에 없어 후속 작업이 그 위에서 진행되지 않는다." \
+            "" \
+            "head는 main 자체가 아니라 main과 같은 지점으로 맞춘 일회용 브랜치(merge-back-to-dev)다 —" \
+            "main은 보호된 브랜치라 Update branch·관리자 bypass 머지가 모두 막혀서다(#273)." \
+            "" \
+            "충돌이 없으면 그대로 머지하면 되고, 있으면 이 PR에서 직접 해결한다.")
+          gh pr create --repo "${{ github.repository }}" --base dev --head merge-back-to-dev \
             --title "merge: main을 dev로 역머지한다" \
-            --body "$(cat <<'EOF'
-main에 직접 머지된 핫픽스를 dev로 역머지한다(CONTRIBUTING.md #긴급-수정hotfix).
-
-이 PR을 빼먹으면 dev가 이미 나간 릴리스 태그에 도달하지 못해 compute-next-version.mjs가
-다음 버전을 잘못 계산하고, 수정 내용 자체도 dev에 없어 후속 작업이 그 위에서 진행되지 않는다.
-
-충돌이 없으면 그대로 머지하면 되고, 있으면 이 PR에서 직접 해결한다.
-EOF
-)"
+            --body "$body"
