@@ -22,6 +22,21 @@
 
 | 영문 | 뜻 |
 |---|---|
+| `actor` | 행위자 |
+| `after` | 이후 |
+| `reference` | 참조 |
+| `before` | 이전 |
+| `configuration` | 구성 |
+| `current` | 현재 |
+| `deployment` | 배포 |
+| `grant` | 권한 부여 |
+| `node` | 노드 |
+| `parent` | 부모 |
+| `staging` | 사전 적재 |
+| `target` | 대상 |
+| `tenant` | 테넌트 |
+| `unit` | 단위 |
+| `workspace` | 워크스페이스 |
 | `access` | 접근 |
 | `agent` | 에이전트 |
 | `answer` | 답변 |
@@ -102,6 +117,8 @@
 
 | 영문 | 축약 | 사유 |
 |---|---|---|
+| `authz` | `authz` | `author`의 `ath`와 충돌 |
+| `event` | `evt` | 기존 이벤트 식별자 관용 |
 | `identifier` | `id` | 관용어(팀 합의) |
 | `password` | `pw` | 관용어(팀 합의) |
 | `document` | `doc` | 관용어 — 알고리즘은 `dcm` |
@@ -125,6 +142,7 @@
 | `department` | `dept` | 관용어 — 알고리즘 결과 `dpr`이 불명확 |
 | `status` | `status` | 관용 유지 — 알고리즘 결과 `stt`가 부자연스러움(`content`·`title`과 같은 패턴) |
 | `current` | `cur` | 관용어 — 알고리즘 결과 `crr`이 부자연스러움 |
+| `reference` | `ref` | 관용어 — 알고리즘 결과 `rfr`이 의미 불명확 |
 | `fingerprint` | `fgpt` | 관용어 — 알고리즘 결과 `fng`가 의미 불명확, 4자로 늘려 가독성 확보 |
 | `deleted` | `deleted` | 관용 유지 — `deleted_at`/`deleted_by` 대칭, 기존 `created`/`updated`/`indexed`/`uploaded`와 동일 패턴 |
 | `sequence` | `seq` | 관용어 — 알고리즘 결과 `sqn`이 불명확, 업계 통용 축약 |

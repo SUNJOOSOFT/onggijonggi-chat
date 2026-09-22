@@ -30,6 +30,13 @@ public class ThrInv {
 	@Column(name = "thr_id", nullable = false)
 	private UUID thrId;
 
+	/** 이 값은 DB trigger가 Thread의 tnn_id로 채운다. 엔티티는 쓰지 않는다(쓰면 trigger가 채운 값을 null로 덮어쓸 수 있다). */
+	@Column(name = "tnn_id", insertable = false, updatable = false)
+	private UUID tenantId;
+
+	@Column(name = "pnd_rsn")
+	private String pendingReason;
+
 	/** 초대 대상의 Keycloak subject. app_user 행이 없는 사람이라 내부 id로 가리킬 수 없다. */
 	@Column(nullable = false)
 	private String subj;
@@ -65,8 +72,11 @@ public class ThrInv {
 	/**
 	 * 대기 중인 초대를 끝낸다. 수락(ACCEPTED)과 취소(REVOKED) 모두 이 경로를 쓴다 —
 	 * DB CHECK가 "PENDING이 아니면 종료 정보가 있어야 한다"를 강제하므로 사유를 함께 받는다.
+	 * 대기 사유(pnd_rsn)도 PENDING일 때만 가질 수 있어서(CHECK) 여기서 함께 비운다 — 그러지 않으면 대기 사유가
+	 * 남은 초대의 수락·철회가 CHECK 위반으로 실패한다.
 	 */
 	public void end(ThrInvStatus endStatus, String reason) {
+		this.pendingReason = null;
 		this.status = endStatus;
 		this.endedAt = Instant.now();
 		this.endRsn = reason;
@@ -78,6 +88,14 @@ public class ThrInv {
 
 	public UUID getThrId() {
 		return thrId;
+	}
+
+	public UUID getTenantId() {
+		return tenantId;
+	}
+
+	public String getPendingReason() {
+		return pendingReason;
 	}
 
 	public String getSubj() {

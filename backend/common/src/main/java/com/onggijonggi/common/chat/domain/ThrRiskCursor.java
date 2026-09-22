@@ -27,6 +27,10 @@ public class ThrRiskCursor {
 	@Column(name = "thr_id")
 	private UUID thrId;
 
+	/** 이 값은 DB trigger가 Thread의 tnn_id로 채운다. 엔티티는 쓰지 않는다(쓰면 trigger가 채운 값을 null로 덮어쓸 수 있다). */
+	@Column(name = "tnn_id", insertable = false, updatable = false)
+	private UUID tenantId;
+
 	@Column(name = "last_seq", nullable = false)
 	private long lastSeq;
 
@@ -48,6 +52,10 @@ public class ThrRiskCursor {
 
 	public UUID getThrId() {
 		return thrId;
+	}
+
+	public UUID getTenantId() {
+		return tenantId;
 	}
 
 	public long getLastSeq() {
