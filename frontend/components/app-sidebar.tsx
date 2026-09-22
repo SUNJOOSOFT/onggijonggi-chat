@@ -41,6 +41,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar';
+import { fetchPermissionsEnabled } from '@/lib/api/permissions';
 import {
   deleteSessionOnServer,
   fetchChatSessions,
@@ -90,6 +91,18 @@ export function AppSidebar({
       .then((sessions) => useChatSessionsStore.getState().setSessions(sessions))
       .catch(() => undefined);
   }, [hydrated]);
+
+  // 권한 관리 메뉴는 bff의 casbin 프로필이 켜져 있을 때만 보인다(꺼져 있으면 API가 404).
+  const [permissionsEnabled, setPermissionsEnabled] = useState(false);
+  useEffect(() => {
+    let alive = true;
+    fetchPermissionsEnabled().then((enabled) => {
+      if (alive) setPermissionsEnabled(enabled);
+    });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   // 삭제는 되돌릴 수 없어 AlertDialog로 확인한다. pendingDeleteId는 확인창이 띄워진 세션을 가리킨다.
   const [pendingDeleteId, setPendingDeleteId] = useState<string | null>(null);
@@ -213,6 +226,20 @@ export function AppSidebar({
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {permissionsEnabled && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton asChild>
+                    <Link
+                      href="/admin/permissions"
+                      onClick={() => {
+                        setOpenMobile(false);
+                      }}
+                    >
+                      권한 관리
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
             </SidebarMenu>
           </SidebarGroup>
           <SidebarGroup>

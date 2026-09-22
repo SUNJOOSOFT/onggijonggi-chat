@@ -23,9 +23,10 @@
 #    표시명(name)만 다른 것은 경고만 남긴다. 부여는 drift가 아니다(빠진 부여는 만들고, 설정에서 뺀 부여는 그대로 둔다).
 #  - reconcile은 enabled와 dpl_id가 모두 있을 때만 선언과의 차이를 적용하고, 같은 dpl_id는 Tenant마다 한 번만 적용한다.
 #    dpl_id는 배포마다 새로 만든다(예: 날짜-순번).
+# 2026-09-22-02: 팀 관리자급 방 이름을 "간부방"에서 "관리자방"으로 바꿨다. 표시명은 reconcile로만 바뀐다.
 reconcile:
-  enabled: false
-  dpl_id: "2026-09-22-01"
+  enabled: true
+  dpl_id: "2026-09-22-02"
 
 tenants:
   - tnn_key: ogjg            # 불변 slug([a-z][a-z0-9-]{0,62})
@@ -57,21 +58,21 @@ tenants:
         parent: root
         name: 재무팀
         status: ACTIVE
-      # 팀 안의 관리자급 방. 팀 부여가 없어 팀 전원에게 열리지 않고 아래 직급 규칙으로만 열린다.
+      # 팀 안의 관리자방(과장 이상). 팀 부여가 없어 팀 전원에게 열리지 않고 아래 직급 규칙으로만 열린다.
       - node_key: hr-lead
         kind: WORK
         parent: hr
-        name: 인사팀 간부방
+        name: 인사팀 관리자방
         status: ACTIVE
       - node_key: legal-lead
         kind: WORK
         parent: legal
-        name: 법무팀 간부방
+        name: 법무팀 관리자방
         status: ACTIVE
       - node_key: fin-lead
         kind: WORK
         parent: fin
-        name: 재무팀 간부방
+        name: 재무팀 관리자방
         status: ACTIVE
       # 여러 팀이 같이 쓰는 공간. 팀 부여가 없어 company 자체는 아무도 보지 않고, 아래 방만 직급 규칙으로 열린다.
       - node_key: company
