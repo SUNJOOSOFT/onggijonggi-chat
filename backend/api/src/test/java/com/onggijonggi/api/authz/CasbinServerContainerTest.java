@@ -106,8 +106,31 @@ class CasbinServerContainerTest {
 		DockerClientFactory.instance().client().restartContainerCmd(CASBIN.getContainerId()).exec();
 		waitUntilListening();
 
-		assertThat(client.enforce(attributes(HR, Rank.S), HR_NODE.toString(), "view")).as("재시작한 서버에는 규칙이 없다").isFalse();
+		// 재시작 직후에는 연결이 아직 안 붙어 첫 요청이 UNAVAILABLE일 수 있다(CI처럼 느린 환경). 그동안에도 모두 거부여야 하고,
+		// 서버에 닿는 순간 "enforcer not found"를 받아 적재 상태를 비워야 한다.
+		for (int attempt = 0; attempt < 50 && client.isLoaded(); attempt++) {
+			assertThat(client.enforce(attributes(HR, Rank.S), HR_NODE.toString(), "view")).as("재시작한 서버에는 규칙이 없다").isFalse();
+			if (client.isLoaded()) Thread.sleep(200);
+		}
 		assertThat(client.isLoaded()).isFalse();
+
+		loader.ensureLoaded();
+		assertThat(sees(HR, Rank.S)).containsExactly(HR_NODE);
+	}
+
+	@Test
+	void theFirstRequestAfterAServerOutageDetectsTheLostRules() throws Exception {
+		// CI에서 드러난 경우: 서버가 내려가 있는 동안 요청이 실패하면 gRPC 채널이 재연결 대기(backoff)에 들어간다.
+		// 서버가 다시 떠도 대기 중이면 요청이 서버에 닿기 전에 UNAVAILABLE로 끝나, 규칙을 잃었다는 것을 알지 못한다.
+		loader.ensureLoaded();
+		DockerClientFactory.instance().client().stopContainerCmd(CASBIN.getContainerId()).exec();
+		assertThat(client.enforce(attributes(HR, Rank.S), HR_NODE.toString(), "view")).as("서버가 없으면 거부").isFalse();
+		assertThat(client.isLoaded()).as("연결 실패만으로는 규칙을 잃었다고 보지 않는다").isTrue();
+		DockerClientFactory.instance().client().startContainerCmd(CASBIN.getContainerId()).exec();
+		waitUntilListening();
+
+		assertThat(client.enforce(attributes(HR, Rank.S), HR_NODE.toString(), "view")).isFalse();
+		assertThat(client.isLoaded()).as("다시 뜬 서버에 첫 요청이 닿아 규칙을 잃은 것을 안다").isFalse();
 
 		loader.ensureLoaded();
 		assertThat(sees(HR, Rank.S)).containsExactly(HR_NODE);

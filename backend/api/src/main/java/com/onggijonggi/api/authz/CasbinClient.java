@@ -5,6 +5,7 @@ import com.onggijonggi.api.authz.casbin.grpc.EnforceRequest;
 import com.onggijonggi.api.authz.casbin.grpc.NewEnforcerRequest;
 import com.onggijonggi.api.authz.casbin.grpc.PolicyRequest;
 import io.grpc.ManagedChannel;
+import io.grpc.Status;
 import io.grpc.StatusRuntimeException;
 import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
 import jakarta.annotation.PreDestroy;
@@ -21,6 +22,9 @@ import org.springframework.stereotype.Component;
  *               서버는 메모리만 쓰므로 재시작하면 enforcer가 사라진다 — 판정이 "enforcer not found"로 실패하면
  *               적재 상태를 비워 다음 판정 전에 다시 적재하게 한다. 판정 호출의 모든 실패(연결·시간 초과·서버 오류)는
  *               거부(false)다. 서버는 오류가 나도 res=false와 함께 오류를 돌려주므로 오류를 허용으로 읽을 일은 없다.
+ *               서버가 재시작하는 동안 재연결에 실패하면 gRPC 채널이 재연결 대기(backoff)에 들어가 요청이 서버에 닿기도
+ *               전에 UNAVAILABLE로 끝난다 — 그러면 "enforcer not found"를 받지 못해 규칙을 다시 넣지 못한다. 그래서
+ *               요청은 연결될 때까지 기다리고(waitForReady, 상한은 deadline), UNAVAILABLE이면 재연결 대기를 비운다.
  */
 @Component
 public class CasbinClient {
@@ -69,6 +73,11 @@ public class CasbinClient {
 					.addParams(subjectJson).addParams(object).addParams(action)
 					.build()).getRes();
 		} catch (StatusRuntimeException error) {
+			if (error.getStatus().getCode() == Status.Code.UNAVAILABLE) {
+				// 재연결 대기 중이면 다음 요청도 바로 실패한다. 대기를 비워 다음 요청이 곧장 다시 연결하게 한다.
+				ManagedChannel current = channel.get();
+				if (current != null) current.resetConnectBackoff();
+			}
 			String description = error.getStatus().getDescription();
 			if (description != null && description.contains("enforcer not found")) {
 				// 서버가 재시작했다. 다른 스레드가 이미 새로 적재했으면 그 번호는 지우지 않는다.
@@ -85,7 +94,8 @@ public class CasbinClient {
 	}
 
 	private CasbinGrpc.CasbinBlockingStub stub() {
-		return CasbinGrpc.newBlockingStub(channel()).withDeadlineAfter(properties.getDeadline().toMillis(), TimeUnit.MILLISECONDS);
+		return CasbinGrpc.newBlockingStub(channel()).withWaitForReady()
+				.withDeadlineAfter(properties.getDeadline().toMillis(), TimeUnit.MILLISECONDS);
 	}
 
 	/** 권한 판정이 꺼진 환경에서는 한 번도 불리지 않아 연결을 만들지 않는다. */
