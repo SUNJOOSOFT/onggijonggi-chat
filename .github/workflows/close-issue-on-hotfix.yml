@@ -1,7 +1,11 @@
 name: Close Issue on Hotfix Merge
 
 on:
-  pull_request:
+  # fork PR(pull_request)은 저장소·조직 설정과 무관하게 GITHUB_TOKEN이 강제로 읽기 전용이라
+  # gh issue close가 매번 실패한다(#268) — pull_request_target은 base 저장소 토큰 권한을
+  # 그대로 쓴다. 이 워크플로는 PR 코드를 체크아웃하지 않고 gh 명령만 호출하므로, 신뢰할 수
+  # 없는 코드를 실행하는 pull_request_target 특유의 위험이 없다.
+  pull_request_target:
     types: [closed]
     branches: [main]
 
