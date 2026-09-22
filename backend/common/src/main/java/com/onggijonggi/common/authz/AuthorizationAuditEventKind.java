@@ -1,0 +1,27 @@
+package com.onggijonggi.common.authz;
+
+/**
+ * Class Name : AuthorizationAuditEventKind.java
+ * Description : Authorization change events permitted by authz_adt.
+ */
+public enum AuthorizationAuditEventKind {
+	TENANT_CREATED,
+	TENANT_RENAMED,
+	TENANT_DEACTIVATED,
+	TENANT_REACTIVATED,
+	ORG_UNIT_CREATED,
+	ORG_UNIT_RENAMED,
+	ORG_UNIT_DEACTIVATED,
+	ORG_UNIT_REACTIVATED,
+	NODE_CREATED,
+	NODE_RENAMED,
+	NODE_REPARENTED,
+	NODE_DEACTIVATED,
+	NODE_REACTIVATED,
+	POLICY_ADDED,
+	POLICY_REMOVED,
+	POLICY_REPLACED,
+	THREAD_MOVED,
+	OWNER_TRANSFERRED,
+	TENANT_DRIFT_DETECTED
+}
