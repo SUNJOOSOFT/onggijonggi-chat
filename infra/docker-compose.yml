@@ -144,6 +144,24 @@ services:
       postgres:
         condition: service_healthy
 
+  casbin:
+    image: casbin/casbin-server:v1.19.0
+    container_name: infra-casbin
+    # 권한 판정 서버. .env에 COMPOSE_PROFILES=casbin(과 SPRING_PROFILE=prod,casbin)을 넣어야 켜진다.
+    profiles:
+      - casbin
+    restart: unless-stopped
+    # gRPC API에 인증이 없어 포트를 밖으로 열지 않는다. bff만 app-net 안에서 casbin:50051로 부른다.
+    # 메모리만 쓰고 저장소가 없다 — 재시작하면 bff가 DB에서 규칙을 다시 넣는다.
+    healthcheck:
+      test: ["CMD", "nc", "-z", "localhost", "50051"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 5s
+    networks:
+      - app-net
+
   bff:
     build:
       context: ../backend
@@ -173,6 +191,9 @@ services:
       SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL:  ${LLM_MODEL:-gemini-3.6-flash}
       APP_LLM_GATEWAY_URL:                  http://litellm:4000
       APP_CORS_ALLOWED_ORIGINS: ${PUBLIC_FRONTEND_URL:-http://localhost:3010}
+    volumes:
+      # 조직 구조 설정. SPRING_PROFILE에 casbin이 있을 때만 읽는다(application-casbin.properties).
+      - ./config/workspace-setup.yml:/config/workspace-setup.yml:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8090/actuator/health"]
       interval: 20s

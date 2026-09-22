@@ -43,7 +43,7 @@ public class RbacBootstrapConfigReader {
 	private final String configPath;
 	private final ObjectMapper objectMapper;
 
-	public RbacBootstrapConfigReader(@Value("${app.rbac.bootstrap-config-path:}") String configPath,
+	public RbacBootstrapConfigReader(@Value("${app.rbac.workspace-setup-path:}") String configPath,
 			ObjectMapper objectMapper) {
 		this.configPath = configPath;
 		this.objectMapper = objectMapper;

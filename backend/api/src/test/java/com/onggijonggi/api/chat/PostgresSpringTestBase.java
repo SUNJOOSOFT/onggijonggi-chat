@@ -52,7 +52,7 @@ abstract class PostgresSpringTestBase {
 		registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
 		registry.add("spring.flyway.enabled", () -> "true");
 		registry.add("spring.jpa.hibernate.ddl-auto", () -> "validate");
-		registry.add("app.rbac.bootstrap-config-path", BOOTSTRAP_CONFIG::toString);
+		registry.add("app.rbac.workspace-setup-path", BOOTSTRAP_CONFIG::toString);
 	}
 
 	private static Path createConfigFile() {

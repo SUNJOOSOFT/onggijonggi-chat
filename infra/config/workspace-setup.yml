@@ -1,0 +1,63 @@
+# 조직 구조 설정 — 고객사(Tenant)·팀(org_unit)·워크스페이스(node)·팀 규칙(grant).
+#
+# casbin 프로필을 켜면 읽힌다(infra/.env에 SPRING_PROFILE=prod,casbin). docker-compose가 이 파일을 bff의
+# /config/workspace-setup.yml에 읽기 전용으로 마운트하고, application-casbin.properties가 그 경로를
+# app.rbac.workspace-setup-path(환경변수 APP_RBAC_WORKSPACE_SETUP_PATH)로 준다. 경로가 비어 있으면 아무것도 만들지 않는다.
+# 서버를 켤 때만 읽는다 — 이 파일을 바꾸면 bff를 다시 켜야 반영된다.
+#
+# 팀·직급의 정본은 이 DB다. Keycloak은 USER 역할만 주고 팀·직급을 모른다. 사람의 팀·직급 배정은 이 파일이 아니라
+# CSV 임포트나 데모 배정 화면으로 넣는다. 판정에는 팀 규칙의 role을 쓰지 않는다 — 부여가 있으면 그 팀이 그 노드를 본다.
+#
+# 규칙 요약
+#  - ROOT·COMMON은 Tenant를 만들 때 자동으로 만들어지므로 선언하지 않는다(node_key root·common은 예약).
+#  - 노드의 parent는 root 또는 이 설정에서 선언한 다른 노드의 node_key다. COMMON 아래에는 노드를 둘 수 없다.
+#  - 모든 ACTIVE org_unit은 node: common, role: VIEWER 부여를 선언해야 한다(없으면 개인 채팅도 못 쓴다).
+#  - ROOT 바로 아래의 최상위 노드마다 ADMIN 부여가 하나 이상 있어야 한다(ROOT에는 부여할 수 없다).
+#  - 설정이 이 규칙을 하나라도 어기면 bootstrap 전체가 실행되지 않는다.
+#  - 이미 있는 리소스의 상태(status)·노드 kind·부모가 선언과 다르면 그 Tenant는 drift로 판정돼 fail-closed로 표시된다.
+#    표시명(name)만 다른 것은 경고만 남긴다. 부여는 drift가 아니다(빠진 부여는 만들고, 설정에서 뺀 부여는 그대로 둔다).
+#  - reconcile은 enabled와 dpl_id가 모두 있을 때만 선언과의 차이를 적용하고, 같은 dpl_id는 Tenant마다 한 번만 적용한다.
+#    dpl_id는 배포마다 새로 만든다(예: 날짜-순번).
+reconcile:
+  enabled: false
+  dpl_id: "2026-09-22-01"
+
+tenants:
+  - tnn_key: ogjg            # 불변 slug([a-z][a-z0-9-]{0,62})
+    name: 옹기종기            # 표시명(바꿔도 권한에는 영향이 없다)
+    status: ACTIVE           # ACTIVE | INACTIVE
+    org_units:
+      - key: hr              # 불변 slug. CSV 임포트의 team 값과 같다
+        name: 인사팀
+        status: ACTIVE
+      - key: legal
+        name: 법무팀
+        status: ACTIVE
+      - key: fin
+        name: 재무팀
+        status: ACTIVE
+    nodes:
+      - node_key: hr
+        kind: ORG            # ORG | WORK (동작 차이 없는 표시 분류이며 만든 뒤 바꿀 수 없다)
+        parent: root         # root면 최상위 노드
+        name: 인사팀
+        status: ACTIVE
+      - node_key: legal
+        kind: ORG
+        parent: root
+        name: 법무팀
+        status: ACTIVE
+      - node_key: fin
+        kind: ORG
+        parent: root
+        name: 재무팀
+        status: ACTIVE
+    grants:
+      # 모든 ACTIVE org_unit의 COMMON VIEWER 부여(필수)
+      - { org_unit: hr, role: VIEWER, node: common }
+      - { org_unit: legal, role: VIEWER, node: common }
+      - { org_unit: fin, role: VIEWER, node: common }
+      # 최상위 노드마다 ADMIN 부여(필수). 팀마다 자기 팀 워크스페이스를 본다.
+      - { org_unit: hr, role: ADMIN, node: hr }
+      - { org_unit: legal, role: ADMIN, node: legal }
+      - { org_unit: fin, role: ADMIN, node: fin }
