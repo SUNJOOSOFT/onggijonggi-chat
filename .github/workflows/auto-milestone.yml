@@ -1,0 +1,44 @@
+name: Auto-assign milestone
+
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  issues: write
+
+jobs:
+  assign:
+    if: github.event.issue.milestone == null
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const map = JSON.parse(fs.readFileSync('.github/milestone-map.json', 'utf8'));
+            const title = context.payload.issue.title;
+
+            const targetTitle = Object.keys(map).find((milestoneTitle) =>
+              map[milestoneTitle].some((keyword) => title.includes(keyword))
+            );
+            if (!targetTitle) return;
+
+            const milestones = await github.paginate(
+              github.rest.issues.listMilestones,
+              { owner: context.repo.owner, repo: context.repo.repo, state: 'all' }
+            );
+            const milestone = milestones.find((m) => m.title === targetTitle);
+            if (!milestone) {
+              core.warning(`milestone-map.json refers to "${targetTitle}", but no such milestone exists`);
+              return;
+            }
+
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.payload.issue.number,
+              milestone: milestone.number,
+            });
