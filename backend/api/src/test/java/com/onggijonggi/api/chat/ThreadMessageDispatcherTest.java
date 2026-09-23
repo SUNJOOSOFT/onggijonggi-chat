@@ -402,12 +402,8 @@ class ThreadMessageDispatcherTest {
 		TestRoom room = new TestRoom();
 		CountDownLatch contextStarted = new CountDownLatch(1);
 		CountDownLatch releaseContext = new CountDownLatch(1);
-		CountDownLatch llmSubscribed = new CountDownLatch(1);
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.defer(() -> {
-			llmSubscribed.countDown();
-			return Flux.never();
-		}));
+		when(llm.streamChat(any())).thenReturn(Flux.never());
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
 		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(any(), anyLong(), eq(room.threadId), eq(room.userId),
 				eq("@AI first"), anyInt())).thenAnswer(invocation -> {
@@ -425,7 +421,9 @@ class ThreadMessageDispatcherTest {
 			releaseContext.countDown();
 		}
 
-		assertThat(llmSubscribed.await(250, TimeUnit.MILLISECONDS)).isFalse();
+		// 취소된 턴은 LLM을 아예 부르지 않는다 — "일정 시간 아무 일도 없었다"를 고정된 250ms로
+		// 관찰하는 대신, Mockito가 실제 호출 여부를 직접 폴링해서 판단하게 한다(이슈 #222).
+		verify(llm, timeout(1000).times(0)).streamChat(any());
 	}
 
 	/**
@@ -440,12 +438,8 @@ class ThreadMessageDispatcherTest {
 		TestRoom room = new TestRoom();
 		CountDownLatch contextStarted = new CountDownLatch(1);
 		CountDownLatch releaseContext = new CountDownLatch(1);
-		CountDownLatch llmSubscribed = new CountDownLatch(1);
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.defer(() -> {
-			llmSubscribed.countDown();
-			return Flux.never();
-		}));
+		when(llm.streamChat(any())).thenReturn(Flux.never());
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
 		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(any(), anyLong(), eq(room.threadId),
 				eq(room.userId), eq("@AI first"), anyInt())).thenAnswer(invocation -> {
@@ -464,7 +458,9 @@ class ThreadMessageDispatcherTest {
 			releaseContext.countDown();
 		}
 
-		assertThat(llmSubscribed.await(250, TimeUnit.MILLISECONDS)).isFalse();
+		// 취소된 턴은 LLM을 아예 부르지 않는다 — "일정 시간 아무 일도 없었다"를 고정된 250ms로
+		// 관찰하는 대신, Mockito가 실제 호출 여부를 직접 폴링해서 판단하게 한다(이슈 #222).
+		verify(llm, timeout(1000).times(0)).streamChat(any());
 	}
 
 	@Test
