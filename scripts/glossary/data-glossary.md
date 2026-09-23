@@ -79,6 +79,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `pyl` | `payload` | 적재 데이터 | 알고리즘 | - |
 | `pnd` | `pending` | 대기 중 | 알고리즘 | - |
 | `qst` | `question` | 질문 | 알고리즘 | - |
+| `rank` | `rank` | 직급 | 알고리즘 | - |
 | `rsn` | `reason` | 사유 | 알고리즘 | - |
 | `ref` | `reference` | 참조 | 예외 | 관용어 — 알고리즘 결과 `rfr`이 의미 불명확 |
 | `rpl` | `reply` | 답글 | 알고리즘 | - |

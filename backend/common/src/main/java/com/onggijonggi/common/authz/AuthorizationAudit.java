@@ -16,7 +16,8 @@ import org.hibernate.type.SqlTypes;
  * Description : authz_adt에 남는 append-only 권한 변경 감사 한 행이다. 대상은 FK가 아니라 trg_kind·trg_ref
  *               snapshot으로 보관한다(대상이 사라져도 기록은 남아야 한다). jsonb 컬럼 네 개는 문자열(JSON 본문)로
  *               다루되 JSON 타입으로 바인딩한다 — 그러지 않으면 PostgreSQL이 varchar를 jsonb에 넣지 못한다.
- *               이 생성자는 bootstrap·reconcile이 남기는 SYSTEM 행위자 기록용이다(USER 행위자는 관리 API 이슈가 추가한다).
+ *               공개 생성자는 bootstrap·reconcile이 남기는 SYSTEM 행위자 기록용이다. 사람의 팀·직급 배정 변경은
+ *               member(...)로 남긴다 — 데모 배정 화면은 USER, CSV 임포트는 SYSTEM 행위자다.
  */
 @Entity
 @Table(name = "authz_adt")
@@ -104,6 +105,21 @@ public class AuthorizationAudit {
 		this.deploymentId = deploymentId;
 		this.configurationFingerprint = configurationFingerprint;
 		this.createdAt = Instant.now();
+	}
+
+	/**
+	 * 사람의 팀·직급 배정(org_unit_mbr) 변경 기록. actorUserId가 null이면 SYSTEM(CSV 임포트), 아니면 그 app_user가 행위자다.
+	 * 배정은 workspace 하나에 묶이지 않아 wrk_node_id는 비운다.
+	 */
+	public static AuthorizationAudit member(UUID tenantId, UUID actorUserId, AuthorizationAuditEventKind eventKind,
+			String targetRefJson, String beforeJson, String afterJson, String requestId) {
+		AuthorizationAudit audit = new AuthorizationAudit(tenantId, eventKind, AuthorizationAuditTargetKind.MEMBER, targetRefJson,
+				null, beforeJson, afterJson, requestId, null, null);
+		if (actorUserId != null) {
+			audit.actorKind = AuthorizationActorKind.USER;
+			audit.actorUserId = actorUserId;
+		}
+		return audit;
 	}
 
 	public UUID getId() { return id; }

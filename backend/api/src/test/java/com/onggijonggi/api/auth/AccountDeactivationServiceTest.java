@@ -6,6 +6,7 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.authz.OrgUnitMemberService;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
@@ -50,12 +51,15 @@ class AccountDeactivationServiceTest {
 	@Mock
 	private ThrInvRepository thrInvRepository;
 
+	@Mock
+	private OrgUnitMemberService orgUnitMemberService;
+
 	private AccountDeactivationService service;
 
 	@BeforeEach
 	void setUp() {
 		service = new AccountDeactivationService(appUserRepository, thrMbrRepository, thrRepository,
-				thrInvRepository);
+				thrInvRepository, orgUnitMemberService);
 	}
 
 	@Test
@@ -74,6 +78,18 @@ class AccountDeactivationServiceTest {
 		assertThat(user.getStatus()).isEqualTo(AppUserStatus.INACTIVE);
 		verify(thrMbrRepository).save(membership);
 		verify(appUserRepository).save(user);
+	}
+
+	/** 배정은 subject로 적혀 FK가 없어 계정 상태를 따라오지 않는다. 배정 서비스를 거쳐 SYSTEM 이력으로 해제한다. */
+	@Test
+	void deactivateUnassignsTheTeamAndRankOfTheAccount() {
+		AppUser user = new AppUser("assigned-sub");
+		when(appUserRepository.findById(user.getId())).thenReturn(Optional.of(user));
+
+		StepVerifier.create(service.deactivate(user.getId())).verifyComplete();
+
+		verify(orgUnitMemberService).apply(OrgUnitMemberService.Change.unassign("assigned-sub"),
+				OrgUnitMemberService.Actor.system("account-deactivation:" + user.getId()));
 	}
 
 	/**

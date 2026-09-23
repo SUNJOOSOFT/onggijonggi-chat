@@ -32,10 +32,12 @@ public class RbacBootstrapConfigReader {
 
 	private static final Set<String> ROOT_KEYS = Set.of("reconcile", "tenants");
 	private static final Set<String> RECONCILE_KEYS = Set.of("enabled", "dpl_id");
-	private static final Set<String> TENANT_KEYS = Set.of("tnn_key", "name", "status", "org_units", "nodes", "grants");
+	private static final Set<String> TENANT_KEYS = Set.of("tnn_key", "name", "status", "org_units", "nodes", "grants",
+			"rank_grants");
 	private static final Set<String> ORG_UNIT_KEYS = Set.of("key", "name", "status");
 	private static final Set<String> NODE_KEYS = Set.of("node_key", "kind", "parent", "name", "status");
 	private static final Set<String> GRANT_KEYS = Set.of("org_unit", "role", "node");
+	private static final Set<String> RANK_GRANT_KEYS = Set.of("org_unit", "rank", "node");
 	private static final int MAX_DEPLOYMENT_ID_LENGTH = 128;
 	/** 설정 파일 크기 상한(1MiB). */
 	private static final long MAX_CONFIG_BYTES = 1024 * 1024;
@@ -43,7 +45,7 @@ public class RbacBootstrapConfigReader {
 	private final String configPath;
 	private final ObjectMapper objectMapper;
 
-	public RbacBootstrapConfigReader(@Value("${app.rbac.bootstrap-config-path:}") String configPath,
+	public RbacBootstrapConfigReader(@Value("${app.rbac.workspace-setup-path:}") String configPath,
 			ObjectMapper objectMapper) {
 		this.configPath = configPath;
 		this.objectMapper = objectMapper;
@@ -133,9 +135,18 @@ public class RbacBootstrapConfigReader {
 					string(scope + ".grants[].role", grant.get("role")),
 					string(scope + ".grants[].node", grant.get("node"))));
 		}
+		List<RbacBootstrapSpec.RankGrantSpec> rankGrants = new ArrayList<>();
+		for (Object value : list(scope + ".rank_grants", source.get("rank_grants"))) {
+			Map<String, Object> grant = map(scope + ".rank_grants[]", value);
+			onlyKnownKeys(scope + " rank_grant", grant, RANK_GRANT_KEYS);
+			rankGrants.add(new RbacBootstrapSpec.RankGrantSpec(
+					grant.get("org_unit") == null ? null : string(scope + ".rank_grants[].org_unit", grant.get("org_unit")),
+					string(scope + ".rank_grants[].rank", grant.get("rank")),
+					string(scope + ".rank_grants[].node", grant.get("node"))));
+		}
 		return new RbacBootstrapSpec.TenantSpec(key, string(scope + ".name", source.get("name")),
 				stringOr(scope + ".status", source.get("status"), "ACTIVE"), List.copyOf(orgUnits),
-				List.copyOf(nodes), List.copyOf(grants));
+				List.copyOf(nodes), List.copyOf(grants), List.copyOf(rankGrants));
 	}
 
 	/** 정규화한 설정의 SHA-256. 키와 목록을 정렬해 공백·주석·순서 차이를 없앤다. */
@@ -189,6 +200,20 @@ public class RbacBootstrapConfigReader {
 					item.put("node", grant.node());
 					return item;
 				}).toList());
+		// 직급 규칙이 없는 설정의 지문은 이 키를 넣기 전과 같게 둔다(이미 배포된 설정의 cnf_fgpt가 바뀌지 않게).
+		if (!tenant.rankGrants().isEmpty()) {
+			value.put("rank_grants", tenant.rankGrants().stream()
+					.sorted(Comparator.comparing((RbacBootstrapSpec.RankGrantSpec grant) -> String.valueOf(grant.orgUnit()))
+							.thenComparing(RbacBootstrapSpec.RankGrantSpec::rank)
+							.thenComparing(RbacBootstrapSpec.RankGrantSpec::node))
+					.map(grant -> {
+						Map<String, Object> item = new TreeMap<>();
+						item.put("org_unit", grant.orgUnit());
+						item.put("rank", grant.rank());
+						item.put("node", grant.node());
+						return item;
+					}).toList());
+		}
 		return value;
 	}
 

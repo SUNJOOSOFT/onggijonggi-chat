@@ -92,6 +92,7 @@
 | `payload` | 적재 데이터 |
 | `pending` | 대기 중 |
 | `question` | 질문 |
+| `rank` | 직급 |
 | `reason` | 사유 |
 | `reply` | 답글 |
 | `requester` | 요청자 |

@@ -2,6 +2,8 @@ plugins {
 	id 'java'
 	id 'org.springframework.boot'
 	id 'io.spring.dependency-management'
+	// 03·CORE — casbin-server(gRPC) 클라이언트를 src/main/proto/casbin.proto에서 생성한다.
+	id 'com.google.protobuf' version '0.10.0'
 }
 
 dependencies {
@@ -29,6 +31,15 @@ dependencies {
 	// 명시해 JPA vs R2DBC 선택을 확정했다. WebFlux(리액티브)+JPA(블로킹) 조합은
 	// PersistingChatStreamService가 boundedElastic 오프로딩으로 다룬다.
 	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+	// 03·CORE — Casbin 판정 서버(casbin-server) gRPC 클라이언트. 공식 Java 클라이언트가 없어 proto에서 생성한다.
+	// grpc-netty-shaded는 Netty를 안에 숨긴 판이다 — WebFlux가 쓰는 Netty(Boot BOM이 4.2로 고정)와 부딪히지 않게 한다.
+	// protobuf-java는 gRPC 1.84가 기준으로 쓰는 3.25.x에 맞춘다(Boot BOM은 protobuf를 관리하지 않는다).
+	implementation platform('io.grpc:grpc-bom:1.84.0')
+	implementation 'io.grpc:grpc-netty-shaded'
+	implementation 'io.grpc:grpc-protobuf'
+	implementation 'io.grpc:grpc-stub'
+	implementation 'com.google.protobuf:protobuf-java:3.25.9'
 
 	testImplementation 'org.springframework.boot:spring-boot-starter-test'
 	testImplementation 'org.springframework.boot:spring-boot-resttestclient'
@@ -77,4 +88,21 @@ tasks.register('verifyThreadDeleteCascade', JavaExec) {
 	mustRunAfter tasks.named('verifyFlywayMigrations')
 	classpath = sourceSets.test.runtimeClasspath
 	mainClass = 'com.onggijonggi.api.migration.ThreadDeleteCascadeVerifier'
+}
+
+protobuf {
+	protoc {
+		artifact = 'com.google.protobuf:protoc:3.25.9'
+	}
+	plugins {
+		grpc {
+			artifact = 'io.grpc:protoc-gen-grpc-java:1.84.0'
+		}
+	}
+	generateProtoTasks {
+		all()*.plugins {
+			// javax.annotation.Generated를 붙이지 않는다 — Java 17에는 그 클래스가 없다.
+			grpc { option '@generated=omit' }
+		}
+	}
 }

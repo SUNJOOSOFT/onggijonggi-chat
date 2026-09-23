@@ -10,6 +10,9 @@ import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
+import com.onggijonggi.common.authz.Rank;
+import com.onggijonggi.common.authz.RankGrant;
+import com.onggijonggi.common.authz.RankGrantRepository;
 import com.onggijonggi.common.authz.WorkspaceGrant;
 import com.onggijonggi.common.authz.WorkspaceGrantRepository;
 import com.onggijonggi.common.authz.WorkspaceNode;
@@ -50,7 +53,7 @@ import tools.jackson.databind.ObjectMapper;
  *                   (새 Tenant는 잠글 행이 없어 `tnn_key` unique가 동시 생성을 막는다).</li>
  *               <li>선언됐는데 없는 리소스만 만든다. 기존 선언 대상의 **권한 구조**(Tenant·org-unit 상태, 노드 kind·부모·상태)가
  *                   다르면 자동으로 덮어쓰지 않고 drift로 판정해 그 Tenant만 fail-closed 표시를 하고
- *                   `TENANT_DRIFT_DETECTED`를 남긴다. 표시명 차이는 경고만 한다. 부여는 drift가 아니다.</li>
+ *                   `TENANT_DRIFT_DETECTED`를 남긴다. 표시명 차이는 경고만 한다. 부여와 직급 규칙(rank_grn)은 drift가 아니다.</li>
  *               <li>reconcile은 설정에 `reconcile.enabled`와 배포 ID가 모두 있고 그 배포 ID가 이 Tenant에 아직 적용되지 않았을
  *                   때만 선언 차이를 적용한다. 노드 규칙(leaf만 reparent 등)에 막히는 변경은 적용하지 않고 drift로 남긴다.</li>
  *               <li>모든 변경은 SYSTEM 행위자로 `authz_adt`에 남기고, 한 실행의 행은 같은 `req_id`로 묶는다.
@@ -72,6 +75,7 @@ public class RbacBootstrapService {
 	private final OrgUnitRepository orgUnitRepository;
 	private final WorkspaceNodeRepository workspaceNodeRepository;
 	private final WorkspaceGrantRepository workspaceGrantRepository;
+	private final RankGrantRepository rankGrantRepository;
 	private final AuthorizationAuditRepository authorizationAuditRepository;
 	private final ThrRepository threadRepository;
 	private final ObjectMapper objectMapper;
@@ -81,7 +85,7 @@ public class RbacBootstrapService {
 	public RbacBootstrapService(RbacBootstrapConfigReader configReader, RbacBootstrapValidator validator,
 			TenantRepository tenantRepository, OrgUnitRepository orgUnitRepository,
 			WorkspaceNodeRepository workspaceNodeRepository, WorkspaceGrantRepository workspaceGrantRepository,
-			AuthorizationAuditRepository authorizationAuditRepository, ThrRepository threadRepository,
+			RankGrantRepository rankGrantRepository, AuthorizationAuditRepository authorizationAuditRepository, ThrRepository threadRepository,
 			ObjectMapper objectMapper, PlatformTransactionManager transactionManager) {
 		this.configReader = configReader;
 		this.validator = validator;
@@ -89,6 +93,7 @@ public class RbacBootstrapService {
 		this.orgUnitRepository = orgUnitRepository;
 		this.workspaceNodeRepository = workspaceNodeRepository;
 		this.workspaceGrantRepository = workspaceGrantRepository;
+		this.rankGrantRepository = rankGrantRepository;
 		this.authorizationAuditRepository = authorizationAuditRepository;
 		this.threadRepository = threadRepository;
 		this.objectMapper = objectMapper;
@@ -198,6 +203,7 @@ public class RbacBootstrapService {
 		for (RbacBootstrapSpec.OrgUnitSpec unit : spec.orgUnits()) createOrgUnit(run, tenant, model, unit);
 		createMissingNodes(run, tenant, spec, model, new ArrayList<>());
 		createMissingGrants(run, tenant, spec, model);
+		createMissingRankGrants(run, tenant, spec, model);
 		return new TenantOutcome(true, false, List.of());
 	}
 
@@ -218,6 +224,7 @@ public class RbacBootstrapService {
 		List<DriftItem> blocked = new ArrayList<>();
 		createMissingNodes(run, tenant, spec, model, blocked);
 		createMissingGrants(run, tenant, spec, model);
+		createMissingRankGrants(run, tenant, spec, model);
 
 		List<DriftItem> drift = new ArrayList<>(drift(tenant, spec, model));
 		drift.addAll(blocked);
@@ -234,6 +241,10 @@ public class RbacBootstrapService {
 		for (OrgUnit unit : orgUnitRepository.findByTenantId(tenant.getId())) model.unitsByKey.put(unit.getKey(), unit);
 		for (WorkspaceNode node : workspaceNodeRepository.findByTenantId(tenant.getId())) model.putNode(node);
 		for (WorkspaceGrant grant : workspaceGrantRepository.findByTenantId(tenant.getId())) {
+			model.grantedNodeIds.add(grant.getWorkspaceNodeId());
+		}
+		// 직급 규칙이 걸린 노드도 팀 부여가 걸린 노드처럼 reconcile이 옮기지 않는다.
+		for (RankGrant grant : rankGrantRepository.findByTenantId(tenant.getId())) {
 			model.grantedNodeIds.add(grant.getWorkspaceNodeId());
 		}
 		return model;
@@ -314,6 +325,27 @@ public class RbacBootstrapService {
 					new WorkspaceGrant(tenant.getId(), unit.getId(), node.getId(), role));
 			audit(run, tenant, AuthorizationAuditEventKind.POLICY_ADDED, AuthorizationAuditTargetKind.POLICY,
 					policyRef(grant, unit, node), node.getId(), null, grantSnapshot(grant));
+		}
+	}
+
+	/** 팀 부여와 같은 규칙이다: 빠진 직급 규칙은 만들고, 설정에서 뺀 규칙은 그대로 둔다(drift가 아니다). */
+	private void createMissingRankGrants(Run run, Tenant tenant, RbacBootstrapSpec.TenantSpec spec, Model model) {
+		Set<String> existing = new HashSet<>();
+		for (RankGrant grant : rankGrantRepository.findByTenantId(tenant.getId())) {
+			existing.add(rankGrantKey(grant.getOrgUnitId(), grant.getRank(), grant.getWorkspaceNodeId()));
+		}
+		for (RbacBootstrapSpec.RankGrantSpec declared : spec.rankGrants()) {
+			OrgUnit unit = declared.orgUnit() == null ? null : model.unitsByKey.get(declared.orgUnit());
+			WorkspaceNode node = model.nodesByKey.get(declared.node());
+			// 대상이 DB에서 비활성이면 규칙을 만들 수 없다. 그 차이는 drift(상태)로 이미 드러난다.
+			if (node == null || node.getStatus() != WorkspaceNodeStatus.ACTIVE) continue;
+			if (declared.orgUnit() != null && (unit == null || unit.getStatus() != OrgUnitStatus.ACTIVE)) continue;
+			Rank rank = Rank.valueOf(declared.rank());
+			UUID unitId = unit == null ? null : unit.getId();
+			if (!existing.add(rankGrantKey(unitId, rank, node.getId()))) continue;
+			RankGrant grant = rankGrantRepository.saveAndFlush(new RankGrant(tenant.getId(), node.getId(), unitId, rank));
+			audit(run, tenant, AuthorizationAuditEventKind.POLICY_ADDED, AuthorizationAuditTargetKind.POLICY,
+					rankPolicyRef(grant, unit), node.getId(), null, rankGrantSnapshot(grant));
 		}
 	}
 
@@ -579,6 +611,15 @@ public class RbacBootstrapService {
 		return ref;
 	}
 
+	private Map<String, Object> rankPolicyRef(RankGrant grant, OrgUnit unit) {
+		Map<String, Object> ref = new LinkedHashMap<>();
+		ref.put("rank_grn_id", grant.getId());
+		ref.put("org_unit_key", unit == null ? null : unit.getKey());
+		ref.put("rank", grant.getRank().name());
+		ref.put("wrk_node_id", grant.getWorkspaceNodeId());
+		return ref;
+	}
+
 	private Map<String, Object> tenantSnapshot(Tenant tenant) {
 		Map<String, Object> snapshot = new LinkedHashMap<>();
 		snapshot.put("id", tenant.getId());
@@ -622,10 +663,24 @@ public class RbacBootstrapService {
 		return snapshot;
 	}
 
+	private Map<String, Object> rankGrantSnapshot(RankGrant grant) {
+		Map<String, Object> snapshot = new LinkedHashMap<>();
+		snapshot.put("id", grant.getId());
+		snapshot.put("tnn_id", grant.getTenantId());
+		snapshot.put("org_unit_id", grant.getOrgUnitId());
+		snapshot.put("rank", grant.getRank().name());
+		snapshot.put("wrk_node_id", grant.getWorkspaceNodeId());
+		return snapshot;
+	}
+
 	// ---------------------------------------------------------------- 변환
 
 	private String grantKey(UUID orgUnitId, WorkspaceRole role, UUID nodeId) {
 		return orgUnitId + "|" + role + "|" + nodeId;
+	}
+
+	private String rankGrantKey(UUID orgUnitId, Rank rank, UUID nodeId) {
+		return orgUnitId + "|" + rank + "|" + nodeId;
 	}
 
 	private TenantStatus tenantStatus(String value) { return TenantStatus.valueOf(value); }

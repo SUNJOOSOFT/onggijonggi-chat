@@ -463,10 +463,12 @@ class RbacSchemaPostgresTest {
 			for (String event : new String[] {"TENANT_CREATED", "TENANT_RENAMED", "TENANT_DEACTIVATED", "TENANT_REACTIVATED",
 					"ORG_UNIT_CREATED", "ORG_UNIT_RENAMED", "ORG_UNIT_DEACTIVATED", "ORG_UNIT_REACTIVATED", "NODE_CREATED",
 					"NODE_RENAMED", "NODE_REPARENTED", "NODE_DEACTIVATED", "NODE_REACTIVATED", "POLICY_ADDED", "POLICY_REMOVED",
-					"POLICY_REPLACED", "THREAD_MOVED", "OWNER_TRANSFERRED", "TENANT_DRIFT_DETECTED"}) {
+					"POLICY_REPLACED", "THREAD_MOVED", "OWNER_TRANSFERRED", "TENANT_DRIFT_DETECTED",
+					"MEMBER_ASSIGNED", "MEMBER_CHANGED", "MEMBER_UNASSIGNED"}) {
 				audit(c, tenant, event, "TENANT");
 			}
-			assertThat(query(c, "select count(*) from authz_adt where tnn_id = ?", tenant)).isEqualTo(19L);
+			audit(c, tenant, "MEMBER_ASSIGNED", "MEMBER");
+			assertThat(query(c, "select count(*) from authz_adt where tnn_id = ?", tenant)).isEqualTo(23L);
 		}
 	}
 
@@ -554,6 +556,105 @@ class RbacSchemaPostgresTest {
 		}
 	}
 
+	// ------------------------------------------------------------------ Casbin 배정·직급 규칙
+	// org_unit_mbr은 사람의 팀·직급, rank_grn은 직급 서열 규칙이다. 겸직이 없어 subject당 배정은 한 행이다.
+
+	@Test
+	void orgUnitMembersRequireAnActiveOrgUnitAndOneRowPerSubject() throws SQLException {
+		try (Connection c = connect()) {
+			UUID tenant = tenant(c, "members");
+			UUID other = tenant(c, "members-other");
+			UUID hr = orgUnit(c, tenant, "hr");
+			UUID fin = orgUnit(c, tenant, "fin");
+			UUID idle = orgUnit(c, tenant, "idle");
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", idle);
+			UUID foreignUnit = orgUnit(c, other, "foreign");
+
+			UUID member = member(c, tenant, hr, "sub-kim", "TL");
+			assertRejected("23505", "uq_org_unit_mbr_subj", () -> member(c, tenant, fin, "sub-kim", "K"));
+			assertRejected("23514", "org_unit_mbr_rank_value", () -> member(c, tenant, hr, "sub-lee", "X"));
+			assertRejected("P0001", "active organization unit", () -> member(c, tenant, idle, "sub-lee", "K"));
+			assertRejected("P0001", "active organization unit", () -> member(c, tenant, foreignUnit, "sub-lee", "K"));
+
+			// 인사이동은 그 행의 UPDATE다. 비활성 org-unit으로는 옮길 수 없다.
+			execute(c, "update org_unit_mbr set org_unit_id = ?, rank = 'B' where id = ?", fin, member);
+			assertThat(query(c, "select updated_at > created_at from org_unit_mbr where id = ?", member)).isEqualTo(true);
+			assertRejected("P0001", "active organization unit",
+					() -> execute(c, "update org_unit_mbr set org_unit_id = ? where id = ?", idle, member));
+
+			// 팀이 꺼져도 직급만 바꾸는 UPDATE는 된다(배정을 정리하기 전에도 직급 기록은 고칠 수 있어야 한다).
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", fin);
+			execute(c, "update org_unit_mbr set rank = 'C' where id = ?", member);
+			assertThat(query(c, "select rank from org_unit_mbr where id = ?", member)).isEqualTo("C");
+		}
+	}
+
+	@Test
+	void rankGrantsRequireActiveNonRootNodesAndAllowOnlyRankChanges() throws SQLException {
+		try (Connection c = connect()) {
+			UUID tenant = tenant(c, "ranks");
+			UUID root = root(c, tenant);
+			UUID exec = node(c, tenant, root, "exec", "ORG", "Exec");
+			UUID other = node(c, tenant, root, "other", "ORG", "Other");
+			UUID retired = node(c, tenant, root, "retired", "ORG", "Retired");
+			deactivate(c, retired);
+
+			UUID rule = rankGrant(c, tenant, exec, "K");
+			rankGrant(c, tenant, exec, "B");
+			assertRejected("23505", "uq_rank_grn_policy", () -> rankGrant(c, tenant, exec, "K"));
+			assertRejected("23514", "rank_grn_rank_value", () -> rankGrant(c, tenant, exec, "X"));
+			assertRejected("P0001", "active non-ROOT node", () -> rankGrant(c, tenant, root, "K"));
+			assertRejected("P0001", "active non-ROOT node", () -> rankGrant(c, tenant, retired, "K"));
+
+			execute(c, "update rank_grn set rank = 'C' where id = ?", rule);
+			assertThat(query(c, "select updated_at > created_at from rank_grn where id = ?", rule)).isEqualTo(true);
+			assertRejected("P0001", "only the rank of a rank grant can change",
+					() -> execute(c, "update rank_grn set wrk_node_id = ? where id = ?", other, rule));
+		}
+	}
+
+	@Test
+	void aRankGrantMayNameATeamWhichMustBeActiveAndFixed() throws SQLException {
+		try (Connection c = connect()) {
+			UUID tenant = tenant(c, "rank-teams");
+			UUID root = root(c, tenant);
+			UUID lead = node(c, tenant, root, "lead", "ORG", "Lead");
+			UUID hr = orgUnit(c, tenant, "hr");
+			UUID fin = orgUnit(c, tenant, "fin");
+			UUID idle = orgUnit(c, tenant, "idle");
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", idle);
+
+			UUID teamRule = teamRankGrant(c, tenant, lead, hr, "K");
+			teamRankGrant(c, tenant, lead, fin, "K");
+			rankGrant(c, tenant, lead, "K");
+			// 팀이 없는 규칙끼리도, 같은 팀 규칙끼리도 중복을 막는다(null을 같은 값으로 본다).
+			assertRejected("23505", "uq_rank_grn_policy", () -> rankGrant(c, tenant, lead, "K"));
+			assertRejected("23505", "uq_rank_grn_policy", () -> teamRankGrant(c, tenant, lead, hr, "K"));
+			assertRejected("P0001", "active organization unit", () -> teamRankGrant(c, tenant, lead, idle, "K"));
+			assertRejected("P0001", "only the rank of a rank grant can change",
+					() -> execute(c, "update rank_grn set org_unit_id = ? where id = ?", fin, teamRule));
+			// 팀이 꺼져도 규칙 행은 남고 직급은 고칠 수 있다.
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", hr);
+			execute(c, "update rank_grn set rank = 'B' where id = ?", teamRule);
+			assertThat(query(c, "select rank from rank_grn where id = ?", teamRule)).isEqualTo("B");
+		}
+	}
+
+	@Test
+	void assignmentGuardsAreNotBypassedByReplicationRole() throws SQLException {
+		try (Connection c = connect()) {
+			UUID tenant = tenant(c, "assign-bypass");
+			UUID root = root(c, tenant);
+			UUID idle = orgUnit(c, tenant, "idle");
+			execute(c, "update org_unit set status = 'INACTIVE', inactive_at = now() where id = ?", idle);
+
+			execute(c, "set session_replication_role = replica");
+			assertRejected("P0001", "active organization unit", () -> member(c, tenant, idle, "sub-bypass", "S"));
+			assertRejected("P0001", "active non-ROOT node", () -> rankGrant(c, tenant, root, "S"));
+			execute(c, "set session_replication_role = origin");
+		}
+	}
+
 	// ------------------------------------------------------------------ 헬퍼
 
 	private Connection connect() throws SQLException {
@@ -597,6 +698,24 @@ class RbacSchemaPostgresTest {
 	private UUID grant(Connection c, UUID tenant, UUID unit, UUID node, String role) throws SQLException {
 		UUID id = UUID.randomUUID();
 		execute(c, "insert into wrk_grn (id, tnn_id, org_unit_id, wrk_node_id, role) values (?, ?, ?, ?, ?)", id, tenant, unit, node, role);
+		return id;
+	}
+
+	private UUID member(Connection c, UUID tenant, UUID unit, String subject, String rank) throws SQLException {
+		UUID id = UUID.randomUUID();
+		execute(c, "insert into org_unit_mbr (id, tnn_id, org_unit_id, subj, rank) values (?, ?, ?, ?, ?)", id, tenant, unit, subject, rank);
+		return id;
+	}
+
+	private UUID rankGrant(Connection c, UUID tenant, UUID node, String rank) throws SQLException {
+		UUID id = UUID.randomUUID();
+		execute(c, "insert into rank_grn (id, tnn_id, wrk_node_id, rank) values (?, ?, ?, ?)", id, tenant, node, rank);
+		return id;
+	}
+
+	private UUID teamRankGrant(Connection c, UUID tenant, UUID node, UUID unit, String rank) throws SQLException {
+		UUID id = UUID.randomUUID();
+		execute(c, "insert into rank_grn (id, tnn_id, wrk_node_id, org_unit_id, rank) values (?, ?, ?, ?, ?)", id, tenant, node, unit, rank);
 		return id;
 	}
 

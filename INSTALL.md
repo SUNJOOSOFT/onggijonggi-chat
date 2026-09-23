@@ -1,6 +1,6 @@
 # 설치 — 내 PC에서 띄워보기
 
-`docker compose` 한 번으로 5개 컨테이너(프론트·BFF·게이트웨이·인증·DB)가 뜬다. **모델은 포함돼 있지 않다** — OpenAI 호환 엔드포인트 하나를 각자 연결한다(2단계).
+`docker compose` 한 번으로 9개 컨테이너(프론트·BFF·게이트웨이·인증·DB·문서 워커·파일 저장소 3개)가 뜬다. **모델은 포함돼 있지 않다** — OpenAI 호환 엔드포인트 하나를 각자 연결한다(2단계).
 
 작업 시간은 10분 남짓, 여기에 첫 이미지 빌드 5~15분이 더해진다.
 
@@ -129,7 +129,7 @@ docker compose up -d --build
 docker compose ps
 ```
 
-**✅ 성공**: 5개 서비스가 모두 `healthy`가 된다. `nextjs`는 `bff` → `keycloak` → `postgres` 순으로 기다렸다 뜨므로 가장 늦다.
+**✅ 성공**: 9개 서비스가 모두 `healthy`가 된다. `nextjs`는 `bff` → `keycloak` → `postgres` 순으로 기다렸다 뜨므로 가장 늦다.
 
 > 메모리가 모자라 빌드가 죽는다면(`Fail extracting tarball` 등) 나눠서 돌린다:
 > `docker compose build bff` → `docker compose build nextjs` → `docker compose up -d`
@@ -206,6 +206,38 @@ docker compose up -d --build
 ```
 
 > ⚠️ **로그인 계정과 대화 내용이 함께 지워진다.** `.env`의 `APP_USER`로 만들어지는 기본 계정은 자동으로 다시 생긴다.
+
+---
+
+## 권한 기능 켜기
+
+팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 개발·데모용이라 지금은 로그인한 누구나 팀·직급을 바꿀 수 있다.
+
+**1. `infra/.env`에 두 줄을 넣고 다시 띄운다.**
+
+```bash
+SPRING_PROFILE=prod,casbin
+COMPOSE_PROFILES=casbin
+```
+
+```bash
+docker compose up -d --build
+```
+
+**✅ 성공**: `docker compose ps`에 `casbin`이 보이고, BFF 로그에 `Casbin 규칙 적재`가 찍힌다. 조직 구조(팀·워크스페이스·규칙)는 `infra/config/workspace-setup.yml`에서 BFF가 뜰 때 읽는다.
+
+**2. 시험 계정과 배정을 넣는다.** 저장소 루트에서:
+
+```bash
+node scripts/casbin-demo-accounts.mjs
+node scripts/import-members.mjs infra/config/demo-members.csv --apply
+```
+
+첫 줄은 `demo1`~`demo7` 계정(비밀번호는 계정 이름과 같다)을 Keycloak에 만들고, 둘째 줄은 `demo1`~`demo6`의 팀·직급을 넣는다. `demo7`은 배정하지 않은 사람을 확인하는 계정이다. 임포트는 `--apply`를 빼면 미리보기만 한다.
+
+**3. 화면에서 확인한다.** 로그인하면 사이드바에 **권한 관리**가 생긴다(<http://localhost:3010/admin/permissions>). 사람마다 팀·직급을 바꾸면 "누가 무엇을 보나" 표가 실제 판정 결과로 바뀐다.
+
+끄려면 두 줄을 지우고 `docker compose --profile casbin down` 뒤 다시 띄운다. 넣어둔 팀·직급은 DB에 남는다.
 
 ---
 

@@ -13,6 +13,7 @@ import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
+import com.onggijonggi.common.authz.RankGrantRepository;
 import com.onggijonggi.common.authz.WorkspaceGrantRepository;
 import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.authz.WorkspaceNodeKind;
@@ -54,6 +55,8 @@ class RbacBootstrapPostgresTest extends PostgresSpringTestBase {
 	private WorkspaceNodeRepository nodes;
 	@Autowired
 	private WorkspaceGrantRepository grants;
+	@Autowired
+	private RankGrantRepository rankGrants;
 	@Autowired
 	private AuthorizationAuditRepository audits;
 	@Autowired
@@ -220,6 +223,39 @@ class RbacBootstrapPostgresTest extends PostgresSpringTestBase {
 
 		assertThat(result.driftTenants()).isEmpty();
 		assertThat(grants.findByTenantId(tenant.getId())).hasSize(5);
+	}
+
+	// ------------------------------------------------------------------ 직급 규칙(rank_grants)
+
+	@Test
+	void rankGrantsAreCreatedOnceWithAnAuditRowAndARankOnlyTopNodeNeedsNoAdmin() throws Exception {
+		String extraNodes = "      - { node_key: sales-lead, kind: WORK, parent: sales-hq, name: Sales Lead, status: ACTIVE }\n"
+				+ "      - { node_key: company, kind: ORG, parent: root, name: Company, status: ACTIVE }\n"
+				+ "      - { node_key: leaders, kind: WORK, parent: company, name: Leaders, status: ACTIVE }\n";
+		String yaml = new Cfg(key).yaml().replace("    grants:\n", extraNodes + "    grants:\n")
+				+ "    rank_grants:\n"
+				+ "      - { org_unit: sales, rank: K, node: sales-lead }\n"
+				+ "      - { rank: TL, node: leaders }\n";
+
+		RbacBootstrapResult first = runRaw(yaml);
+		assertThat(first.failures()).isEmpty();
+		assertThat(first.driftTenants()).isEmpty();
+		Tenant tenant = tenants.findByKey(key).orElseThrow();
+		UUID sales = orgUnits.findByTenantIdAndKey(tenant.getId(), "sales").orElseThrow().getId();
+		assertThat(rankGrants.findByTenantId(tenant.getId()))
+				.extracting(grant -> grant.getOrgUnitId(), grant -> grant.getRank().name(), grant -> grant.getWorkspaceNodeId())
+				.containsExactlyInAnyOrder(
+						org.assertj.core.groups.Tuple.tuple(sales, "K", node(tenant, "sales-lead").getId()),
+						org.assertj.core.groups.Tuple.tuple(null, "TL", node(tenant, "leaders").getId()));
+		List<AuthorizationAudit> rankAudits = audits.findByTenantIdOrderByCreatedAtAscIdAsc(tenant.getId()).stream()
+				.filter(row -> row.getEventKind() == AuthorizationAuditEventKind.POLICY_ADDED
+						&& json(row.getTargetRef()).has("rank_grn_id"))
+				.toList();
+		assertThat(rankAudits).hasSize(2);
+
+		// 같은 설정을 다시 돌려도 규칙과 감사 행이 늘지 않는다.
+		runRaw(yaml);
+		assertThat(rankGrants.findByTenantId(tenant.getId())).hasSize(2);
 	}
 
 	// ------------------------------------------------------------------ reconcile (DB-TST-048·060)

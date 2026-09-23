@@ -66,6 +66,10 @@ export const collabThreadMessagesPath = (
   return afterSeq === undefined ? base : `${base}?afterSeq=${afterSeq}`;
 };
 
+/** 권한 관리 화면(/admin/permissions) API. bff의 casbin 프로필에서만 있고, 꺼져 있으면 404다. */
+export const PERMISSIONS_ADMIN_PATH = '/api/authz/admin';
+export const MEMBERS_IMPORT_PATH = '/api/authz/members/import';
+
 /** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3).
  * 경로에 방이 없다 — 커넥션 하나가 여러 방을 나르고, 방은 room.subscribe 프레임으로 건다(이슈 #161). */
 export const WS_PATH = '/api/ws';

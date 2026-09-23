@@ -133,6 +133,54 @@ public class KeycloakAdminClient {
 	}
 
 	/**
+	 * 이메일이 정확히 같은 계정의 subject 목록(팀·직급 CSV 임포트). search()는 부분 일치라 쓸 수 없다.
+	 * 보통 하나다. 비어 있으면 없는 계정, 둘 이상이면 realm이 이메일 중복을 허용한 것이라 호출부가 오류로 본다.
+	 * 오류는 search()처럼 전파한다 — 장애를 "없는 계정"으로 보면 임포트가 멀쩡한 사람을 잘못된 행으로 알린다.
+	 */
+	public Mono<List<String>> subjectsByEmail(String email) {
+		return adminToken()
+				.flatMapMany(token -> webClient.get()
+						.uri(builder -> builder.path("/admin/realms/{realm}/users")
+								.queryParam("email", email)
+								.queryParam("exact", true)
+								.queryParam("briefRepresentation", true)
+								.build(realm))
+						.headers(headers -> headers.setBearerAuth(token))
+						.retrieve()
+						.bodyToFlux(SearchedUser.class))
+				.map(SearchedUser::id)
+				.collectList();
+	}
+
+	/**
+	 * realm의 사람 계정 목록(권한 관리 화면). 서비스 계정(service-account-*)은 사람이 아니라 뺀다.
+	 * 이름은 한국식으로 성+이름을 붙이고, 둘 다 없으면 username을 쓴다. 오류는 전파한다.
+	 *
+	 * @param max 최대 결과 수. 상한은 호출부가 정한다
+	 */
+	public Mono<List<KeycloakPerson>> listPeople(int max) {
+		return adminToken()
+				.flatMapMany(token -> webClient.get()
+						.uri(builder -> builder.path("/admin/realms/{realm}/users")
+								.queryParam("first", 0)
+								.queryParam("max", max)
+								.queryParam("briefRepresentation", false)
+								.build(realm))
+						.headers(headers -> headers.setBearerAuth(token))
+						.retrieve()
+						.bodyToFlux(PersonRepresentation.class))
+				.filter(user -> user.username() != null && !user.username().startsWith("service-account-"))
+				.map(user -> new KeycloakPerson(user.id(), user.username(), personName(user), user.email(),
+						!Boolean.FALSE.equals(user.enabled())))
+				.collectList();
+	}
+
+	private static String personName(PersonRepresentation user) {
+		String name = (user.lastName() == null ? "" : user.lastName()) + (user.firstName() == null ? "" : user.firstName());
+		return name.isBlank() ? user.username() : name;
+	}
+
+	/**
 	 * 이름·이메일·username으로 계정을 찾는다(이슈 #172의 초대 대상 검색).
 	 *
 	 * 초대창이 subject(UUID)를 손으로 받던 것을 대체한다 — 사람이 그 값을 알 방법이 앱 안에
@@ -250,6 +298,10 @@ public class KeycloakAdminClient {
 	}
 
 	/** 검색 응답 항목. briefRepresentation이라 id·username 외에는 오지 않는다. */
+	private record PersonRepresentation(String id, String username, String firstName, String lastName, String email,
+			Boolean enabled) {
+	}
+
 	private record SearchedUser(String id, String username) {
 	}
 
