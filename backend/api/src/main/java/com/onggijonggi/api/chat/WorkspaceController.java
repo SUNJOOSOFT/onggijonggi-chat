@@ -21,7 +21,7 @@ public class WorkspaceController {
 		this.threadWorkspaceService = threadWorkspaceService;
 	}
 
-	/** 내가 볼 수 있고 방을 둘 수 있는 워크스페이스를 트리 순서로. ROOT는 빠진다. */
+	/** 내가 볼 수 있는 워크스페이스를 트리 순서로. 맨 위는 ROOT(이름은 고객사 이름)이고, ROOT에는 방을 둘 수 없다. */
 	@GetMapping("/api/workspaces")
 	public Flux<ThreadWorkspaceService.WorkspaceView> listWorkspaces() {
 		return currentActorProvider.currentActor()

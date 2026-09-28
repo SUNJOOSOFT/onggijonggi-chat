@@ -51,7 +51,7 @@ class ThreadWorkspaceServiceTest {
 	@BeforeEach
 	void setUp() {
 		rbac.setEnforce(true);
-		tenant = new Tenant("ogjg", "옹기종기", TenantStatus.ACTIVE);
+		tenant = new Tenant("ogjg", "ACME", TenantStatus.ACTIVE);
 		root = WorkspaceNode.root(tenant.getId(), "Root");
 		common = WorkspaceNode.common(tenant.getId(), root.getId(), root.getPath(), "공용");
 		hr = WorkspaceNode.child(tenant.getId(), root.getId(), root.getPath(), "hr", WorkspaceNodeKind.ORG, "인사팀",
@@ -121,27 +121,53 @@ class ThreadWorkspaceServiceTest {
 
 	// ------------------------------------------------------------------ 목록
 
+	/** 맨 위는 ROOT이고 이름은 "Root"가 아니라 Tenant 이름(고객사 이름)이다. 그 아래는 트리 순서, common 먼저. */
 	@Test
-	void visibleWorkspacesAreInTreeOrderWithCommonFirstAndNoRoot() {
+	void visibleWorkspacesStartWithTheTenantNamedRootThenTreeOrderWithCommonFirst() {
 		when(nodes.findAll()).thenReturn(List.of(hrLead, root, hr, common));
-		visible(root, common, hr, hrLead);
+		when(tenants.findAllById(List.of(tenant.getId()))).thenReturn(List.of(tenant));
+		visible(common, hr, hrLead);
 
 		List<ThreadWorkspaceService.WorkspaceView> views = service.visibleWorkspaces(SUBJECT).block();
 
 		assertThat(views).extracting(ThreadWorkspaceService.WorkspaceView::id)
-				.containsExactly(common.getId(), hr.getId(), hrLead.getId());
-		assertThat(views.get(1).parentId()).isNull();
-		assertThat(views.get(2).parentId()).isEqualTo(hr.getId());
-		assertThat(views.get(2).depth()).isEqualTo(2);
+				.containsExactly(root.getId(), common.getId(), hr.getId(), hrLead.getId());
+		assertThat(views.get(0)).isEqualTo(new ThreadWorkspaceService.WorkspaceView(root.getId(), null, "ACME",
+				WorkspaceNodeKind.ROOT, 0));
+		assertThat(views.get(2).parentId()).isEqualTo(root.getId());
+		assertThat(views.get(3).parentId()).isEqualTo(hr.getId());
+		assertThat(views.get(3).depth()).isEqualTo(2);
 	}
 
 	@Test
 	void visibleWorkspacesLeaveOutWhatTheSubjectCannotSee() {
 		when(nodes.findAll()).thenReturn(List.of(root, common, hr, hrLead));
+		when(tenants.findAllById(List.of(tenant.getId()))).thenReturn(List.of(tenant));
 		visible(common, hr);
 
 		assertThat(service.visibleWorkspaces(SUBJECT).block()).extracting(ThreadWorkspaceService.WorkspaceView::id)
-				.containsExactly(common.getId(), hr.getId());
+				.containsExactly(root.getId(), common.getId(), hr.getId());
+	}
+
+	/** 부모를 볼 수 없는 노드는 볼 수 있는 가장 가까운 조상(여기선 ROOT) 아래로 온다. 못 보는 부모는 목록에 없다. */
+	@Test
+	void nodeWhoseParentIsHiddenHangsUnderTheNearestVisibleAncestor() {
+		when(nodes.findAll()).thenReturn(List.of(root, common, hr, hrLead));
+		when(tenants.findAllById(List.of(tenant.getId()))).thenReturn(List.of(tenant));
+		visible(hrLead);
+
+		List<ThreadWorkspaceService.WorkspaceView> views = service.visibleWorkspaces(SUBJECT).block();
+
+		assertThat(views).extracting(ThreadWorkspaceService.WorkspaceView::id).containsExactly(root.getId(), hrLead.getId());
+		assertThat(views.get(1).parentId()).isEqualTo(root.getId());
+	}
+
+	/** 아무것도 못 보면 ROOT도 없다 — 볼 게 없는 Tenant의 이름을 알릴 이유가 없다. */
+	@Test
+	void noRootWhenNothingIsVisible() {
+		when(nodes.findAll()).thenReturn(List.of(root, common, hr));
+
+		assertThat(service.visibleWorkspaces(SUBJECT).block()).isEmpty();
 	}
 
 	@Test

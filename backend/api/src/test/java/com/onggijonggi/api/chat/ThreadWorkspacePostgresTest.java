@@ -241,14 +241,15 @@ class ThreadWorkspacePostgresTest extends PostgresSpringTestBase {
 	// ------------------------------------------------------------------ 워크스페이스 목록·옮기기
 
 	@Test
-	void workspaceListHasOnlyVisibleNodesAndNeverTheRoot() {
-		String viewer = see("tree", common, hr, root);
+	void workspaceListHasOnlyVisibleNodesUnderTheRootNamedAfterTheTenant() {
+		String viewer = see("tree", common, hr);
 
 		String body = get(viewer, "/api/workspaces").expectStatus().isOk()
 				.expectBody(String.class).returnResult().getResponseBody();
 
 		assertThat(body).contains(common.getId().toString()).contains(hr.getId().toString())
-				.doesNotContain(hrLead.getId().toString()).doesNotContain(root.getId().toString());
+				.doesNotContain(hrLead.getId().toString())
+				.contains("{\"id\":\"" + root.getId() + "\",\"parentId\":null,\"name\":\"워크스페이스 시험\",\"kind\":\"ROOT\"");
 	}
 
 	/** 다른 Tenant에 이미 정해진 방은 건드리지 않는다. 테스트끼리 DB를 나눠 쓰므로 Tenant 수와 무관한 저장소 쿼리를 직접 본다. */

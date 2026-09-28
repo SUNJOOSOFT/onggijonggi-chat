@@ -93,6 +93,26 @@ describe('buildWorkspaceTree', () => {
 });
 
 describe('WorkspaceTree', () => {
+  it('맨 위 고객사(ROOT) 아래로 트리를 펼치고, ROOT에는 "새 방"을 달지 않는다', () => {
+    const acme: Workspace = {
+      id: 'root',
+      parentId: null,
+      name: 'ACME',
+      kind: 'ROOT',
+      depth: 0,
+    };
+    const { roots } = buildWorkspaceTree(
+      [acme, { ...common, parentId: 'root' }, { ...hr, parentId: 'root' }],
+      [],
+    );
+    render(<WorkspaceTree onCreate={vi.fn()} roots={roots} />);
+
+    expect(roots.map((node) => node.workspace.id)).toEqual(['root']);
+    expect(screen.getByRole('button', { name: 'ACME' })).toBeTruthy();
+    // 새 방은 Common·인사팀 두 폴더에만 있다.
+    expect(screen.getAllByRole('button', { name: '새 방' })).toHaveLength(2);
+  });
+
   it('폴더를 접으면 그 아래 방과 하위 폴더가 사라진다', () => {
     const { roots } = buildWorkspaceTree(
       [hr, hrLead],

@@ -5,12 +5,15 @@
  설 명 : 협업 채널을 워크스페이스 트리로 보여준다. 폴더(워크스페이스) 아래에 그 방들이 바로 붙고, 폴더마다
  맨 아래 "새 방"으로 그 워크스페이스에 방을 만든다. 폴더는 접고 펼 수 있다(처음엔 모두 펼침).
 
+ 맨 위는 ROOT로, 이름은 고객사(Tenant) 이름이다. 방을 두는 곳이 아니라서 "새 방"을 달지 않는다.
  트리는 서버가 준 "볼 수 있는 워크스페이스"만으로 짠다. 부모를 볼 수 없는 워크스페이스(예: 전사는 못 보고
- 전사 공지방만 보는 사람)는 최상위로 올린다 — 볼 수 없는 부모를 이름만이라도 그리면 그 존재를 흘린다.
+ 전사 공지방만 보는 사람)는 서버가 볼 수 있는 가장 가까운 조상(보통 ROOT)을 부모로 준다 — 볼 수 없는 부모를
+ 이름만이라도 그리면 그 존재를 흘린다. 서버가 준 부모가 목록에 없으면 최상위로 올린다.
  순서는 서버가 준 순서(common 먼저, 부모 다음 자식, 같은 부모 아래는 이름순)를 그대로 따른다.
  *********************************************************/
 
 import {
+  Building2,
   ChevronDown,
   ChevronRight,
   Folder,
@@ -88,6 +91,10 @@ export function WorkspaceTree({ roots, onCreate }: WorkspaceTreeProps) {
   let index = 0;
   const assignColors = (list: WorkspaceTreeNode[]) => {
     for (const node of list) {
+      if (node.workspace.kind === 'ROOT') {
+        assignColors(node.children);
+        continue;
+      }
       colorOf.set(
         node.workspace.id,
         FOLDER_COLORS[index++ % FOLDER_COLORS.length],
@@ -109,6 +116,7 @@ export function WorkspaceTree({ roots, onCreate }: WorkspaceTreeProps) {
   function renderNode(node: WorkspaceTreeNode) {
     const id = node.workspace.id;
     const open = !collapsed.has(id);
+    const isRoot = node.workspace.kind === 'ROOT';
     return (
       <li key={id}>
         <button
@@ -122,7 +130,11 @@ export function WorkspaceTree({ roots, onCreate }: WorkspaceTreeProps) {
           ) : (
             <ChevronRight className="size-4 shrink-0 text-muted-foreground" />
           )}
-          <Folder className={`size-4 shrink-0 ${colorOf.get(id)}`} />
+          {isRoot ? (
+            <Building2 className="size-4 shrink-0 text-muted-foreground" />
+          ) : (
+            <Folder className={`size-4 shrink-0 ${colorOf.get(id)}`} />
+          )}
           <span>{node.workspace.name}</span>
         </button>
         {open && (
@@ -139,12 +151,14 @@ export function WorkspaceTree({ roots, onCreate }: WorkspaceTreeProps) {
                 </Link>
               </li>
             ))}
-            <li>
-              <NewThreadRow
-                onCreate={(title, key) => onCreate(title, id, key)}
-                workspaceName={node.workspace.name}
-              />
-            </li>
+            {!isRoot && (
+              <li>
+                <NewThreadRow
+                  onCreate={(title, key) => onCreate(title, id, key)}
+                  workspaceName={node.workspace.name}
+                />
+              </li>
+            )}
             {node.children.map(renderNode)}
           </ul>
         )}

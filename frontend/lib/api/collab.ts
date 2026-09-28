@@ -33,13 +33,14 @@ export interface CollabThreadSummary {
 
 /**
  * GET /api/workspaces 항목. 서버가 내가 볼 수 있는 것만 트리 순서(common 먼저, 부모 다음 자식)로 준다.
- * parentId가 null이면 최상위, depth는 들여쓰기용이다.
+ * 맨 앞은 ROOT이고 이름은 고객사(Tenant) 이름이다 — 방을 둘 수 없다. parentId는 목록 안에서 가장 가까운 조상이고
+ * ROOT만 null이다. depth는 실제 트리에서 ROOT 아래 몇 단인지다.
  */
 export interface Workspace {
   id: string;
   parentId: string | null;
   name: string;
-  kind: 'COMMON' | 'ORG' | 'WORK';
+  kind: 'ROOT' | 'COMMON' | 'ORG' | 'WORK';
   depth: number;
 }
 

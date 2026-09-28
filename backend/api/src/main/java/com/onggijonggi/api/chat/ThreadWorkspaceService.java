@@ -10,8 +10,10 @@ import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeStatus;
 import com.onggijonggi.common.chat.domain.Thr;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -58,7 +60,11 @@ public class ThreadWorkspaceService {
 		this.tenants = tenants;
 	}
 
-	/** GET /api/workspaces 항목. parentId가 null이면 최상위(ROOT 바로 아래)다. depth는 ROOT 아래 몇 단인지. */
+	/**
+	* GET /api/workspaces 항목. 맨 위는 ROOT이고 이름은 Tenant 이름(고객사 이름)이다. parentId는 목록 안에서 가장 가까운
+	* 조상이다 — 부모를 볼 수 없는 노드(예: 전사는 못 보고 전사 공지방만 보는 사람)는 ROOT 바로 아래로 온다. depth는 실제
+	* 트리에서 ROOT 아래 몇 단인지(ROOT는 0)다.
+	*/
 	public record WorkspaceView(UUID id, UUID parentId, String name, WorkspaceNodeKind kind, int depth) {
 	}
 
@@ -93,7 +99,11 @@ public class ThreadWorkspaceService {
 				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE);
 	}
 
-	/** 방을 둘 수 있고 이 사람이 볼 수 있는 워크스페이스를 트리 순서(부모 다음 자식, 같은 부모 아래는 이름순)로. */
+	/**
+	* 이 사람이 볼 수 있는 워크스페이스를 트리 순서(부모 다음 자식, 같은 부모 아래는 이름순, common 먼저)로. 그 앞에
+	* 볼 수 있는 노드가 하나라도 있는 Tenant의 ROOT를 Tenant 이름으로 붙인다. ROOT는 규칙이 없어 판정으로는 아무도
+	* 못 보므로 판정하지 않는다 — 방을 두는 곳이 아니라 트리의 제목일 뿐이고, 방을 두려 하면 collabPlacement가 막는다.
+	*/
 	public Mono<List<WorkspaceView>> visibleWorkspaces(String subject) {
 		return Mono.fromCallable(() -> nodes.findAll().stream()
 						.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
@@ -109,9 +119,34 @@ public class ThreadWorkspaceService {
 					return Flux.fromIterable(candidates)
 							.concatMap(node -> authorizer.canView(subject, node.getId())
 									.filter(Boolean::booleanValue)
-									.map(ignored -> toView(node, byId)))
-							.collectList();
+									.map(ignored -> node))
+							.collectList()
+							.flatMap(visible -> Mono.fromCallable(() -> withRoots(visible, byId))
+									.subscribeOn(Schedulers.boundedElastic()));
 				});
+	}
+
+	private List<WorkspaceView> withRoots(List<WorkspaceNode> visible, Map<UUID, WorkspaceNode> byId) {
+		List<WorkspaceNode> roots = visible.stream()
+				.map(node -> byId.get(node.getPath()[0]))
+				.filter(Objects::nonNull)
+				.distinct()
+				.toList();
+		Map<UUID, String> tenantNames = tenants.findAllById(roots.stream().map(WorkspaceNode::getTenantId).toList())
+				.stream().collect(Collectors.toMap(Tenant::getId, Tenant::getName));
+		Set<UUID> shown = new HashSet<>();
+		roots.forEach(root -> shown.add(root.getId()));
+		visible.forEach(node -> shown.add(node.getId()));
+		List<WorkspaceView> views = new ArrayList<>();
+		for (WorkspaceNode root : roots) {
+			views.add(new WorkspaceView(root.getId(), null,
+					tenantNames.getOrDefault(root.getTenantId(), root.getName()), WorkspaceNodeKind.ROOT, 0));
+		}
+		for (WorkspaceNode node : visible) {
+			views.add(new WorkspaceView(node.getId(), nearestShownAncestor(node, shown), node.getName(), node.getKind(),
+					node.getPath().length - 1));
+		}
+		return views;
 	}
 
 	/**
@@ -147,19 +182,28 @@ public class ThreadWorkspaceService {
 		return node.getStatus() == WorkspaceNodeStatus.ACTIVE && node.getKind() != WorkspaceNodeKind.ROOT;
 	}
 
-	/** ROOT는 목록에 없으므로 ROOT 바로 아래 노드의 부모는 null로 내보낸다. */
-	private static WorkspaceView toView(WorkspaceNode node, Map<UUID, WorkspaceNode> byId) {
-		WorkspaceNode parent = node.getParentId() == null ? null : byId.get(node.getParentId());
-		UUID parentId = parent == null || parent.getKind() == WorkspaceNodeKind.ROOT ? null : parent.getId();
-		return new WorkspaceView(node.getId(), parentId, node.getName(), node.getKind(), node.getPath().length - 1);
+	/** path를 거꾸로 올라가며 목록에 있는 첫 조상. 볼 수 없는 조상은 건너뛴다. */
+	private static UUID nearestShownAncestor(WorkspaceNode node, Set<UUID> shown) {
+		UUID[] path = node.getPath();
+		for (int i = path.length - 2; i >= 0; i--) {
+			if (shown.contains(path[i])) {
+				return path[i];
+			}
+		}
+		return null;
 	}
 
-	/** 조상 이름을 이어 붙인 정렬 키(PermissionAdminService와 같은 순서). common은 맨 앞에 둔다. */
+	/**
+	* 정렬 키: Tenant(ROOT id)로 먼저 묶고, 그 안에서 조상 이름을 이어 붙인 순서(PermissionAdminService와 같은 순서).
+	* common은 그 Tenant의 맨 앞에 둔다.
+	*/
 	private static String treeKey(WorkspaceNode node, Map<UUID, WorkspaceNode> byId) {
+		UUID[] path = node.getPath();
+		String tenant = path[0].toString();
 		if (node.getKind() == WorkspaceNodeKind.COMMON) {
-			return "";
+			return tenant;
 		}
-		return Arrays.stream(node.getPath()).map(byId::get).filter(Objects::nonNull)
-				.map(WorkspaceNode::getName).collect(Collectors.joining("\u0000"));
+		return tenant + Arrays.stream(path, 1, path.length).map(byId::get).filter(Objects::nonNull)
+				.map(name -> "\u0000" + name.getName()).collect(Collectors.joining());
 	}
 }
