@@ -51,13 +51,38 @@ class CasbinPolicyTest {
 	}
 
 	@Test
-	void severalRolesOfTheSameTeamAndNodeCollapseIntoOneRule() {
-		// role은 지금 판정에 쓰지 않는다. #264 bootstrap은 같은 (팀, 노드)에 VIEWER와 ADMIN을 함께 둘 수 있다.
+	void viewerGrantOnlyProducesTheViewAction() {
+		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(
+				List.of(new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.VIEWER)), List.of());
+
+		assertThat(rules).extracting(CasbinPolicy.Rule::action).containsExactly("view");
+	}
+
+	@Test
+	void contributorGrantAddsThreadCreateOnTopOfView() {
+		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(
+				List.of(new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.CONTRIBUTOR)), List.of());
+
+		assertThat(rules).extracting(CasbinPolicy.Rule::action).containsExactlyInAnyOrder("view", "thread_create");
+	}
+
+	@Test
+	void adminGrantAddsManageOnTopOfViewAndThreadCreate() {
+		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(
+				List.of(new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.ADMIN)), List.of());
+
+		assertThat(rules).extracting(CasbinPolicy.Rule::action).containsExactlyInAnyOrder("view", "thread_create", "manage");
+	}
+
+	@Test
+	void severalRolesOfTheSameTeamAndNodeCollapseWhereTheirActionsOverlap() {
+		// #264 bootstrap은 같은 (팀, 노드)에 VIEWER와 ADMIN을 함께 둘 수 있다 — ADMIN의 액션 집합이 VIEWER를 이미
+		// 포함하므로 VIEW 행은 하나로 합쳐지고, ADMIN이 추가로 갖는 thread_create·manage만 더해진다.
 		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(List.of(
 				new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.VIEWER),
 				new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.ADMIN)), List.of());
 
-		assertThat(rules).hasSize(1);
+		assertThat(rules).extracting(CasbinPolicy.Rule::action).containsExactlyInAnyOrder("view", "thread_create", "manage");
 	}
 
 	@Test

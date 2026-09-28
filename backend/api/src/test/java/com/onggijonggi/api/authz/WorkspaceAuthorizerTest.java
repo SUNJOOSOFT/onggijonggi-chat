@@ -27,8 +27,9 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Class Name : WorkspaceAuthorizerTest.java
- * Description : 판정 API가 Casbin에 묻기 전후에 지키는 규칙을 검증한다 — 스위치가 꺼지면 늘 허용, COMMON은 누구나,
- *               미배정자는 묻지 않고 거부, 서열은 숫자 속성, 배정마다 묻기(겸직 대비), 규칙을 잃으면 한 번만 다시 넣고 재시도.
+ * Description : 판정 API가 Casbin에 묻기 전후에 지키는 규칙을 검증한다 — 스위치가 꺼지면 늘 허용, COMMON은 VIEW에
+ *               한해 누구나(THREAD_CREATE·MANAGE는 COMMON이라도 예외 없이 판정을 탄다), 미배정자는 묻지 않고
+ *               거부, 서열은 숫자 속성, 배정마다 묻기(겸직 대비), 규칙을 잃으면 한 번만 다시 넣고 재시도.
  *               Casbin 판정 자체는 CasbinServerContainerTest가 실제 서버로 확인한다.
  */
 class WorkspaceAuthorizerTest {
@@ -70,6 +71,35 @@ class WorkspaceAuthorizerTest {
 
 		assertThat(authorizer.canView(SUBJECT, common.getId()).block()).isTrue();
 		verifyNoInteractions(members, client);
+	}
+
+	@Test
+	void commonWorkspaceDoesNotBypassThreadCreate() {
+		// VIEW만 COMMON 예외를 탄다 — THREAD_CREATE는 COMMON이라도 정상적으로 Casbin에 묻는다.
+		WorkspaceNode common = WorkspaceNode.common(TENANT, root.getId(), root.getPath(), "Common");
+		when(nodes.findById(common.getId())).thenReturn(Optional.of(common));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of());
+
+		assertThat(authorizer.canCreateThread(SUBJECT, common.getId()).block()).isFalse();
+		verifyNoInteractions(client);
+	}
+
+	@Test
+	void canCreateThreadAsksCasbinForTheThreadCreateAction() {
+		UUID team = UUID.randomUUID();
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, team, SUBJECT, Rank.K)));
+		when(client.enforce(anyString(), eq(hr.getId().toString()), eq(CasbinPolicy.THREAD_CREATE))).thenReturn(true);
+
+		assertThat(authorizer.canCreateThread(SUBJECT, hr.getId()).block()).isTrue();
+	}
+
+	@Test
+	void canManageAsksCasbinForTheManageAction() {
+		UUID team = UUID.randomUUID();
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, team, SUBJECT, Rank.K)));
+		when(client.enforce(anyString(), eq(hr.getId().toString()), eq(CasbinPolicy.MANAGE))).thenReturn(true);
+
+		assertThat(authorizer.canManage(SUBJECT, hr.getId()).block()).isTrue();
 	}
 
 	@Test
