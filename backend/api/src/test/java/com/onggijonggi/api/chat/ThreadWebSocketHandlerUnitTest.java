@@ -212,6 +212,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(membership.kindOf(any())).thenReturn(Mono.just(Optional.of(ThrKind.COLLAB)));
 		when(membership.isActiveDirectOwner(any(), any())).thenReturn(Mono.just(true));
 		when(membership.isOpenForWriting(any())).thenReturn(Mono.just(true));
+		when(membership.canEnterWorkspace(any(), any())).thenReturn(Mono.just(true));
 		return membership;
 	}
 
@@ -603,6 +604,60 @@ class ThreadWebSocketHandlerUnitTest {
 		assertThat(sent).singleElement().asString().contains("\"code\":\"MALFORMED_REQUEST\"");
 		verify(directChatTurnService, never()).prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(),
 				any());
+	}
+
+	/** 참가자라도 그 협업방의 워크스페이스를 못 보면 구독을 FORBIDDEN으로 거절하고 커넥션은 둔다. */
+	@Test
+	void refusesCollabSubscriptionWhenTheWorkspaceIsNotVisible() {
+		UUID threadId = UUID.randomUUID();
+		ThreadMembershipService membership = admittingMembership();
+		when(membership.canEnterWorkspace(any(), any())).thenReturn(Mono.just(false));
+
+		List<String> sent = runFrames(membership, WsTestExchange.subscribeFrame(threadId));
+
+		assertThat(sent).singleElement().asString().contains("\"code\":\"FORBIDDEN\"", threadId.toString());
+	}
+
+	/** 구독한 뒤에 워크스페이스를 못 보게 되면(인사이동 등) 다음 발화부터 막는다 — 참가자 재확인과 같은 자리다. */
+	@Test
+	void refusesCollabMessageWhenTheWorkspaceBecameInvisibleAfterSubscribing() {
+		UUID threadId = UUID.randomUUID();
+		ThreadMembershipService membership = admittingMembership();
+		when(membership.canEnterWorkspace(any(), any())).thenReturn(Mono.just(true), Mono.just(false));
+
+		List<String> sent = runFrames(membership, WsTestExchange.subscribeFrame(threadId),
+				"{\"type\":\"chat.message\",\"threadId\":\"" + threadId + "\",\"content\":\"hello\"}");
+
+		assertThat(sent).anyMatch(frame -> frame.contains("\"code\":\"FORBIDDEN\"")
+				&& frame.contains("메시지를 보낼 권한이 없습니다"));
+		assertThat(sent).noneMatch(frame -> frame.contains("\"type\":\"chat.message\""));
+	}
+
+	/** 인바운드 프레임을 차례로 넣고 나간 프레임을 모은다. */
+	private static List<String> runFrames(ThreadMembershipService membership, String... frames) {
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
+		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
+		WebSocketSession session = mock(WebSocketSession.class);
+		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
+		List<String> sent = new CopyOnWriteArrayList<>();
+		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just((Principal) () -> "collab-member"));
+		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
+		when(provisioning.resolveOrProvision("collab-member")).thenReturn(Mono.just(UUID.randomUUID()));
+		stubTextMessages(session);
+		when(session.receive()).thenReturn(Flux.fromArray(frames).map(ThreadWebSocketHandlerUnitTest::inboundText));
+		when(session.send(any())).thenAnswer(invocation -> Flux.from(
+				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
+				.doOnNext(message -> sent.add(message.getPayloadAsText())).then());
+		when(session.close(any(CloseStatus.class))).thenReturn(Mono.empty());
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.never());
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
+				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
+				Schedulers.parallel());
+		new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher, provisioning, membership,
+				mock(DirectChatTurnService.class), Clock.systemUTC(), WINDOW_SECONDS, MESSAGES_PER_WINDOW)
+				.handle(session).block();
+		return sent;
 	}
 
 	/** 클라이언트가 올려보내는 텍스트 프레임 한 장. */

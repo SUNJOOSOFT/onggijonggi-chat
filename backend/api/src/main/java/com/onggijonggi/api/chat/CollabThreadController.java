@@ -3,6 +3,7 @@ package com.onggijonggi.api.chat;
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.auth.CurrentActorProvider;
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbr;
@@ -30,6 +31,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -67,12 +69,13 @@ public class CollabThreadController {
 	private final KeycloakAdminClient keycloakAdminClient;
 	private final CollabThreadCreationService collabThreadCreationService;
 	private final ThreadMessageQueryService threadMessageQueryService;
+	private final ThreadWorkspaceService threadWorkspaceService;
 
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
 			ThrMbrRepository thrMbrRepository, ThreadMembershipService threadMembershipService,
 			ThreadParticipantService threadParticipantService, ThreadLifecycleService threadLifecycleService,
 			KeycloakAdminClient keycloakAdminClient, CollabThreadCreationService collabThreadCreationService,
-			ThreadMessageQueryService threadMessageQueryService) {
+			ThreadMessageQueryService threadMessageQueryService, ThreadWorkspaceService threadWorkspaceService) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
@@ -82,6 +85,7 @@ public class CollabThreadController {
 		this.keycloakAdminClient = keycloakAdminClient;
 		this.collabThreadCreationService = collabThreadCreationService;
 		this.threadMessageQueryService = threadMessageQueryService;
+		this.threadWorkspaceService = threadWorkspaceService;
 	}
 
 	/**
@@ -90,11 +94,12 @@ public class CollabThreadController {
 	*/
 	@GetMapping("/api/collab/threads")
 	public Flux<CollabThreadSummary> listThreads() {
-		return actorUserId()
-				.flatMap(userId -> Mono
-						.fromCallable(() -> joinedThreads(userId, thr -> thr.getStatus() != ThrStatus.ARCHIVED))
+		return currentActorProvider.currentActor()
+				.flatMap(actor -> Mono
+						.fromCallable(() -> joinedThreads(actor.userId(), thr -> thr.getStatus() != ThrStatus.ARCHIVED))
 						.subscribeOn(Schedulers.boundedElastic())
-						.flatMap(threads -> summariesFor(threads, userId)))
+						.flatMap(threads -> threadWorkspaceService.filterVisible(threads, actor.subject()))
+						.flatMap(threads -> summariesFor(threads, actor.userId())))
 				.flatMapMany(Flux::fromIterable);
 	}
 
@@ -104,16 +109,18 @@ public class CollabThreadController {
 	*/
 	@GetMapping("/api/collab/threads/archived")
 	public Flux<CollabThreadSummary> listArchivedThreads() {
-		return actorUserId()
-				.flatMap(userId -> Mono
-						.fromCallable(() -> joinedThreads(userId, thr -> thr.getStatus() == ThrStatus.ARCHIVED))
+		return currentActorProvider.currentActor()
+				.flatMap(actor -> Mono
+						.fromCallable(() -> joinedThreads(actor.userId(), thr -> thr.getStatus() == ThrStatus.ARCHIVED))
 						.subscribeOn(Schedulers.boundedElastic())
-						.flatMap(threads -> summariesFor(threads, userId)))
+						.flatMap(threads -> threadWorkspaceService.filterVisible(threads, actor.subject()))
+						.flatMap(threads -> summariesFor(threads, actor.userId())))
 				.flatMapMany(Flux::fromIterable);
 	}
 
 	/**
-	* 인증된 사용자는 제목만으로 방을 만들며, 생성 서비스가 최초 OWNER 참가를 함께 만든다.
+	* 인증된 사용자는 제목과 워크스페이스로 방을 만들며, 생성 서비스가 최초 OWNER 참가를 함께 만든다.
+	* 워크스페이스는 볼 수 있는 곳이어야 한다(ThreadWorkspaceService.collabPlacement).
 	* Idempotency-Key 헤더가 있으면(이슈 #149) 응답 유실 뒤 재시도에도 같은 방을 그대로 돌려준다 —
 	* 헤더가 없는 호출은 이 계약을 요구하지 않은 것으로 보고 기존과 동일하게 매번 새로 만든다.
 	*/
@@ -122,10 +129,12 @@ public class CollabThreadController {
 	public Mono<CreateCollabThreadResponse> createThread(
 			@RequestHeader(value = "Idempotency-Key", required = false) String idempotencyKey,
 			@Valid @RequestBody CreateCollabThreadRequest request) {
-		return actorUserId()
-				.flatMap(userId -> Mono
-						.fromCallable(() -> createWithRetry(userId, request.title(), idempotencyKey))
-						.subscribeOn(Schedulers.boundedElastic()))
+		return currentActorProvider.currentActor()
+				.flatMap(actor -> threadWorkspaceService.collabPlacement(actor.subject(), request.workspaceId())
+						.flatMap(workspace -> Mono
+								.fromCallable(() -> createWithRetry(actor.userId(), request.title(), idempotencyKey,
+										workspace.orElse(null)))
+								.subscribeOn(Schedulers.boundedElastic())))
 				.map(CreateCollabThreadResponse::new);
 	}
 
@@ -135,18 +144,18 @@ public class CollabThreadController {
 	* 이긴 쪽 행이 이미 커밋돼 있으므로, 한 번만 다시 불러 그 결과를 그대로 따라간다 — 두 번째
 	* 시도까지 같은 경합에 걸릴 일은 없다.
 	*/
-	private UUID createWithRetry(UUID userId, String title, String idempotencyKey) {
+	private UUID createWithRetry(UUID userId, String title, String idempotencyKey, WorkspaceNode workspace) {
 		try {
-			return collabThreadCreationService.createBlocking(userId, title, idempotencyKey);
+			return collabThreadCreationService.createBlocking(userId, title, idempotencyKey, workspace);
 		} catch (DataIntegrityViolationException raced) {
-			return collabThreadCreationService.createBlocking(userId, title, idempotencyKey);
+			return collabThreadCreationService.createBlocking(userId, title, idempotencyKey, workspace);
 		}
 	}
 
 	/** 명단은 참가자면 누구나 본다 — 제거·위임 대상을 지목하려면 먼저 누가 있는지 알아야 한다. */
 	@GetMapping("/api/collab/threads/{threadId}/participants")
 	public Flux<ParticipantView> listParticipants(@PathVariable UUID threadId) {
-		return actorUserId()
+		return actorUserIdIn(threadId)
 				.flatMap(userId -> threadParticipantService.list(threadId, userId))
 				.flatMap(this::withParticipantDisplayNames)
 				.flatMapMany(Flux::fromIterable);
@@ -157,7 +166,7 @@ public class CollabThreadController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> inviteParticipant(@PathVariable UUID threadId,
 			@Valid @RequestBody ParticipantSubjectRequest request) {
-		return actorUserId()
+		return actorUserIdIn(threadId)
 				.flatMap(userId -> threadParticipantService.invite(threadId, userId, request.subject()));
 	}
 
@@ -172,7 +181,7 @@ public class CollabThreadController {
 	public Flux<InviteCandidate> searchInviteCandidates(@PathVariable UUID threadId,
 			@RequestParam("q") String query) {
 		String trimmed = query.trim();
-		return actorUserId()
+		return actorUserIdIn(threadId)
 				.flatMap(userId -> threadParticipantService.searchCandidates(threadId, userId, trimmed))
 				.flatMapMany(Flux::fromIterable);
 	}
@@ -181,7 +190,7 @@ public class CollabThreadController {
 	@DeleteMapping("/api/collab/threads/{threadId}/invitations/{subject}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> revokeInvitation(@PathVariable UUID threadId, @PathVariable String subject) {
-		return actorUserId()
+		return actorUserIdIn(threadId)
 				.flatMap(userId -> threadParticipantService.revokeInvitation(threadId, userId, subject));
 	}
 
@@ -192,7 +201,7 @@ public class CollabThreadController {
 	@DeleteMapping("/api/collab/threads/{threadId}/participants/{subject}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> removeParticipant(@PathVariable UUID threadId, @PathVariable String subject) {
-		return currentActorProvider.currentActor()
+		return actorIn(threadId)
 				.flatMap(actor -> threadParticipantService.remove(threadId, actor.userId(), actor.subject(), subject));
 	}
 
@@ -201,7 +210,7 @@ public class CollabThreadController {
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> transferOwner(@PathVariable UUID threadId,
 			@Valid @RequestBody ParticipantSubjectRequest request) {
-		return actorUserId()
+		return actorUserIdIn(threadId)
 				.flatMap(userId -> threadParticipantService.transferOwner(threadId, userId, request.subject()));
 	}
 
@@ -209,25 +218,37 @@ public class CollabThreadController {
 	@PutMapping("/api/collab/threads/{threadId}/lock")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> lockThread(@PathVariable UUID threadId) {
-		return actorUserId().flatMap(userId -> threadLifecycleService.lock(threadId, userId));
+		return actorUserIdIn(threadId).flatMap(userId -> threadLifecycleService.lock(threadId, userId));
 	}
 
 	/** OWNER만 보관할 수 있다. ARCHIVED는 최종 상태다(#131). */
 	@PutMapping("/api/collab/threads/{threadId}/archive")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> archiveThread(@PathVariable UUID threadId) {
-		return actorUserId().flatMap(userId -> threadLifecycleService.archive(threadId, userId));
+		return actorUserIdIn(threadId).flatMap(userId -> threadLifecycleService.archive(threadId, userId));
 	}
 
 	/** OWNER만 지울 수 있다. 참여·메시지는 cascade로 함께 지워진다(#131). */
 	@DeleteMapping("/api/collab/threads/{threadId}")
 	@ResponseStatus(HttpStatus.NO_CONTENT)
 	public Mono<Void> deleteThread(@PathVariable UUID threadId) {
-		return actorUserId().flatMap(userId -> threadLifecycleService.delete(threadId, userId));
+		return actorUserIdIn(threadId).flatMap(userId -> threadLifecycleService.delete(threadId, userId));
 	}
 
-	private Mono<UUID> actorUserId() {
-		return currentActorProvider.currentActor().map(CurrentActor::userId);
+	/**
+	* 방 하나를 다루는 경로는 모두 이것을 거친다 — 그 방의 워크스페이스를 볼 수 없으면 참가자가 아닌 방과 똑같이
+	* 404로 답해 방의 존재를 알리지 않는다. 참가 여부는 뒤따르는 서비스가 지금처럼 확인한다.
+	*/
+	private Mono<CurrentActor> actorIn(UUID threadId) {
+		return currentActorProvider.currentActor()
+				.flatMap(actor -> threadMembershipService.canEnterWorkspace(threadId, actor.subject())
+						.flatMap(allowed -> allowed
+								? Mono.just(actor)
+								: Mono.error(new ResponseStatusException(HttpStatus.NOT_FOUND))));
+	}
+
+	private Mono<UUID> actorUserIdIn(UUID threadId) {
+		return actorIn(threadId).map(CurrentActor::userId);
 	}
 
 	/**
@@ -235,9 +256,8 @@ public class CollabThreadController {
 	* 같은 이유) 조인 대신 두 번 조회하지만, 두 번째는 findAllById 한 번이라 건수만큼 늘지 않는다.
 	* statusFilter로 일반 목록(ACTIVE·LOCKED)과 보관함(ARCHIVED)을 같은 조회 로직으로 가른다(#131).
 	*
-	* Casbin 도입 전 목록 필터링 기준(#209): thr_mbr ACTIVE 참가 여부만으로 거른다 — OWNER든
-	* 초대받은 MEMBER든 참가 행이 있어야 보인다. Casbin이 들어오면(v0.3) 이 자리가 정책 판정
-	* 호출로 바뀌지만, 그 전까지는 이 최소 스코프가 최종 필터링 기준이다.
+	* 여기서는 thr_mbr ACTIVE 참가 여부로만 거른다 — OWNER든 초대받은 MEMBER든 참가 행이 있어야 보인다.
+	* 워크스페이스를 볼 수 있는지는 호출부가 ThreadWorkspaceService.filterVisible로 이어서 거른다.
 	*/
 	private List<Thr> joinedThreads(UUID userId, Predicate<Thr> statusFilter) {
 		List<UUID> joinedIds = thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
@@ -265,10 +285,12 @@ public class CollabThreadController {
 						.map(participants -> new ThreadWithSubjects(thr,
 								participants.stream().map(ThreadParticipant::subject).toList())))
 				.collectList()
-				.flatMap(this::withDisplayNames);
+				.zipWith(threadWorkspaceService.namesOf(threads))
+				.flatMap(tuple -> withDisplayNames(tuple.getT1(), tuple.getT2()));
 	}
 
-	private Mono<List<CollabThreadSummary>> withDisplayNames(List<ThreadWithSubjects> threads) {
+	private Mono<List<CollabThreadSummary>> withDisplayNames(List<ThreadWithSubjects> threads,
+			Map<UUID, String> workspaceNames) {
 		Set<String> subjects = threads.stream()
 				.flatMap(thread -> thread.subjects().stream())
 				.collect(Collectors.toSet());
@@ -279,7 +301,9 @@ public class CollabThreadController {
 				.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 				.map(displayNamesBySubject -> threads.stream()
 						.map(thread -> CollabThreadSummary.from(thread.thr(),
-								thread.subjects().stream().map(displayNamesBySubject::get).toList()))
+								thread.subjects().stream().map(displayNamesBySubject::get).toList(),
+								thread.thr().getWorkspaceNodeId() == null ? null
+										: workspaceNames.get(thread.thr().getWorkspaceNodeId())))
 						.toList());
 	}
 
@@ -318,8 +342,7 @@ public class CollabThreadController {
 	@GetMapping("/api/collab/threads/{threadId}/messages")
 	public Flux<MsgItem> listMessages(@PathVariable UUID threadId,
 			@RequestParam(name = "afterSeq", required = false) Long afterSeq) {
-		return currentActorProvider.currentActor()
-				.map(CurrentActor::userId)
+		return actorUserIdIn(threadId)
 				.flatMap(userId -> threadMembershipService.isActiveCollabParticipant(threadId, userId))
 				.flatMapMany(participant -> threadMessageQueryService.listMessagesForParticipant(threadId, afterSeq,
 						participant));

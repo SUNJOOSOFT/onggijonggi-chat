@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrIdmKey;
 import com.onggijonggi.common.chat.domain.ThrMbr;
@@ -9,6 +10,7 @@ import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.Objects;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
@@ -26,6 +28,10 @@ import org.springframework.transaction.annotation.Transactional;
  *               기존과 동일하게 매번 새로 만든다. TTL이 지난 키는 새 요청으로 취급하기 전에
  *               옛 행을 즉시 삭제한다(이슈 #240) — 그대로 두면 새 키 저장이 유니크 인덱스와
  *               충돌한다.
+ *
+ *               workspace는 방을 둘 워크스페이스다. 볼 수 있는지는 호출부(ThreadWorkspaceService)가 이미 판정했다.
+ *               워크스페이스 트리가 없는 배포에서는 null이고 방은 워크스페이스 없이 만들어진다. 같은 키에 다른
+ *               워크스페이스가 오면 title과 같은 이유로 거절한다.
  */
 @Service
 public class CollabThreadCreationService {
@@ -51,17 +57,22 @@ public class CollabThreadCreationService {
 	* 않기 위해 같은 트랜잭션에 묶었다) — 진 쪽의 재시도는 호출부(CollabThreadController) 몫이다.
 	*/
 	@Transactional
-	public UUID createBlocking(UUID actorUserId, String title, String idempotencyKey) {
+	public UUID createBlocking(UUID actorUserId, String title, String idempotencyKey, WorkspaceNode workspace) {
+		UUID workspaceId = workspace == null ? null : workspace.getId();
 		if (idempotencyKey != null) {
 			Optional<ThrIdmKey> existing = thrIdmKeyRepository.findByUserIdAndKey(actorUserId, idempotencyKey);
 			if (existing.isPresent()) {
 				if (!isExpired(existing.get())) {
-					return sameThreadOrConflict(existing.get(), title);
+					return sameThreadOrConflict(existing.get(), title, workspaceId);
 				}
 				thrIdmKeyRepository.deleteImmediatelyByUserIdAndKey(actorUserId, idempotencyKey);
 			}
 		}
-		Thr thread = thrRepository.save(Thr.collab(actorUserId, title));
+		Thr thread = Thr.collab(actorUserId, title);
+		if (workspace != null) {
+			thread.placeIn(workspace.getTenantId(), workspace.getId());
+		}
+		thrRepository.save(thread);
 		thrMbrRepository.save(new ThrMbr(thread.getId(), actorUserId, ThrMbrRole.OWNER, actorUserId));
 		if (idempotencyKey != null) {
 			thrIdmKeyRepository.save(new ThrIdmKey(actorUserId, idempotencyKey, title, thread.getId()));
@@ -73,8 +84,12 @@ public class CollabThreadCreationService {
 		return key.getCreatedAt().isBefore(Instant.now().minus(IDEMPOTENCY_KEY_TTL));
 	}
 
-	private UUID sameThreadOrConflict(ThrIdmKey existing, String title) {
+	private UUID sameThreadOrConflict(ThrIdmKey existing, String title, UUID workspaceId) {
 		if (!existing.getTitle().equals(title)) {
+			throw new IdempotencyKeyConflictException();
+		}
+		UUID existingWorkspaceId = thrRepository.findById(existing.getThrId()).map(Thr::getWorkspaceNodeId).orElse(null);
+		if (!Objects.equals(existingWorkspaceId, workspaceId)) {
 			throw new IdempotencyKeyConflictException();
 		}
 		return existing.getThrId();

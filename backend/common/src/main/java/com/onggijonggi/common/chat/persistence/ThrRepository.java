@@ -9,6 +9,7 @@ import jakarta.persistence.LockModeType;
 import java.util.Optional;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Lock;
+import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
@@ -41,6 +42,18 @@ public interface ThrRepository extends JpaRepository<Thr, UUID> {
 	@Query(value = "update thr set next_seq = next_seq + 1 where id = :id returning next_seq - 1",
 			nativeQuery = true)
 	Long allocateNextSeq(@Param("id") UUID id);
+
+	/**
+	* 워크스페이스가 정해지지 않은 방을 한 워크스페이스(common)로 옮긴다. bootstrap이 끝날 때 부른다 — 트리가 생기기
+	* 전에 만들어진 방이 판정이 켜진 뒤 막히지 않게 한다. 다른 Tenant로 이미 정해진 방은 건드리지 않는다.
+	* 자식 행(thr_mbr·msg 등)의 tnn_id는 채우지 않는다. 완료된 msg는 UPDATE 자체가 거부되고(V11 트리거), 자식 행
+	* backfill은 Tenant 절체의 몫이다. 이후 새로 생기는 자식 행은 트리거가 여기서 채운 값을 복사한다.
+	* @return 옮긴 방 수
+	*/
+	@Modifying(clearAutomatically = true)
+	@Query(value = "update thr set tnn_id = :tenantId, wrk_node_id = :nodeId "
+			+ "where wrk_node_id is null and (tnn_id is null or tnn_id = :tenantId)", nativeQuery = true)
+	int placeUnassigned(@Param("tenantId") UUID tenantId, @Param("nodeId") UUID nodeId);
 
 	/**
 	* seq 블록 예약을 위해 thr 행을 비관적으로 잠근다(이슈 #190).

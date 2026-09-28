@@ -154,8 +154,33 @@ public class RbacBootstrapService {
 			}
 		}
 		warnings.forEach(warning -> log.warn("RBAC bootstrap 경고: {}", warning));
+		placeUnassignedThreads();
 		return new RbacBootstrapResult(List.copyOf(processed), List.copyOf(created), List.copyOf(warnings),
 				List.copyOf(drifts), List.copyOf(failures));
+	}
+
+	/**
+	 * 워크스페이스가 정해지지 않은 방(트리가 생기기 전에 만든 방)을 common으로 옮긴다. 판정이 켜진 뒤 그 방들이 막히지 않게
+	 * 한다. 몇 번을 돌아도 결과가 같다. ACTIVE Tenant가 하나일 때만 한다 — 여럿이면 방이 어느 Tenant 것인지 알 수 없고,
+	 * 그것은 Tenant 절체의 몫이다. 실패해도 bootstrap 결과는 그대로 둔다(옮기지 못한 방은 판정이 켜지면 막힐 뿐이다).
+	 */
+	private void placeUnassignedThreads() {
+		try {
+			List<Tenant> active = tenantRepository.findAll().stream()
+					.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).toList();
+			if (active.size() != 1) {
+				if (active.size() > 1) log.warn("RBAC bootstrap: ACTIVE Tenant가 {}개라 워크스페이스 없는 방을 옮기지 않았다", active.size());
+				return;
+			}
+			Tenant tenant = active.get(0);
+			Optional<WorkspaceNode> common = workspaceNodeRepository.findByTenantIdAndKey(tenant.getId(), "common")
+					.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE);
+			if (common.isEmpty()) return;
+			Integer moved = transactions.execute(status -> threadRepository.placeUnassigned(tenant.getId(), common.get().getId()));
+			if (moved != null && moved > 0) log.info("RBAC bootstrap: 워크스페이스 없는 방 {}개를 {} common으로 옮겼다", moved, tenant.getKey());
+		} catch (RuntimeException exception) {
+			log.error("RBAC bootstrap: 워크스페이스 없는 방을 옮기지 못했다", exception);
+		}
 	}
 
 	/**

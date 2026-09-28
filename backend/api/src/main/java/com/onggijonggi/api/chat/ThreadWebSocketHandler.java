@@ -311,7 +311,12 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 					ChatMessageCommand command = new ChatMessageCommand(threadId, kind.get(), connection.userId(),
 							actor.subject(), actor.displayName(), inbound.content(), inbound.model(),
 							inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, null);
-					return rejectIfLocked(command, roomGeneration.get(), traceId);
+					// 구독 뒤에 워크스페이스를 못 보게 된 사람(인사이동 등)도 참가자 재확인과 같은 이유로 여기서 막는다.
+					return threadMembershipService.canEnterWorkspace(threadId, actor.subject())
+							.flatMap(inWorkspace -> inWorkspace
+									? rejectIfLocked(command, roomGeneration.get(), traceId)
+									: Mono.just(new ErrorFrame(threadId, "FORBIDDEN",
+											"이 방에 메시지를 보낼 권한이 없습니다.", traceId)));
 				})
 				.onErrorResume(error -> {
 					log.error("WebSocket membership re-check failed threadId={} traceId={}",
@@ -529,6 +534,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	/**
 	* 방 하나를 이 커넥션에 건다(이슈 #161). 인가는 여기서 한 번 하고, 발화마다 다시 한다
 	* (handleChatMessage) — 구독 뒤에 참가자에서 빠진 사람이 같은 구독으로 계속 말할 수 없게.
+	* 협업방은 참가자이면서 그 방의 워크스페이스를 볼 수 있어야 한다. 못 보는 경우도 같은 FORBIDDEN이다.
 	*
 	* 참가자가 아니면 FORBIDDEN을 그 방 threadId로 돌려주고 커넥션은 유지한다 — 다른 방 구독까지 끊을
 	* 이유가 없다. 화면(room-state.ts)은 이 코드를 받으면 그 방을 닫고 다시 구독하지 않는다.
@@ -552,9 +558,14 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 												? Mono.<WsFrame>fromRunnable(() -> subscribe(connection, threadId, false))
 												: Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.", traceId)));
 							}
-							return kind.isPresent()
-									? Mono.<WsFrame>fromRunnable(() -> subscribe(connection, threadId))
-									: Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.", traceId));
+							if (kind.isEmpty()) {
+								return Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.", traceId));
+							}
+							return threadMembershipService.canEnterWorkspace(threadId, connection.actor().subject())
+									.flatMap(inWorkspace -> inWorkspace
+											? Mono.<WsFrame>fromRunnable(() -> subscribe(connection, threadId))
+											: Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.",
+													traceId)));
 						})
 						: Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.", traceId)))
 				.onErrorResume(error -> {

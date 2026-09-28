@@ -49,13 +49,16 @@ public class DirectChatTurnService {
 	private final ThrMbrRepository thrMbrRepository;
 	private final MsgRepository msgRepository;
 	private final MsgIdmKeyRepository msgIdmKeyRepository;
+	private final ThreadWorkspaceService threadWorkspaceService;
 
 	public DirectChatTurnService(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository,
-			MsgRepository msgRepository, MsgIdmKeyRepository msgIdmKeyRepository) {
+			MsgRepository msgRepository, MsgIdmKeyRepository msgIdmKeyRepository,
+			ThreadWorkspaceService threadWorkspaceService) {
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.msgIdmKeyRepository = msgIdmKeyRepository;
+		this.threadWorkspaceService = threadWorkspaceService;
 	}
 
 	/** WS bootstrap 전용 — HUMAN·PENDING AGENT를 같은 트랜잭션에서 만든다(이슈 #162). */
@@ -141,8 +144,12 @@ public class DirectChatTurnService {
 		return key.getCreatedAt().isBefore(Instant.now().minus(IDEMPOTENCY_KEY_TTL));
 	}
 
+	/** 새 1:1은 common에 둔다. common을 정할 수 없는 배포(트리 없음 등)에서는 워크스페이스 없이 만든다. */
 	private StoredTurn create(UUID threadId, UUID userId, String content, String title, String idempotencyKey) {
-		Thr thread = thrRepository.save(Thr.direct(threadId, userId, title));
+		Thr direct = Thr.direct(threadId, userId, title);
+		threadWorkspaceService.directPlacementBlocking()
+				.ifPresent(common -> direct.placeIn(common.getTenantId(), common.getId()));
+		Thr thread = thrRepository.save(direct);
 		ThrMbr owner = thrMbrRepository.save(new ThrMbr(threadId, userId, ThrMbrRole.OWNER, userId));
 		return persistTurn(thread, owner, content, userId, idempotencyKey);
 	}

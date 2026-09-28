@@ -49,12 +49,15 @@ class DirectChatTurnServiceTest {
 	private MsgRepository msgRepository;
 	@Mock
 	private MsgIdmKeyRepository msgIdmKeyRepository;
+	@Mock
+	private ThreadWorkspaceService threadWorkspaceService;
 
 	private DirectChatTurnService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new DirectChatTurnService(thrRepository, thrMbrRepository, msgRepository, msgIdmKeyRepository);
+		service = new DirectChatTurnService(thrRepository, thrMbrRepository, msgRepository, msgIdmKeyRepository,
+				threadWorkspaceService);
 	}
 
 	@Test

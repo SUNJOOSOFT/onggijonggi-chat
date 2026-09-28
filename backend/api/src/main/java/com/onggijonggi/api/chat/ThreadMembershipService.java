@@ -1,5 +1,7 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.authz.RbacProperties;
+import com.onggijonggi.api.authz.WorkspaceAuthorizer;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrKind;
@@ -17,6 +19,9 @@ import reactor.core.scheduler.Schedulers;
  * Description : Thread 참가 여부·쓰기 가능 여부 조회. 테이블 매핑은 04·DATA 계층에 있고 이 판정만
  *               03·CORE에 둔다 — 참가자 판정 경계는 이슈 #22를, LOCKED·ARCHIVED가 쓰기를 막는
  *               경계는 이슈 #131을 확인한다. JPA는 블로킹이라 boundedElastic으로 오프로딩한다.
+ *
+ *               협업방은 참가자라도 그 방의 워크스페이스를 볼 수 있어야 들어간다({@link #canEnterWorkspace}).
+ *               참가 기록은 건드리지 않고 판정만 막으므로, 워크스페이스 권한이 돌아오면 그대로 다시 들어간다.
  */
 @Service
 public class ThreadMembershipService {
@@ -25,9 +30,33 @@ public class ThreadMembershipService {
 
 	private final ThrRepository thrRepository;
 
-	public ThreadMembershipService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository) {
+	private final WorkspaceAuthorizer workspaceAuthorizer;
+
+	private final RbacProperties rbacProperties;
+
+	public ThreadMembershipService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository,
+			WorkspaceAuthorizer workspaceAuthorizer, RbacProperties rbacProperties) {
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
+		this.workspaceAuthorizer = workspaceAuthorizer;
+		this.rbacProperties = rbacProperties;
+	}
+
+	/**
+	* 이 사람이 그 방의 워크스페이스를 볼 수 있나. 참가 여부와 따로 묻고 호출부가 둘 다 확인한다.
+	* DIRECT는 늘 참이다 — 1:1은 common에 있고 common은 누구나 본다. 트리가 없어 워크스페이스를 못 정한
+	* 배포에서도 1:1이 막히지 않아야 한다. 방이 없으면 참이다 — 없는 방은 참가 판정이 이미 거부한다.
+	* 판정이 꺼져 있으면 DB를 보지 않고 참이다.
+	*/
+	public Mono<Boolean> canEnterWorkspace(UUID threadId, String subject) {
+		if (!rbacProperties.isEnforce()) {
+			return Mono.just(true);
+		}
+		return Mono.fromCallable(() -> thrRepository.findById(threadId))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(thread -> thread.isEmpty() || thread.get().getKind() == ThrKind.DIRECT
+						? Mono.just(true)
+						: workspaceAuthorizer.canView(subject, thread.get().getWorkspaceNodeId()));
 	}
 
 	/** 끝난 참가 행이 같은 (thr_id, user_id)로 남아 있어서, 활성 행만 참가로 센다. */

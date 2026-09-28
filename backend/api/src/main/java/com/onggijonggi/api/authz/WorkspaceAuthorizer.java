@@ -48,8 +48,10 @@ public class WorkspaceAuthorizer {
 		this.objectMapper = objectMapper;
 	}
 
+	/** workspaceNodeId가 null(워크스페이스가 정해지지 않은 방)이면 판정이 켜져 있을 때 거부다. */
 	public Mono<Boolean> canView(String subject, UUID workspaceNodeId) {
 		if (!rbacProperties.isEnforce()) return Mono.just(true);
+		if (workspaceNodeId == null) return Mono.just(false);
 		return Mono.fromCallable(() -> canViewBlocking(subject, workspaceNodeId)).subscribeOn(Schedulers.boundedElastic());
 	}
 

@@ -1,6 +1,5 @@
 package com.onggijonggi.api.chat;
 
-import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.auth.CurrentActorProvider;
 import java.util.UUID;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -33,13 +32,17 @@ public class ThreadController {
 		this.threadMessageQueryService = threadMessageQueryService;
 	}
 
-	/** DIRECT·COLLAB ACTIVE 참가자가 공통 msg 이력을 raw athKind 계약으로 읽는 공용 경로다. */
+	/**
+	* DIRECT·COLLAB ACTIVE 참가자가 공통 msg 이력을 raw athKind 계약으로 읽는 공용 경로다. 협업방은 그 방의
+	* 워크스페이스도 볼 수 있어야 한다 — 못 보면 참가자가 아닌 것과 똑같이 404다.
+	*/
 	@GetMapping("/api/threads/{threadId}/messages")
 	public Flux<MsgItem> listThreadMessages(@PathVariable UUID threadId,
 			@RequestParam(name = "afterSeq", required = false) Long afterSeq) {
 		return currentActorProvider.currentActor()
-				.map(CurrentActor::userId)
-				.flatMap(userId -> threadMembershipService.isActiveParticipant(threadId, userId))
+				.flatMap(actor -> threadMembershipService.isActiveParticipant(threadId, actor.userId())
+						.zipWith(threadMembershipService.canEnterWorkspace(threadId, actor.subject()),
+								(participant, inWorkspace) -> participant && inWorkspace))
 				.flatMapMany(participant -> threadMessageQueryService.listMessagesForParticipant(threadId, afterSeq,
 						participant));
 	}

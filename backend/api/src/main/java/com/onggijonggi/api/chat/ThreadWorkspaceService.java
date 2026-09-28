@@ -1,0 +1,165 @@
+package com.onggijonggi.api.chat;
+
+import com.onggijonggi.api.authz.RbacProperties;
+import com.onggijonggi.api.authz.WorkspaceAuthorizer;
+import com.onggijonggi.common.authz.Tenant;
+import com.onggijonggi.common.authz.TenantRepository;
+import com.onggijonggi.common.authz.TenantStatus;
+import com.onggijonggi.common.authz.WorkspaceNode;
+import com.onggijonggi.common.authz.WorkspaceNodeKind;
+import com.onggijonggi.common.authz.WorkspaceNodeRepository;
+import com.onggijonggi.common.authz.WorkspaceNodeStatus;
+import com.onggijonggi.common.chat.domain.Thr;
+import java.util.Arrays;
+import java.util.Comparator;
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.UUID;
+import java.util.function.Function;
+import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
+import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
+import reactor.core.scheduler.Schedulers;
+
+/**
+ * Class Name : ThreadWorkspaceService.java
+ * Description : 03·CORE 방이 어느 워크스페이스에 놓이는지를 정한다. 협업방은 만드는 사람이 고르고(볼 수 있는 곳만),
+ *               1:1은 common에 둔다. 사람이 볼 수 있는 워크스페이스 목록과 협업방 목록 거르기도 여기서 한다.
+ *               판정은 모두 {@link WorkspaceAuthorizer#canView}에 맡기고 흉내 내지 않는다.
+ *
+ *               워크스페이스 트리는 bootstrap이 만든다. 설정이 없는 배포(casbin 꺼짐)에는 트리가 없으므로 방은 워크스페이스
+ *               없이(null) 만들어지고 지금과 똑같이 동작한다. 판정이 켜진 배포에서는 협업방이 워크스페이스를 반드시 가진다.
+ *
+ *               1:1의 common은 ACTIVE Tenant가 하나일 때만 정한다. 여럿이면 사람이 어느 Tenant에 속하는지 알 길이 아직 없어
+ *               (Tenant 절체의 몫) 비워 둔다 — 1:1 입장은 워크스페이스를 보지 않으므로 비워 둬도 막히지 않는다.
+ */
+@Service
+public class ThreadWorkspaceService {
+
+	/** bootstrap이 Tenant마다 자동으로 만드는 common의 예약 node_key. */
+	private static final String COMMON_KEY = "common";
+
+	private final RbacProperties rbacProperties;
+	private final WorkspaceAuthorizer authorizer;
+	private final WorkspaceNodeRepository nodes;
+	private final TenantRepository tenants;
+
+	public ThreadWorkspaceService(RbacProperties rbacProperties, WorkspaceAuthorizer authorizer,
+			WorkspaceNodeRepository nodes, TenantRepository tenants) {
+		this.rbacProperties = rbacProperties;
+		this.authorizer = authorizer;
+		this.nodes = nodes;
+		this.tenants = tenants;
+	}
+
+	/** GET /api/workspaces 항목. parentId가 null이면 최상위(ROOT 바로 아래)다. depth는 ROOT 아래 몇 단인지. */
+	public record WorkspaceView(UUID id, UUID parentId, String name, WorkspaceNodeKind kind, int depth) {
+	}
+
+	/**
+	* 협업방을 둘 노드를 고른다. workspaceId가 없으면 판정이 켜져 있을 때 400, 꺼져 있으면 워크스페이스 없이 만든다.
+	* 없는 노드·비활성 노드·ROOT·볼 수 없는 노드는 모두 403이다 — 어느 노드가 있는지 떠보지 못하게 이유를 나누지 않는다.
+	*/
+	public Mono<Optional<WorkspaceNode>> collabPlacement(String subject, UUID workspaceId) {
+		if (workspaceId == null) {
+			return rbacProperties.isEnforce()
+					? Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST))
+					: Mono.just(Optional.empty());
+		}
+		return Mono.fromCallable(() -> nodes.findById(workspaceId).filter(ThreadWorkspaceService::canHoldThreads))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(node -> node.isEmpty()
+						? Mono.<Optional<WorkspaceNode>>error(new ResponseStatusException(HttpStatus.FORBIDDEN))
+						: authorizer.canView(subject, workspaceId).flatMap(visible -> visible
+								? Mono.just(node)
+								: Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN))));
+	}
+
+	/** 1:1을 둘 common. 호출자의 트랜잭션 안에서 부르므로 블로킹이다. */
+	public Optional<WorkspaceNode> directPlacementBlocking() {
+		List<Tenant> active = tenants.findAll().stream()
+				.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE)
+				.toList();
+		if (active.size() != 1) {
+			return Optional.empty();
+		}
+		return nodes.findByTenantIdAndKey(active.get(0).getId(), COMMON_KEY)
+				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE);
+	}
+
+	/** 방을 둘 수 있고 이 사람이 볼 수 있는 워크스페이스를 트리 순서(부모 다음 자식, 같은 부모 아래는 이름순)로. */
+	public Mono<List<WorkspaceView>> visibleWorkspaces(String subject) {
+		return Mono.fromCallable(() -> nodes.findAll().stream()
+						.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
+						.toList())
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(active -> {
+					Map<UUID, WorkspaceNode> byId = active.stream()
+							.collect(Collectors.toMap(WorkspaceNode::getId, Function.identity()));
+					List<WorkspaceNode> candidates = active.stream()
+							.filter(ThreadWorkspaceService::canHoldThreads)
+							.sorted(Comparator.comparing(node -> treeKey(node, byId)))
+							.toList();
+					return Flux.fromIterable(candidates)
+							.concatMap(node -> authorizer.canView(subject, node.getId())
+									.filter(Boolean::booleanValue)
+									.map(ignored -> toView(node, byId)))
+							.collectList();
+				});
+	}
+
+	/**
+	* 협업방 목록에서 워크스페이스를 볼 수 없는 방을 뺀다. 방마다 묻지 않고 서로 다른 노드마다 한 번만 묻는다.
+	* 판정이 꺼져 있으면 그대로 돌려준다.
+	*/
+	public Mono<List<Thr>> filterVisible(List<Thr> threads, String subject) {
+		if (!rbacProperties.isEnforce()) {
+			return Mono.just(threads);
+		}
+		Set<UUID> nodeIds = threads.stream().map(Thr::getWorkspaceNodeId).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+		return Flux.fromIterable(nodeIds)
+				.concatMap(nodeId -> authorizer.canView(subject, nodeId).filter(Boolean::booleanValue).map(ignored -> nodeId))
+				.collect(Collectors.toSet())
+				.map(visible -> threads.stream().filter(thr -> visible.contains(thr.getWorkspaceNodeId())).toList());
+	}
+
+	/** 목록 응답에 붙일 워크스페이스 이름. 노드가 없는 방은 빠진다. */
+	public Mono<Map<UUID, String>> namesOf(List<Thr> threads) {
+		Set<UUID> nodeIds = threads.stream().map(Thr::getWorkspaceNodeId).filter(Objects::nonNull)
+				.collect(Collectors.toSet());
+		if (nodeIds.isEmpty()) {
+			return Mono.just(Map.of());
+		}
+		return Mono.fromCallable(() -> nodes.findAllById(nodeIds).stream()
+						.collect(Collectors.toMap(WorkspaceNode::getId, WorkspaceNode::getName)))
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	/** ROOT는 트리의 뿌리일 뿐 방을 두는 곳이 아니다. 비활성 노드에는 새 방을 두지 않는다. */
+	private static boolean canHoldThreads(WorkspaceNode node) {
+		return node.getStatus() == WorkspaceNodeStatus.ACTIVE && node.getKind() != WorkspaceNodeKind.ROOT;
+	}
+
+	/** ROOT는 목록에 없으므로 ROOT 바로 아래 노드의 부모는 null로 내보낸다. */
+	private static WorkspaceView toView(WorkspaceNode node, Map<UUID, WorkspaceNode> byId) {
+		WorkspaceNode parent = node.getParentId() == null ? null : byId.get(node.getParentId());
+		UUID parentId = parent == null || parent.getKind() == WorkspaceNodeKind.ROOT ? null : parent.getId();
+		return new WorkspaceView(node.getId(), parentId, node.getName(), node.getKind(), node.getPath().length - 1);
+	}
+
+	/** 조상 이름을 이어 붙인 정렬 키(PermissionAdminService와 같은 순서). common은 맨 앞에 둔다. */
+	private static String treeKey(WorkspaceNode node, Map<UUID, WorkspaceNode> byId) {
+		if (node.getKind() == WorkspaceNodeKind.COMMON) {
+			return "";
+		}
+		return Arrays.stream(node.getPath()).map(byId::get).filter(Objects::nonNull)
+				.map(WorkspaceNode::getName).collect(Collectors.joining("\u0000"));
+	}
+}
