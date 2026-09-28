@@ -387,7 +387,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
-				provisioning, membership, directChatTurnService, Clock.systemUTC(), WINDOW_SECONDS,
+				provisioning, membership, directChatTurnService, noRanks(), Clock.systemUTC(), WINDOW_SECONDS,
 				MESSAGES_PER_WINDOW);
 
 		try {
@@ -452,7 +452,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
-				provisioning, membership, directChatTurnService, Clock.systemUTC(), WINDOW_SECONDS,
+				provisioning, membership, directChatTurnService, noRanks(), Clock.systemUTC(), WINDOW_SECONDS,
 				MESSAGES_PER_WINDOW);
 
 		handler.handle(session).block();
@@ -604,7 +604,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
-				provisioning, membership, mock(DirectChatTurnService.class), Clock.systemUTC(), WINDOW_SECONDS,
+				provisioning, membership, mock(DirectChatTurnService.class), noRanks(), Clock.systemUTC(), WINDOW_SECONDS,
 				MESSAGES_PER_WINDOW);
 
 		handler.handle(session).block();
@@ -727,9 +727,15 @@ class ThreadWebSocketHandlerUnitTest {
 		configure.accept(revoker);
 		new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				revoker, provisioning, membership,
-				mock(DirectChatTurnService.class), Clock.systemUTC(), WINDOW_SECONDS, MESSAGES_PER_WINDOW)
+				mock(DirectChatTurnService.class), noRanks(), Clock.systemUTC(), WINDOW_SECONDS, MESSAGES_PER_WINDOW)
 				.handle(session).block();
 		return sent;
+	}
+
+	/** 배정이 없는 표시 이름 — 이 테스트들은 이름을 보지 않는다. 직급 붙이기는 RankedDisplayNamesTest가 맡는다. */
+	private static RankedDisplayNames noRanks() {
+		return new RankedDisplayNames(mock(com.onggijonggi.api.auth.keycloak.KeycloakAdminClient.class),
+				mock(com.onggijonggi.common.authz.OrgUnitMemberRepository.class));
 	}
 
 	/** 클라이언트가 올려보내는 텍스트 프레임 한 장. */
@@ -768,7 +774,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		return new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher), provisioning,
-				admittingMembership(), directChatTurnService, Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
+				admittingMembership(), directChatTurnService, noRanks(), Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
 	}
 
 }

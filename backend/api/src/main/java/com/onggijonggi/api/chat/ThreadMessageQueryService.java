@@ -1,6 +1,5 @@
 package com.onggijonggi.api.chat;
 
-import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
@@ -41,14 +40,14 @@ public class ThreadMessageQueryService {
 	private final MsgRepository msgRepository;
 	private final ThrMbrRepository thrMbrRepository;
 	private final AppUserRepository appUserRepository;
-	private final KeycloakAdminClient keycloakAdminClient;
+	private final RankedDisplayNames rankedDisplayNames;
 
 	public ThreadMessageQueryService(MsgRepository msgRepository, ThrMbrRepository thrMbrRepository,
-			AppUserRepository appUserRepository, KeycloakAdminClient keycloakAdminClient) {
+			AppUserRepository appUserRepository, RankedDisplayNames rankedDisplayNames) {
 		this.msgRepository = msgRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.appUserRepository = appUserRepository;
-		this.keycloakAdminClient = keycloakAdminClient;
+		this.rankedDisplayNames = rankedDisplayNames;
 	}
 
 	/**
@@ -85,7 +84,7 @@ public class ThreadMessageQueryService {
 				.flatMap(subjectByThrMbrId -> {
 					Set<String> subjects = Set.copyOf(subjectByThrMbrId.values());
 					return Flux.fromIterable(subjects)
-							.flatMap(subject -> keycloakAdminClient.displayName(subject)
+							.flatMap(subject -> rankedDisplayNames.displayName(subject)
 									.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
 									DISPLAY_NAME_LOOKUP_CONCURRENCY)
 							.collectMap(Map.Entry::getKey, Map.Entry::getValue)

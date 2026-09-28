@@ -11,6 +11,8 @@ import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakUserSummary;
+import com.onggijonggi.common.authz.OrgUnitMemberRepository;
+import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
@@ -69,13 +71,20 @@ class ThreadParticipantServiceTest {
 	@Mock
 	private ThreadMembershipService threadMembershipService;
 
+	@Mock
+	private OrgUnitMemberRepository orgUnitMemberRepository;
+
+	@Mock
+	private OrgUnitRepository orgUnitRepository;
+
 	private ThreadParticipantService service;
 
 	@BeforeEach
 	void setUp() {
 		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository,
 				roomSessionRegistry, keycloakAdminClient, thrInvRepository, invitationAcceptanceService,
-				threadMembershipService);
+				threadMembershipService, new RankedDisplayNames(keycloakAdminClient, orgUnitMemberRepository),
+				new PeopleSearch(keycloakAdminClient, orgUnitMemberRepository, orgUnitRepository));
 		// 워크스페이스 판정은 따로 검증한다(아래 워크스페이스 테스트). 나머지 테스트는 늘 볼 수 있는 것으로 둔다.
 		lenient().when(threadMembershipService.canEnterWorkspace(any(), any())).thenReturn(Mono.just(true));
 		when(thrRepository.findById(any())).thenAnswer(ignored ->

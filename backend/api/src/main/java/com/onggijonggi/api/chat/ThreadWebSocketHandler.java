@@ -79,6 +79,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	private final ThreadMembershipService threadMembershipService;
 
 	private final DirectChatTurnService directChatTurnService;
+	private final RankedDisplayNames rankedDisplayNames;
 
 	/**
 	 * 이 핸들러만 쓰는 버킷이다(이슈 #74). 핸드셰이크 한도(WsSecurityConfig)와 나누는 이유는
@@ -93,7 +94,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 			ThreadMessageDispatcher threadMessageDispatcher, CollabAuthorizationRevoker collabAuthorizationRevoker,
 			UserIdentityService userIdentityService,
 			ThreadMembershipService threadMembershipService, DirectChatTurnService directChatTurnService,
-			Clock rateLimitClock,
+			RankedDisplayNames rankedDisplayNames, Clock rateLimitClock,
 			@Value("${app.ratelimit.window-seconds:60}") long rateLimitWindowSeconds,
 			@Value("${app.ratelimit.ws-message-per-minute:60}") int wsMessagePerMinute) {
 		this.objectMapper = objectMapper;
@@ -103,6 +104,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		this.userIdentityService = userIdentityService;
 		this.threadMembershipService = threadMembershipService;
 		this.directChatTurnService = directChatTurnService;
+		this.rankedDisplayNames = rankedDisplayNames;
 		this.messageRateLimiter =
 				new FixedWindowRateLimiter(rateLimitClock, rateLimitWindowSeconds, wsMessagePerMinute);
 	}
@@ -119,8 +121,12 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.defaultIfEmpty(new SessionInfo("EMPTY", "EMPTY", null))
 				.flatMap(info -> userIdentityService.resolveOrProvision(info.subject())
 						.onErrorMap(UserProvisioningFailure::new)
-						.flatMap(userId -> handleConnection(session, new Connection(UUID.randomUUID(), userId,
-								new PresenceParticipant(info.subject(), info.displayName())), info.tokenExpiresAt()))
+						// 말풍선·접속 중에 보일 이름은 연결할 때 한 번 정한다(직급이 바뀌면 다시 연결해야 반영된다).
+						// 직급을 못 읽으면 이름만 쓴다 — 표시 이름 때문에 연결이 끊기면 안 된다.
+						.flatMap(userId -> rankedDisplayNames.withRank(info.subject(), info.displayName())
+								.onErrorReturn(info.displayName())
+								.flatMap(displayName -> handleConnection(session, new Connection(UUID.randomUUID(), userId,
+										new PresenceParticipant(info.subject(), displayName)), info.tokenExpiresAt())))
 						.onErrorResume(UserProvisioningFailure.class, error -> {
 							String traceId = newTraceId();
 					if (error.getCause() instanceof ResponseStatusException status
