@@ -18,10 +18,11 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : WorkspaceAuthorizer.java
- * Description : 03·CORE "이 사람이 이 workspace를 볼 수 있나" 판정 API. 볼 수 있으면 그 workspace에 방도 만들 수 있다.
+ * Description : 03·CORE "이 사람이 이 workspace에서 이 액션을 할 수 있나" 판정 API.
  *               권한 판정(app.rbac.enforce)이 꺼져 있으면 늘 true다 — 끄면 지금과 똑같이 동작해야 한다.
  *               켜져 있으면:
- *               - ACTIVE COMMON은 누구나 본다(미배정자도 1:1 채팅을 쓴다).
+ *               - VIEW에 한해 ACTIVE COMMON은 누구나 본다(미배정자도 1:1 채팅을 쓴다). THREAD_CREATE·MANAGE는
+ *                 COMMON이라도 이 예외를 타지 않고 정상적으로 Casbin에 묻는다.
  *               - 배정(org_unit_mbr)이 없으면 Casbin에 묻지 않고 거부한다 — 서열 0 같은 값으로 넘기면 서열 규칙이 열린다.
  *               - 배정마다 팀·서열을 속성으로 넘겨 묻고 하나라도 통과하면 허용한다. 지금은 겸직이 없어 배정이 늘 하나지만,
  *                 겸직이 생겨도 이 모양 그대로 쓴다.
@@ -48,27 +49,40 @@ public class WorkspaceAuthorizer {
 		this.objectMapper = objectMapper;
 	}
 
-	/** workspaceNodeId가 null(워크스페이스가 정해지지 않은 방)이면 판정이 켜져 있을 때 거부다. */
 	public Mono<Boolean> canView(String subject, UUID workspaceNodeId) {
-		if (!rbacProperties.isEnforce()) return Mono.just(true);
-		if (workspaceNodeId == null) return Mono.just(false);
-		return Mono.fromCallable(() -> canViewBlocking(subject, workspaceNodeId)).subscribeOn(Schedulers.boundedElastic());
+		return authorize(subject, workspaceNodeId, CasbinPolicy.VIEW);
 	}
 
-	private boolean canViewBlocking(String subject, UUID workspaceNodeId) {
+	/** COLLAB Thread 생성 시 확인한다(#265) — COMMON도 예외 없이 이 판정을 그대로 탄다. */
+	public Mono<Boolean> canCreateThread(String subject, UUID workspaceNodeId) {
+		return authorize(subject, workspaceNodeId, CasbinPolicy.THREAD_CREATE);
+	}
+
+	public Mono<Boolean> canManage(String subject, UUID workspaceNodeId) {
+		return authorize(subject, workspaceNodeId, CasbinPolicy.MANAGE);
+	}
+
+	/** workspaceNodeId가 null(워크스페이스가 정해지지 않은 방)이면 판정이 켜져 있을 때 어떤 액션이든 거부다. */
+	private Mono<Boolean> authorize(String subject, UUID workspaceNodeId, String action) {
+		if (!rbacProperties.isEnforce()) return Mono.just(true);
+		if (workspaceNodeId == null) return Mono.just(false);
+		return Mono.fromCallable(() -> authorizeBlocking(subject, workspaceNodeId, action)).subscribeOn(Schedulers.boundedElastic());
+	}
+
+	private boolean authorizeBlocking(String subject, UUID workspaceNodeId, String action) {
 		Optional<WorkspaceNode> node = nodes.findById(workspaceNodeId);
 		if (node.isEmpty() || node.get().getStatus() != WorkspaceNodeStatus.ACTIVE) return false;
-		if (node.get().getKind() == WorkspaceNodeKind.COMMON) return true;
+		if (action.equals(CasbinPolicy.VIEW) && node.get().getKind() == WorkspaceNodeKind.COMMON) return true;
 		List<OrgUnitMember> assignments = members.findBySubject(subject);
 		if (assignments.isEmpty()) return false;
 		loader.ensureLoaded();
 		for (OrgUnitMember assignment : assignments) {
 			String attributes = attributes(assignment);
-			if (client.enforce(attributes, workspaceNodeId.toString(), CasbinPolicy.VIEW)) return true;
+			if (client.enforce(attributes, workspaceNodeId.toString(), action)) return true;
 			// 서버가 재시작해 규칙을 잃었으면 한 번만 다시 넣고 다시 묻는다. 그래도 안 되면 거부다.
 			if (!client.isLoaded()) {
 				loader.ensureLoaded();
-				if (client.enforce(attributes, workspaceNodeId.toString(), CasbinPolicy.VIEW)) return true;
+				if (client.enforce(attributes, workspaceNodeId.toString(), action)) return true;
 			}
 		}
 		return false;
