@@ -66,6 +66,9 @@ export const collabThreadMessagesPath = (
   return afterSeq === undefined ? base : `${base}?afterSeq=${afterSeq}`;
 };
 
+/** 볼 수 있는 워크스페이스 목록. 협업방을 만들 때 고르고 목록을 묶는 기준이다. 트리가 없는 배포에서는 빈 목록이다. */
+export const WORKSPACES_PATH = '/api/workspaces';
+
 /** 권한 관리 화면(/admin/permissions) API. bff의 casbin 프로필에서만 있고, 꺼져 있으면 404다. */
 export const PERMISSIONS_ADMIN_PATH = '/api/authz/admin';
 export const MEMBERS_IMPORT_PATH = '/api/authz/members/import';

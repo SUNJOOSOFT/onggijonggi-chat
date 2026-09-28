@@ -17,6 +17,7 @@ export type BffErrorCode =
   | 'PARTICIPANT_STATE_CONFLICT' // 409 CORE — 참여자 상태 전제조건 위반(소유권 위임 전 탈퇴 등)
   | 'RATE_LIMITED' // 429 EDGE — 요청 한도 초과
   | 'IDEMPOTENCY_KEY_CONFLICT' // 409 CORE — 같은 Idempotency-Key에 이전과 다른 요청 내용
+  | 'INVITEE_NO_WORKSPACE_ACCESS' // 409 CORE — 초대 대상이 그 방의 워크스페이스를 볼 수 없음
   | 'MODEL_UNAVAILABLE' // 502 CORE — 게이트웨이가 모델 호출을 거절
   | 'MESSAGE_DELIVERY_FAILED'; // WS — 협업방 메시지 방송 실패
 
@@ -45,6 +46,9 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
   // 결과(409)라, 페이지를 새로고침해 새 시도로 인식되게 해야 실제로 풀린다.
   IDEMPOTENCY_KEY_CONFLICT:
     '같은 요청을 다른 내용으로 다시 보냈어요. 페이지를 새로고침한 뒤 다시 시도해 주세요.',
+  // 다시 시도해도 같다 — 그 사람의 팀·직급 배정이 바뀌어야 풀린다.
+  INVITEE_NO_WORKSPACE_ACCESS:
+    '이 사람은 이 방의 워크스페이스를 볼 수 없어 초대할 수 없어요.',
   MESSAGE_DELIVERY_FAILED:
     '메시지를 전달하지 못했어요. 연결을 확인하고 다시 보내 주세요.',
   // 모델 목록에는 API 키를 채우지 않은 모델도 뜬다 — 어떤 키가 설정됐는지는 게이트웨이만 알기

@@ -20,26 +20,41 @@ export const runtime = 'nodejs';
 
 /** 목업 방 네 개 — 정상 스트림, 오류 두 시점, 접근 거부를 결정적으로 재현한다. 방 단위 핸드셰이크
  * 거부는 핸드셰이크에 방이 없어져(이슈 #161) 재현할 대상이 아니다. */
-const THREADS = [
+/** 목업은 워크스페이스 트리가 없는 배포처럼 동작한다(GET /api/workspaces가 빈 목록) — 방은 워크스페이스가 없다. */
+const THREADS: Array<{
+  id: string;
+  title: string;
+  participants: string[];
+  workspaceId: string | null;
+  workspaceName: string | null;
+}> = [
   {
     id: NORMAL_THREAD_ID,
     title: '정상 스트리밍 확인방',
     participants: ['sujin', 'minho'],
+    workspaceId: null,
+    workspaceName: null,
   },
   {
     id: ERROR_BEFORE_THREAD_ID,
     title: 'AI 최초 오류 확인방',
     participants: [],
+    workspaceId: null,
+    workspaceName: null,
   },
   {
     id: ERROR_MID_THREAD_ID,
     title: 'AI 도중 오류 확인방',
     participants: [],
+    workspaceId: null,
+    workspaceName: null,
   },
   {
     id: FORBIDDEN_FRAME_THREAD_ID,
     title: '접근 거부 확인방',
     participants: [],
+    workspaceId: null,
+    workspaceName: null,
   },
 ];
 
@@ -79,7 +94,13 @@ export async function POST(request: Request) {
   }
 
   const id = crypto.randomUUID();
-  THREADS.unshift({ id, title, participants: [] });
+  THREADS.unshift({
+    id,
+    title,
+    participants: [],
+    workspaceId: null,
+    workspaceName: null,
+  });
   return Response.json({ id }, { status: 201 });
 }
 

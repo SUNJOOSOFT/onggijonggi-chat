@@ -24,6 +24,8 @@ describe('POST /api/collab/threads mock', () => {
       id: created.id,
       title,
       participants: [],
+      workspaceId: null,
+      workspaceName: null,
     });
   });
 

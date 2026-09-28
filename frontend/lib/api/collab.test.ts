@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./http', () => ({ authFetch: vi.fn() }));
 
-import { createCollabThread } from './collab';
+import { createCollabThread, fetchWorkspaces } from './collab';
 import { authFetch } from './http';
 
 const mockedAuthFetch = vi.mocked(authFetch);
@@ -36,5 +36,42 @@ describe('createCollabThread', () => {
     );
 
     await expect(createCollabThread('')).rejects.toThrow('VALIDATION_ERROR');
+  });
+
+  it('워크스페이스를 고르면 본문에 workspaceId를 싣고, 재시도 키는 헤더로 보낸다', async () => {
+    mockedAuthFetch.mockResolvedValue(
+      Response.json({ id: '11111111-1111-4111-8111-111111111111' }),
+    );
+
+    await createCollabThread('인사팀 방', 'ws-1', 'key-1');
+
+    expect(mockedAuthFetch).toHaveBeenCalledExactlyOnceWith(
+      '/api/collab/threads',
+      {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Idempotency-Key': 'key-1',
+        },
+        body: JSON.stringify({ title: '인사팀 방', workspaceId: 'ws-1' }),
+      },
+    );
+  });
+});
+
+describe('fetchWorkspaces', () => {
+  beforeEach(() => {
+    mockedAuthFetch.mockReset();
+  });
+
+  it('서버가 준 워크스페이스 목록을 그대로 돌려준다', async () => {
+    const workspaces = [
+      { id: 'c', parentId: null, name: '공용', kind: 'COMMON', depth: 1 },
+      { id: 'hr', parentId: null, name: '인사팀', kind: 'ORG', depth: 1 },
+    ];
+    mockedAuthFetch.mockResolvedValue(Response.json(workspaces));
+
+    await expect(fetchWorkspaces()).resolves.toEqual(workspaces);
+    expect(mockedAuthFetch).toHaveBeenCalledExactlyOnceWith('/api/workspaces');
   });
 });

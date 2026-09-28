@@ -8,7 +8,12 @@
  "Failed to parse URL from /api/collab/threads"로 죽는 것을 보고 옮겼다.
  *********************************************************/
 
-import { COLLAB_THREADS_PATH, bffUrl, collabThreadMessagesPath } from './config';
+import {
+  COLLAB_THREADS_PATH,
+  WORKSPACES_PATH,
+  bffUrl,
+  collabThreadMessagesPath,
+} from './config';
 import { authFetch } from './http';
 import type { ThreadMessageItem } from './thread-history';
 
@@ -21,6 +26,30 @@ export interface CollabThreadSummary {
   id: string;
   title: string;
   participants: string[];
+  /** 방이 놓인 워크스페이스. 워크스페이스 트리가 없는 배포의 방은 null이다. */
+  workspaceId: string | null;
+  workspaceName: string | null;
+}
+
+/**
+ * GET /api/workspaces 항목. 서버가 내가 볼 수 있는 것만 트리 순서(common 먼저, 부모 다음 자식)로 준다.
+ * parentId가 null이면 최상위, depth는 들여쓰기용이다.
+ */
+export interface Workspace {
+  id: string;
+  parentId: string | null;
+  name: string;
+  kind: 'COMMON' | 'ORG' | 'WORK';
+  depth: number;
+}
+
+/** 볼 수 있는 워크스페이스. 비어 있으면 워크스페이스 없이 방을 만든다(권한 기능이 꺼진 배포). */
+export async function fetchWorkspaces(): Promise<Workspace[]> {
+  const res = await authFetch(bffUrl(WORKSPACES_PATH));
+  if (!res.ok) {
+    throw new Error(await res.text());
+  }
+  return res.json() as Promise<Workspace[]>;
 }
 
 /** POST /api/collab/threads 성공 응답. 생성 직후 방으로 이동하는 데 id만 필요하다. */
@@ -39,6 +68,7 @@ export async function fetchCollabThreads(): Promise<CollabThreadSummary[]> {
 
 /**
  * 협업방을 만들고 새 방 UUID를 돌려준다. 제목 검증은 서버가 최종 책임진다.
+ * workspaceId는 방을 둘 워크스페이스다. 권한 기능이 켜진 배포에서는 필수이고, 없으면 본문에서 뺀다.
  *
  * idempotencyKey를 넘기면(이슈 #149) 응답 유실 뒤 같은 키로 재시도해도 방이 두 번 만들어지지
  * 않는다 — 호출부가 재시도 사이에 같은 값을 재사용해야 의미가 있고, 이 함수는 값을 생성하지
@@ -46,6 +76,7 @@ export async function fetchCollabThreads(): Promise<CollabThreadSummary[]> {
  */
 export async function createCollabThread(
   title: string,
+  workspaceId?: string,
   idempotencyKey?: string,
 ): Promise<CreateCollabThreadResponse> {
   const res = await authFetch(bffUrl(COLLAB_THREADS_PATH), {
@@ -54,7 +85,7 @@ export async function createCollabThread(
       'Content-Type': 'application/json',
       ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
     },
-    body: JSON.stringify({ title }),
+    body: JSON.stringify(workspaceId ? { title, workspaceId } : { title }),
   });
   if (!res.ok) {
     throw new Error(await res.text());
