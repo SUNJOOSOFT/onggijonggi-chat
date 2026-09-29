@@ -2,6 +2,7 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.common.chat.domain.Msg;
 import java.time.Instant;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -19,6 +20,7 @@ import java.util.UUID;
  *        AGENT·SYSTEM은 작성자가 없어 null이다.
  * @param createdAt 메시지 생성 시각
  * @param completedAt 완료 시각(PENDING이면 null)
+ * @param attachments HUMAN 메시지에 실린 첨부. 없으면 빈 배열이다. WS chat.message의 같은 필드와 짝이다
  */
 public record MsgItem(
 		UUID id,
@@ -29,12 +31,14 @@ public record MsgItem(
 		String authorSubject,
 		String authorDisplayName,
 		Instant createdAt,
-		Instant completedAt
+		Instant completedAt,
+		List<MsgFileView> attachments
 ) {
 
-	static MsgItem from(Msg msg, String authorSubject, String authorDisplayName) {
+	static MsgItem from(Msg msg, String authorSubject, String authorDisplayName, List<MsgFileView> attachments) {
 		return new MsgItem(msg.getId(), msg.getSeq(), msg.getAthKind().name(), msg.getStatus().name(),
-				msg.getContent(), authorSubject, authorDisplayName, msg.getCreatedAt(), msg.getCompletedAt());
+				msg.getContent(), authorSubject, authorDisplayName, msg.getCreatedAt(), msg.getCompletedAt(),
+				attachments);
 	}
 
 }

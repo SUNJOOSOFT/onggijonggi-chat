@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
@@ -8,8 +9,10 @@ import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.data.domain.PageRequest;
@@ -32,12 +35,14 @@ public class MsgPersistenceService {
 	private final MsgRepository msgRepository;
 	private final ThrRepository thrRepository;
 	private final ThrMbrRepository thrMbrRepository;
+	private final MsgFileService msgFileService;
 
 	public MsgPersistenceService(MsgRepository msgRepository, ThrRepository thrRepository,
-			ThrMbrRepository thrMbrRepository) {
+			ThrMbrRepository thrMbrRepository, MsgFileService msgFileService) {
 		this.msgRepository = msgRepository;
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
+		this.msgFileService = msgFileService;
 	}
 
 	/**
@@ -59,16 +64,18 @@ public class MsgPersistenceService {
 	* 지킬 수 없기 때문이다.
 	*
 	* id·seq는 호출부가 방송 프레임에 실은 값 그대로여야 한다 — 화면에 보인 것과 이력이 같은
-	* 메시지를 가리켜야 하기 때문이다(이슈 #190).
+	* 메시지를 가리켜야 하기 때문이다(이슈 #190). fileIds는 같은 트랜잭션에서 이 메시지에 붙인다.
 	*/
 	@Transactional
 	public Optional<Msg> persistHumanMessageBlocking(UUID msgId, long seq, UUID thrId, UUID userId,
-			String content) {
+			String content, List<UUID> fileIds) {
 		Optional<ThrMbr> member = thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, userId, ThrMbrStatus.ACTIVE);
 		if (member.isEmpty()) {
 			return Optional.empty();
 		}
-		return Optional.of(msgRepository.save(Msg.human(msgId, thrId, seq, member.get().getId(), content)));
+		Msg saved = msgRepository.save(Msg.human(msgId, thrId, seq, member.get().getId(), content));
+		msgFileService.attachBlocking(userId, msgId, fileIds);
+		return Optional.of(saved);
 	}
 
 	/**
@@ -78,9 +85,9 @@ public class MsgPersistenceService {
 	*/
 	@Transactional
 	public List<Msg> persistHumanMessageAndFetchContextBlocking(UUID msgId, long seq, UUID thrId, UUID userId,
-			String content, int contextLimit) {
+			String content, List<UUID> fileIds, int contextLimit) {
 		List<Msg> priorContext = recentCompleteContextBlocking(thrId, contextLimit);
-		persistHumanMessageBlocking(msgId, seq, thrId, userId, content);
+		persistHumanMessageBlocking(msgId, seq, thrId, userId, content, fileIds);
 		return priorContext;
 	}
 
@@ -98,6 +105,11 @@ public class MsgPersistenceService {
 				MsgStatus.COMPLETE, PageRequest.of(0, contextLimit)));
 		Collections.reverse(recent);
 		return recent;
+	}
+
+	/** 문맥 메시지들에 붙은 첨부 — AI 프롬프트에 텍스트를 끼우는 데 쓴다. */
+	public Map<UUID, List<MsgFile>> filesByMessageBlocking(Collection<UUID> msgIds) {
+		return msgFileService.byMessageBlocking(msgIds);
 	}
 
 	@Transactional

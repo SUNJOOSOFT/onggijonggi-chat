@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import java.security.Principal;
@@ -35,6 +36,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.ArgumentMatchers.eq;
@@ -220,7 +222,7 @@ class ThreadWebSocketHandlerUnitTest {
 			assertThat(slowJoined.await(1, TimeUnit.SECONDS)).isTrue();
 			for (int i = 0; i < 1000 && slowLeft.getCount() > 0; i++) {
 				registry.broadcastIfCurrent(threadId, observer.generation(),
-						new ChatMessageFrame(threadId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i));
+						new ChatMessageFrame(threadId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i, List.of()));
 			}
 
 			assertThat(slowLeft.await(2, TimeUnit.SECONDS)).isTrue();
@@ -318,7 +320,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just(principal));
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("unsubscribed-user")).thenReturn(Mono.just(UUID.randomUUID()));
-		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(), any()))
+		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), anyList(), any(), any()))
 				.thenThrow(new org.springframework.web.server.ResponseStatusException(
 						org.springframework.http.HttpStatus.NOT_FOUND));
 		stubTextMessages(session);
@@ -352,7 +354,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(membership.isActiveDirectOwner(any(), any())).thenReturn(Mono.just(true));
 		when(membership.canUseDirect(any(), any(), any())).thenReturn(Mono.just(true));
 		when(membership.isOpenForWriting(any())).thenReturn(Mono.just(true));
-		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), any()))
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), anyList(), any()))
 				.thenThrow(new IllegalStateException("database unavailable"));
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -387,7 +389,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
-				provisioning, membership, directChatTurnService, noRanks(), Clock.systemUTC(), WINDOW_SECONDS,
+				provisioning, membership, directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
 				MESSAGES_PER_WINDOW);
 
 		try {
@@ -422,7 +424,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(membership.isActiveDirectOwner(any(), any())).thenReturn(Mono.just(true));
 		when(membership.canUseDirect(any(), any(), any())).thenReturn(Mono.just(true));
 		when(membership.isOpenForWriting(any())).thenReturn(Mono.just(true));
-		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), any()))
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), anyList(), any()))
 				.thenReturn(new DirectChatTurnService.StoredTurn(humanMsgId, 0L, agentMsgId, threadId, 1L, true,
 						MsgStatus.COMPLETE));
 		com.onggijonggi.common.chat.domain.Msg agentMsg = com.onggijonggi.common.chat.domain.Msg
@@ -452,7 +454,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
-				provisioning, membership, directChatTurnService, noRanks(), Clock.systemUTC(), WINDOW_SECONDS,
+				provisioning, membership, directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
 				MESSAGES_PER_WINDOW);
 
 		handler.handle(session).block();
@@ -477,9 +479,9 @@ class ThreadWebSocketHandlerUnitTest {
 		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		var directChatTurnService = mock(DirectChatTurnService.class);
-		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(), any()))
+		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), anyList(), any(), any()))
 				.thenThrow(new org.springframework.dao.DataIntegrityViolationException("duplicate"));
-		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), any()))
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), anyList(), any()))
 				.thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L, UUID.randomUUID(), threadId,
 						1L, false, MsgStatus.PENDING));
 		WebSocketSession session = mock(WebSocketSession.class);
@@ -511,7 +513,7 @@ class ThreadWebSocketHandlerUnitTest {
 
 			assertThat(messageBroadcast.await(1, TimeUnit.SECONDS)).isTrue();
 			verify(directChatTurnService).prepareExistingWithPendingAgentBlocking(eq(threadId), eq(userId),
-					eq("안녕"), any());
+					eq("안녕"), anyList(), any());
 		} finally {
 			observerSubscription.dispose();
 			registry.leave(threadId, observerId, new PresenceParticipant("observer", "관찰자"));
@@ -530,7 +532,7 @@ class ThreadWebSocketHandlerUnitTest {
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		var directChatTurnService = mock(DirectChatTurnService.class);
 		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(eq(threadId), eq(userId), eq("안녕"),
-				any(), any())).thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L,
+				anyList(), any(), any())).thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L,
 				UUID.randomUUID(), threadId, 1L, false, MsgStatus.PENDING));
 		WebSocketSession session = mock(WebSocketSession.class);
 		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
@@ -604,7 +606,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
-				provisioning, membership, mock(DirectChatTurnService.class), noRanks(), Clock.systemUTC(), WINDOW_SECONDS,
+				provisioning, membership, mock(DirectChatTurnService.class), noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
 				MESSAGES_PER_WINDOW);
 
 		handler.handle(session).block();
@@ -636,8 +638,8 @@ class ThreadWebSocketHandlerUnitTest {
 		handler(registry, provisioning, MESSAGES_PER_WINDOW, directChatTurnService).handle(session).block();
 
 		assertThat(sent).singleElement().asString().contains("\"code\":\"MALFORMED_REQUEST\"");
-		verify(directChatTurnService, never()).prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(),
-				any());
+		verify(directChatTurnService, never()).prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), anyList(),
+				any(), any());
 	}
 
 	/** 참가자라도 그 협업방의 워크스페이스를 못 보면 구독을 FORBIDDEN으로 거절하고 커넥션은 둔다. */
@@ -697,13 +699,73 @@ class ThreadWebSocketHandlerUnitTest {
 		assertThat(sent).noneMatch(frame -> frame.contains("\"type\":\"chat.message\""));
 	}
 
+	/** 남이 올렸거나 이미 보낸 첨부를 실으면 그 발화만 거절하고 방송하지 않는다. */
+	@Test
+	void refusesAMessageCarryingAnAttachmentTheSenderCannotUse() {
+		UUID threadId = UUID.randomUUID();
+		UUID fileId = UUID.randomUUID();
+		MsgFileService msgFileService = mock(MsgFileService.class);
+		when(msgFileService.resolveForMessageBlocking(any(), eq(List.of(fileId))))
+				.thenThrow(new MsgFileRejectedException(org.springframework.http.HttpStatus.BAD_REQUEST,
+						"INVALID_ATTACHMENT", "첨부 파일을 찾을 수 없습니다. 다시 올려 주세요."));
+
+		List<String> sent = runFrames(admittingMembership(), msgFileService, WsTestExchange.subscribeFrame(threadId),
+				"{\"type\":\"chat.message\",\"threadId\":\"" + threadId + "\",\"content\":\"요약해줘\","
+						+ "\"attachmentIds\":[\"" + fileId + "\"]}");
+
+		assertThat(sent).anyMatch(frame -> frame.contains("\"code\":\"INVALID_ATTACHMENT\"")
+				&& frame.contains(threadId.toString()));
+		assertThat(sent).noneMatch(frame -> frame.contains("\"type\":\"chat.message\""));
+	}
+
+	/** 첨부가 있으면 본문이 비어도 발화로 받고, 방송에는 파일 이름만 싣는다. */
+	@Test
+	void acceptsAnAttachmentOnlyMessageAndBroadcastsTheFileName() {
+		UUID threadId = UUID.randomUUID();
+		MsgFile file = new MsgFile(UUID.randomUUID(), UUID.randomUUID(), "규정.pdf", "추출한 본문은 방송에 안 실린다");
+		MsgFileService msgFileService = mock(MsgFileService.class);
+		when(msgFileService.resolveForMessageBlocking(any(), eq(List.of(file.getId())))).thenReturn(List.of(file));
+
+		List<String> sent = runFramesUntil(admittingMembership(), msgFileService,
+				frames -> frames.stream().anyMatch(frame -> frame.contains("\"type\":\"chat.message\"")),
+				WsTestExchange.subscribeFrame(threadId),
+				"{\"type\":\"chat.message\",\"threadId\":\"" + threadId + "\",\"content\":\"\","
+						+ "\"attachmentIds\":[\"" + file.getId() + "\"]}");
+
+		assertThat(sent).anyMatch(frame -> frame.contains("\"type\":\"chat.message\"")
+				&& frame.contains("\"fileName\":\"규정.pdf\"") && frame.contains(file.getId().toString()));
+		assertThat(sent).noneMatch(frame -> frame.contains("추출한 본문"));
+		assertThat(sent).noneMatch(frame -> frame.contains("MALFORMED_REQUEST"));
+	}
+
 	/** 인바운드 프레임을 차례로 넣고 나간 프레임을 모은다. */
 	private static List<String> runFrames(ThreadMembershipService membership, String... frames) {
-		return runFrames(membership, ignored -> {}, frames);
+		return runFrames(membership, mock(MsgFileService.class), frames);
 	}
 
 	private static List<String> runFrames(ThreadMembershipService membership,
 			Consumer<CollabAuthorizationRevoker> configure, String... frames) {
+		return runFrames(membership, configure, mock(MsgFileService.class), Flux.fromArray(frames), null);
+	}
+
+	private static List<String> runFrames(ThreadMembershipService membership, MsgFileService msgFileService,
+			String... frames) {
+		return runFrames(membership, ignored -> {}, msgFileService, Flux.fromArray(frames), null);
+	}
+
+	/**
+	* 방송은 방 워커가 비동기로 보낸다 — 입력이 끝나자마자 연결을 닫으면 방송이 닿기 전에 방을 떠난다.
+	* 방송을 보려는 테스트는 연결을 열어 둔 채 done이 참이 될 때까지(최대 2초) 기다린다.
+	*/
+	private static List<String> runFramesUntil(ThreadMembershipService membership, MsgFileService msgFileService,
+			java.util.function.Predicate<List<String>> done, String... frames) {
+		return runFrames(membership, ignored -> {}, msgFileService,
+				Flux.concat(Flux.fromArray(frames), Flux.never()), done);
+	}
+
+	private static List<String> runFrames(ThreadMembershipService membership,
+			Consumer<CollabAuthorizationRevoker> configure, MsgFileService msgFileService, Flux<String> frames,
+			java.util.function.Predicate<List<String>> done) {
 		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
 		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
 		WebSocketSession session = mock(WebSocketSession.class);
@@ -713,7 +775,7 @@ class ThreadWebSocketHandlerUnitTest {
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("collab-member")).thenReturn(Mono.just(UUID.randomUUID()));
 		stubTextMessages(session);
-		when(session.receive()).thenReturn(Flux.fromArray(frames).map(ThreadWebSocketHandlerUnitTest::inboundText));
+		when(session.receive()).thenReturn(frames.map(ThreadWebSocketHandlerUnitTest::inboundText));
 		when(session.send(any())).thenAnswer(invocation -> Flux.from(
 				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
 				.doOnNext(message -> sent.add(message.getPayloadAsText())).then());
@@ -725,10 +787,26 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		CollabAuthorizationRevoker revoker = new CollabAuthorizationRevoker(registry, dispatcher);
 		configure.accept(revoker);
-		new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
+		Mono<Void> handling = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				revoker, provisioning, membership,
-				mock(DirectChatTurnService.class), noRanks(), Clock.systemUTC(), WINDOW_SECONDS, MESSAGES_PER_WINDOW)
-				.handle(session).block();
+				mock(DirectChatTurnService.class), noRanks(), msgFileService, Clock.systemUTC(), WINDOW_SECONDS,
+				MESSAGES_PER_WINDOW)
+				.handle(session);
+		if (done == null) {
+			handling.block();
+			return sent;
+		}
+		reactor.core.Disposable running = handling.subscribe();
+		long deadline = System.currentTimeMillis() + 2000;
+		while (!done.test(sent) && System.currentTimeMillis() < deadline) {
+			try {
+				Thread.sleep(10);
+			} catch (InterruptedException interrupted) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+		}
+		running.dispose();
 		return sent;
 	}
 
@@ -774,7 +852,7 @@ class ThreadWebSocketHandlerUnitTest {
 				Schedulers.parallel());
 		return new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher), provisioning,
-				admittingMembership(), directChatTurnService, noRanks(), Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
+				admittingMembership(), directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
 	}
 
 }

@@ -70,7 +70,7 @@ class RoomSessionRegistryTest {
 		Disposable otherSubscription = registry.join(otherRoomId, UUID.randomUUID(), anyone())
 				.frames().subscribe(other::add);
 
-		ChatMessageFrame expected = new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, sender.subject(), sender.displayName(), "hello");
+		ChatMessageFrame expected = new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, sender.subject(), sender.displayName(), "hello", List.of());
 		assertThat(registry.broadcastIfCurrent(roomId, firstMembership.generation(), expected)).isTrue();
 		// 먼저 들어와 있던 first만 두 번째 입장을 통보받는다 — second는 자기 입장을 받지 않는다.
 		assertThat(first).containsExactly(new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName()), expected);
@@ -168,7 +168,7 @@ class RoomSessionRegistryTest {
 
 		for (int i = 0; i < 257; i++) {
 			registry.broadcastIfCurrent(roomId, slowMembership.generation(),
-					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i));
+					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i, List.of()));
 		}
 
 		assertThat(slowOverflowed).isTrue();
@@ -196,7 +196,7 @@ class RoomSessionRegistryTest {
 				registry.join(roomId, newConnectionId, anyone());
 		Disposable newSubscription = newMembership.frames().subscribe(received::add);
 		assertThat(registry.broadcastIfCurrent(roomId, newMembership.generation(),
-				new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "new room"))).isTrue();
+				new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "new room", List.of()))).isTrue();
 
 		assertThat(received).hasSize(1);
 
@@ -471,7 +471,7 @@ class RoomSessionRegistryTest {
 		try {
 			assertThat(newMembership.generation()).isNotEqualTo(oldMembership.generation());
 			assertThat(registry.broadcastIfCurrent(roomId, oldMembership.generation(),
-					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale"))).isFalse();
+					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale", List.of()))).isFalse();
 			assertThat(received).isEmpty();
 		} finally {
 			newSubscription.dispose();
@@ -497,7 +497,7 @@ class RoomSessionRegistryTest {
 			Future<Boolean> broadcast = executor.submit(() -> {
 				await(start);
 				return registry.broadcastIfCurrent(roomId, oldMembership.generation(),
-						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "racing"));
+						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "racing", List.of()));
 			});
 			start.countDown();
 			leave.get(5, TimeUnit.SECONDS);
@@ -511,7 +511,7 @@ class RoomSessionRegistryTest {
 			Disposable newSubscription = newMembership.frames().subscribe(received::add);
 			try {
 				assertThat(registry.broadcastIfCurrent(roomId, oldMembership.generation(),
-						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale"))).isFalse();
+						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale", List.of()))).isFalse();
 				assertThat(received).isEmpty();
 			} finally {
 				newSubscription.dispose();
@@ -756,7 +756,7 @@ class RoomSessionRegistryTest {
 		await(start);
 		for (int i = 0; i < 100; i++) {
 			registry.broadcastIfCurrent(roomId, roomGeneration,
-					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", prefix + i));
+					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", prefix + i, List.of()));
 		}
 	}
 

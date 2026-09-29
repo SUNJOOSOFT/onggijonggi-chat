@@ -7,5 +7,9 @@
   "seq" : 3,
   "from" : "kc-1",
   "fromDisplayName" : "주성민",
-  "content" : "@AI 요약해줘"
+  "content" : "@AI 요약해줘",
+  "attachments" : [ {
+    "id" : "55555555-5555-4555-8555-555555555555",
+    "fileName" : "보고서.pdf"
+  } ]
 }

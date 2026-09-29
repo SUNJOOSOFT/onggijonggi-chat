@@ -14,6 +14,7 @@ import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import java.time.Duration;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -50,41 +51,46 @@ public class DirectChatTurnService {
 	private final MsgRepository msgRepository;
 	private final MsgIdmKeyRepository msgIdmKeyRepository;
 	private final ThreadWorkspaceService threadWorkspaceService;
+	private final MsgFileService msgFileService;
 
 	public DirectChatTurnService(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository,
 			MsgRepository msgRepository, MsgIdmKeyRepository msgIdmKeyRepository,
-			ThreadWorkspaceService threadWorkspaceService) {
+			ThreadWorkspaceService threadWorkspaceService, MsgFileService msgFileService) {
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.msgIdmKeyRepository = msgIdmKeyRepository;
 		this.threadWorkspaceService = threadWorkspaceService;
+		this.msgFileService = msgFileService;
 	}
 
-	/** WS bootstrap 전용 — HUMAN·PENDING AGENT를 같은 트랜잭션에서 만든다(이슈 #162). */
+	/**
+	* WS bootstrap 전용 — HUMAN·PENDING AGENT를 같은 트랜잭션에서 만든다(이슈 #162). fileIds는 HUMAN에 붙일
+	* 첨부이고 같은 트랜잭션에서 붙인다. replay면 처음 저장할 때 이미 붙였으므로 다시 붙이지 않는다.
+	*/
 	@Transactional
 	public StoredTurn prepareOrCreateWithPendingAgentBlocking(UUID threadId, UUID userId, String content,
-			String title, String idempotencyKey) {
+			List<UUID> fileIds, String title, String idempotencyKey) {
 		Optional<StoredTurn> replay = checkIdempotency(threadId, userId, idempotencyKey, content);
 		if (replay.isPresent()) {
 			return replay.get();
 		}
 		return thrRepository.findByIdForSeqUpdate(threadId)
-				.map(thread -> appendToExisting(thread, userId, content, idempotencyKey))
-				.orElseGet(() -> create(threadId, userId, content, title, idempotencyKey));
+				.map(thread -> appendToExisting(thread, userId, content, fileIds, idempotencyKey))
+				.orElseGet(() -> create(threadId, userId, content, fileIds, title, idempotencyKey));
 	}
 
 	/** WS bootstrap의 PK 경합 재시도 전용. 새 DIRECT 생성의 PK 경합 뒤엔 이 경로만 재시도한다.
 	 * 타인·COLLAB은 모두 404다. */
 	@Transactional
 	public StoredTurn prepareExistingWithPendingAgentBlocking(UUID threadId, UUID userId, String content,
-			String idempotencyKey) {
+			List<UUID> fileIds, String idempotencyKey) {
 		Optional<StoredTurn> replay = checkIdempotency(threadId, userId, idempotencyKey, content);
 		if (replay.isPresent()) {
 			return replay.get();
 		}
 		Thr thread = thrRepository.findByIdForSeqUpdate(threadId).orElseThrow(DirectChatTurnService::notFound);
-		return appendToExisting(thread, userId, content, idempotencyKey);
+		return appendToExisting(thread, userId, content, fileIds, idempotencyKey);
 	}
 
 	/**
@@ -95,8 +101,8 @@ public class DirectChatTurnService {
 	* 같다. 호출부가 "PENDING인데 메모리엔 없다"를 이미 확인한 뒤에만 불러야 한다.
 	*/
 	@Transactional
-	public StoredTurn recoverOrphanedTurnBlocking(UUID threadId, UUID userId, String content, String idempotencyKey,
-			UUID orphanedAgentMsgId) {
+	public StoredTurn recoverOrphanedTurnBlocking(UUID threadId, UUID userId, String content, List<UUID> fileIds,
+			String idempotencyKey, UUID orphanedAgentMsgId) {
 		Msg orphaned = msgRepository.findById(orphanedAgentMsgId).orElseThrow(DirectChatTurnService::notFound);
 		orphaned.fail(MsgStatus.FAILED);
 		msgRepository.save(orphaned);
@@ -106,7 +112,7 @@ public class DirectChatTurnService {
 		msgIdmKeyRepository.deleteImmediatelyByUserIdAndKey(userId, idempotencyKey);
 
 		Thr thread = thrRepository.findByIdForSeqUpdate(threadId).orElseThrow(DirectChatTurnService::notFound);
-		return appendToExisting(thread, userId, content, idempotencyKey);
+		return appendToExisting(thread, userId, content, fileIds, idempotencyKey);
 	}
 
 	/**
@@ -148,30 +154,34 @@ public class DirectChatTurnService {
 	 * 새 1:1은 common에 둔다. 판정이 켜져 있는데 요청자의 common을 정할 수 없으면(배정 없음 등) 403으로 만들지 않는다(#299).
 	 * 판정이 꺼져 있고 common을 정할 수 없는 배포(트리 없음 등)에서는 워크스페이스 없이 만든다.
 	 */
-	private StoredTurn create(UUID threadId, UUID userId, String content, String title, String idempotencyKey) {
+	private StoredTurn create(UUID threadId, UUID userId, String content, List<UUID> fileIds, String title,
+			String idempotencyKey) {
 		Thr direct = Thr.direct(threadId, userId, title);
 		threadWorkspaceService.directPlacementBlocking(userId)
 				.ifPresent(common -> direct.placeIn(common.getTenantId(), common.getId()));
 		Thr thread = thrRepository.save(direct);
 		ThrMbr owner = thrMbrRepository.save(new ThrMbr(threadId, userId, ThrMbrRole.OWNER, userId));
-		return persistTurn(thread, owner, content, userId, idempotencyKey);
+		return persistTurn(thread, owner, content, fileIds, userId, idempotencyKey);
 	}
 
-	private StoredTurn appendToExisting(Thr thread, UUID userId, String content, String idempotencyKey) {
+	private StoredTurn appendToExisting(Thr thread, UUID userId, String content, List<UUID> fileIds,
+			String idempotencyKey) {
 		if (thread.getKind() != ThrKind.DIRECT || !userId.equals(thread.getDrcOwnUserId())) {
 			throw notFound();
 		}
 		ThrMbr owner = thrMbrRepository.findByThrIdAndUserIdAndRoleAndStatus(thread.getId(), userId,
 				ThrMbrRole.OWNER, ThrMbrStatus.ACTIVE).orElseThrow(DirectChatTurnService::notFound);
-		return persistTurn(thread, owner, content, userId, idempotencyKey);
+		return persistTurn(thread, owner, content, fileIds, userId, idempotencyKey);
 	}
 
-	private StoredTurn persistTurn(Thr thread, ThrMbr owner, String content, UUID userId, String idempotencyKey) {
+	private StoredTurn persistTurn(Thr thread, ThrMbr owner, String content, List<UUID> fileIds, UUID userId,
+			String idempotencyKey) {
 		long humanSeq = thread.reserveSeqBlock(2);
 		long agentSeq = humanSeq + 1;
 		UUID humanMsgId = UUID.randomUUID();
 		UUID agentMsgId = UUID.randomUUID();
 		msgRepository.save(Msg.human(humanMsgId, thread.getId(), humanSeq, owner.getId(), content));
+		msgFileService.attachBlocking(userId, humanMsgId, fileIds);
 		msgRepository.save(Msg.pendingAgent(agentMsgId, thread.getId(), agentSeq));
 		msgIdmKeyRepository.save(new MsgIdmKey(userId, idempotencyKey, content, thread.getId(), humanMsgId, humanSeq,
 				agentMsgId, agentSeq));

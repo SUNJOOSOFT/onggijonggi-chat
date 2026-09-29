@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -30,7 +31,8 @@ import java.util.UUID;
  * @param seq 방 안에서의 순서. 방 워커가 직렬로 꺼내므로 방송 순서와 일치한다
  * @param from 작성자의 Keycloak subject
  * @param fromDisplayName 작성자의 표시 이름
+ * @param attachments 이 발화에 실린 첨부. 없으면 빈 배열이다. 이력(MsgItem)의 같은 필드와 짝이다
  */
 public record ChatMessageFrame(UUID threadId, UUID msgId, String clientMsgId, UUID turnId, long seq, String from,
-		String fromDisplayName, String content) implements WsFrame {
+		String fromDisplayName, String content, List<MsgFileView> attachments) implements WsFrame {
 }

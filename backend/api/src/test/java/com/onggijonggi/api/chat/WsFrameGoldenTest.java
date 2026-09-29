@@ -54,6 +54,8 @@ class WsFrameGoldenTest {
 
 	private static final UUID TURN_ID = UUID.fromString("44444444-4444-4444-8444-444444444444");
 
+	private static final UUID FILE_ID = UUID.fromString("55555555-5555-4555-8555-555555555555");
+
 	private final ObjectMapper objectMapper = new JsonMapper();
 
 	/** 서버 → 클라이언트 프레임의 예시. 값은 nullable 필드도 채워 둔다 — 프론트가 문자열 자리를 검증하게. */
@@ -63,7 +65,8 @@ class WsFrameGoldenTest {
 		samples.put("chat.answer", new ChatAnswerFrame(THREAD_ID, MSG_ID, TURN_ID, "gemini-3.6-flash", 7L, "안녕",
 				List.of(new Citation("doc-001", "제목", "발췌", 0.91)), false, ChatAnswerStatus.STREAMING));
 		samples.put("chat.message", new ChatMessageFrame(THREAD_ID, MSG_ID, CLIENT_MSG_ID, TURN_ID, 3L,
-				participant.subject(), participant.displayName(), "@AI 요약해줘"));
+				participant.subject(), participant.displayName(), "@AI 요약해줘",
+				List.of(new MsgFileView(FILE_ID, "보고서.pdf"))));
 		samples.put("presence.join", new PresenceJoinFrame(THREAD_ID, participant.subject(),
 				participant.displayName()));
 		samples.put("presence.leave", new PresenceLeaveFrame(THREAD_ID, participant.subject(),
@@ -82,7 +85,8 @@ class WsFrameGoldenTest {
 	/** 클라이언트 → 서버 프레임의 예시. 선택 필드도 채워 둔다 — 프론트가 필드 이름을 검증하게. */
 	private static Map<String, InboundFrame> inboundSamples() {
 		Map<String, InboundFrame> samples = new LinkedHashMap<>();
-		samples.put("chat.message", new InboundChatMessage(THREAD_ID, "@AI 요약해줘", "gemini-3.6-flash", CLIENT_MSG_ID, TURN_ID));
+		samples.put("chat.message", new InboundChatMessage(THREAD_ID, "@AI 요약해줘", "gemini-3.6-flash", CLIENT_MSG_ID,
+				TURN_ID, List.of(FILE_ID)));
 		samples.put("chat.cancel", new InboundChatCancel(THREAD_ID, TURN_ID));
 		samples.put("room.subscribe", new InboundRoomSubscribe(THREAD_ID));
 		samples.put("room.unsubscribe", new InboundRoomUnsubscribe(THREAD_ID));

@@ -40,6 +40,8 @@ class MsgPersistenceServiceTest {
 	private ThrRepository thrRepository;
 	@Mock
 	private ThrMbrRepository thrMbrRepository;
+	@Mock
+	private MsgFileService msgFileService;
 
 	private MsgPersistenceService service;
 
@@ -48,7 +50,7 @@ class MsgPersistenceServiceTest {
 
 	@BeforeEach
 	void setUp() {
-		service = new MsgPersistenceService(msgRepository, thrRepository, thrMbrRepository);
+		service = new MsgPersistenceService(msgRepository, thrRepository, thrMbrRepository, msgFileService);
 	}
 
 	@Test
@@ -60,7 +62,7 @@ class MsgPersistenceServiceTest {
 		when(msgRepository.save(any(Msg.class))).thenAnswer(invocation -> invocation.getArgument(0));
 
 		// seq는 호출부가 블록에서 미리 꺼내 넘긴다 — 이 서비스는 더 이상 채번하지 않는다(이슈 #190).
-		service.persistHumanMessageAndFetchContextBlocking(UUID.randomUUID(), 5L, thrId, userId, "hi", 20);
+		service.persistHumanMessageAndFetchContextBlocking(UUID.randomUUID(), 5L, thrId, userId, "hi", List.of(), 20);
 
 		InOrder order = inOrder(msgRepository);
 		order.verify(msgRepository).findByThrIdAndStatusOrderBySeqDesc(eq(thrId), eq(MsgStatus.COMPLETE),
@@ -93,7 +95,7 @@ class MsgPersistenceServiceTest {
 		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(thrId, userId, ThrMbrStatus.ACTIVE))
 				.thenReturn(Optional.empty());
 
-		Optional<Msg> saved = service.persistHumanMessageBlocking(UUID.randomUUID(), 5L, thrId, userId, "hi");
+		Optional<Msg> saved = service.persistHumanMessageBlocking(UUID.randomUUID(), 5L, thrId, userId, "hi", List.of());
 
 		assertThat(saved).isEmpty();
 	}

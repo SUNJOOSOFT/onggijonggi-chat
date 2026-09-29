@@ -2,6 +2,7 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.common.chat.domain.AthKind;
 import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.openai.errors.OpenAIServiceException;
@@ -194,7 +195,8 @@ public class ThreadMessageDispatcher {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(key.threadId(), key.roomGeneration(),
 					new ChatMessageFrame(command.threadId(), msgId, command.clientMsgId(), command.turnId(), seq,
-							command.fromSubject(), command.fromDisplayName(), command.content()))) {
+							command.fromSubject(), command.fromDisplayName(), command.content(),
+							command.fileViews()))) {
 				closeGeneration(key, state);
 				return;
 			}
@@ -214,7 +216,8 @@ public class ThreadMessageDispatcher {
 				? fetchContextOnlyBlocking(command.threadId())
 				: persistHumanMessageAndFetchContext(msgId, seq, command);
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
-				command.traceId(), command.fromSubject(), TurnRef.of(command.turnId(), command.connectionId()), command.model(), context,
+				msgId, command.files(), command.traceId(), command.fromSubject(),
+				TurnRef.of(command.turnId(), command.connectionId()), command.model(), context,
 				direct ? reserved : null, queued.terminalPersisted());
 		ActiveTurn turnToStart = null;
 		boolean admitted = false;
@@ -546,13 +549,14 @@ public class ThreadMessageDispatcher {
 		activeTurn.pendingMsgId.subscribe();
 
 		Disposable subscription = activeTurn.turn.context()
-				.flatMapMany(context -> {
+				.flatMap(context -> promptMessages(activeTurn.turn, context))
+				.flatMapMany(messages -> {
 					if (abandoned(activeTurn)) {
 						return Flux.<String>never();
 					}
 					return withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 							new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
-									buildPromptMessages(context, activeTurn.turn.prompt())))));
+									messages))));
 				})
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
@@ -593,14 +597,38 @@ public class ThreadMessageDispatcher {
 	}
 
 	/** 저장된 이력의 HUMAN/AGENT를 user/assistant로 매핑하고, 이번 멘션의 발화를 마지막에 붙인다. */
-	private static List<ChatMessage> buildPromptMessages(List<Msg> context, String prompt) {
+	/**
+	* 문맥 메시지에 붙은 첨부를 읽어 프롬프트를 만든다. 첨부를 못 읽으면 첨부 없이 계속한다 — 문맥 조회
+	* 실패를 빈 문맥으로 넘기는 것(fetchContextOnlyBlocking)과 같은 결이다.
+	*/
+	private Mono<List<ChatMessage>> promptMessages(PendingTurn turn, List<Msg> context) {
+		List<UUID> msgIds = context.stream().map(Msg::getId).toList();
+		return Mono.fromCallable(() -> msgPersistenceService.filesByMessageBlocking(msgIds))
+				.subscribeOn(Schedulers.boundedElastic())
+				.onErrorResume(e -> {
+					log.error("문맥 첨부 조회 실패 threadId={} traceId={}", turn.threadId(), turn.traceId(), e);
+					return Mono.just(Map.of());
+				})
+				.map(files -> buildPromptMessages(context, files, turn));
+	}
+
+	/**
+	* 이번 발화의 첨부는 turn.files()에서 붙인다 — COLLAB은 문맥을 이번 메시지 저장 전에 읽어(이슈 #100)
+	* 문맥에 이번 메시지가 없다. DIRECT는 이미 저장된 이번 메시지가 문맥에 들어 있어 그쪽에서 첨부가
+	* 붙으므로, 같은 파일을 두 번 싣지 않도록 여기서는 뺀다.
+	*/
+	private static List<ChatMessage> buildPromptMessages(List<Msg> context, Map<UUID, List<MsgFile>> files,
+			PendingTurn turn) {
 		List<ChatMessage> messages = new ArrayList<>(context.size() + 1);
+		boolean humanInContext = false;
 		for (Msg msg : context) {
 			String role = msg.getAthKind() == AthKind.HUMAN ? "user"
 					: msg.getAthKind() == AthKind.SYSTEM ? "system" : "assistant";
-			messages.add(new ChatMessage(role, msg.getContent()));
+			messages.add(new ChatMessage(role, MsgFileService.withFiles(msg.getContent(), files.get(msg.getId()))));
+			humanInContext |= msg.getId().equals(turn.humanMsgId());
 		}
-		messages.add(new ChatMessage("user", prompt));
+		messages.add(new ChatMessage("user",
+				humanInContext ? turn.prompt() : MsgFileService.withFiles(turn.prompt(), turn.files())));
 		return messages;
 	}
 
@@ -784,7 +812,7 @@ public class ThreadMessageDispatcher {
 	*/
 	private void persistHumanMessageAsync(UUID msgId, long seq, ChatMessageCommand command) {
 		Mono.fromCallable(() -> msgPersistenceService.persistHumanMessageBlocking(msgId, seq,
-					command.threadId(), command.from(), command.content()))
+					command.threadId(), command.from(), command.content(), command.fileIds()))
 				.subscribeOn(Schedulers.boundedElastic())
 				.doOnError(e -> log.error("HUMAN 메시지 저장 실패 threadId={} traceId={}", command.threadId(),
 						command.traceId(), e))
@@ -805,7 +833,8 @@ public class ThreadMessageDispatcher {
 	private Mono<List<Msg>> persistHumanMessageAndFetchContext(UUID msgId, long seq, ChatMessageCommand command) {
 		return Mono
 				.fromCallable(() -> msgPersistenceService.persistHumanMessageAndFetchContextBlocking(
-						msgId, seq, command.threadId(), command.from(), command.content(), maxContextMessages))
+						msgId, seq, command.threadId(), command.from(), command.content(), command.fileIds(),
+						maxContextMessages))
 				.subscribeOn(Schedulers.boundedElastic())
 				.onErrorResume(e -> {
 					log.error("문맥 조회 및 HUMAN 메시지 저장 실패 threadId={} traceId={}", command.threadId(),
@@ -914,9 +943,11 @@ public class ThreadMessageDispatcher {
 
 	/**
 	* ref는 취소 지목 키다(이슈 #160). model이 null이면 서버 기본값을 쓴다. reservedTurn은 DIRECT만
-	* 채운다 — `DirectChatTurnService`가 이미 만든 PENDING AGENT를 가리킨다(이슈 #162).
+	* 채운다 — `DirectChatTurnService`가 이미 만든 PENDING AGENT를 가리킨다(이슈 #162). humanMsgId·files는
+	* 이 턴을 부른 발화의 msg id와 첨부다 — 프롬프트에 첨부를 붙일 때 쓴다.
 	*/
-	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, String traceId, String fromSubject, TurnRef ref,
+	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, UUID humanMsgId,
+			List<MsgFile> files, String traceId, String fromSubject, TurnRef ref,
 			String model, Mono<List<Msg>> context, ChatMessageCommand.ReservedTurn reservedTurn,
 			AtomicBoolean terminalPersisted) {
 

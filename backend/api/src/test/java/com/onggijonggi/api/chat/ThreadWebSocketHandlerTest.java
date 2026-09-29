@@ -475,7 +475,7 @@ class ThreadWebSocketHandlerTest {
 			roomSessionRegistry.evict(evictedRoom, "evicted-ws-user");
 			roomSessionRegistry.broadcastIfCurrent(evictedRoom, observer.generation(),
 					new ChatMessageFrame(evictedRoom, UUID.randomUUID(), null, null, 0L,
-							"observer", "Observer", "after revocation"));
+							"observer", "Observer", "after revocation", List.of()));
 			outbound.tryEmitNext(WsTestExchange.chatMessageFrame(keptRoom, "after eviction"));
 
 			assertThat(echoed.await(5, TimeUnit.SECONDS)).isTrue();

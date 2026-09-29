@@ -2,6 +2,7 @@ package com.onggijonggi.api.common;
 
 import com.onggijonggi.api.chat.IdempotencyKeyConflictException;
 import com.onggijonggi.api.chat.InviteeOutsideWorkspaceException;
+import com.onggijonggi.api.chat.MsgFileRejectedException;
 import com.openai.errors.OpenAIServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -85,6 +86,13 @@ public class GlobalExceptionHandler {
 			ServerWebExchange exchange) {
 		return ResponseEntity.status(HttpStatus.CONFLICT)
 				.body(ErrorResponse.of("INVITEE_NO_WORKSPACE_ACCESS", ex.getMessage(), traceId(exchange)));
+	}
+
+	/** 첨부 파일을 받을 수 없는 경우 — 형식·크기·내용 없음. 사용자가 고칠 수 있는 이유라 문구를 그대로 보인다. */
+	@ExceptionHandler(MsgFileRejectedException.class)
+	public ResponseEntity<ErrorResponse> handleMsgFileRejected(MsgFileRejectedException ex, ServerWebExchange exchange) {
+		return ResponseEntity.status(ex.getStatus())
+				.body(ErrorResponse.of(ex.getCode(), ex.getMessage(), traceId(exchange)));
 	}
 
 	/** ThrMbr.ver(이슈 #137) 같은 낙관적 잠금 필드가 읽은 뒤 다른 트랜잭션에 덮어써졌을 때. 같은
