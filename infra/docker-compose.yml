@@ -162,6 +162,33 @@ services:
     networks:
       - app-net
 
+  elasticsearch:
+    build:
+      context: ./elasticsearch
+    image: ogjg-chat/elasticsearch-nori:local
+    container_name: infra-elasticsearch
+    # RAG 검색용. 메모리를 많이 써서 .env에 COMPOSE_PROFILES=elasticsearch 를 넣어야 켜진다.
+    profiles:
+      - elasticsearch
+    restart: unless-stopped
+    # 보안(인증·TLS)을 끈 채라 호스트의 127.0.0.1에만 연다 — 로컬 개발에서 bff가 localhost:9200으로 붙는다.
+    ports:
+      - "127.0.0.1:9200:9200"
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms${ES_HEAP:-1g} -Xmx${ES_HEAP:-1g}
+    volumes:
+      - elasticsearch-data:/usr/share/elasticsearch/data
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf 'http://localhost:9200/_cluster/health?wait_for_status=yellow&timeout=5s' || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    networks:
+      - app-net
+
   bff:
     build:
       context: ../backend
@@ -343,6 +370,7 @@ networks:
 volumes:
   postgres-data:
     driver: local
+  elasticsearch-data:
   caddy_data:
   caddy_config:
   document-worker-seaweed-volume:
