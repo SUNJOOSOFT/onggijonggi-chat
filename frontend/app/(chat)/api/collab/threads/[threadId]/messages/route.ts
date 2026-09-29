@@ -25,6 +25,7 @@ const MESSAGES: ThreadMessageItem[] = [
     authorDisplayName: '동료 목업 사용자',
     createdAt: '2026-09-10T01:00:00Z',
     completedAt: '2026-09-10T01:00:00Z',
+    attachments: [],
   },
   {
     id: 'mock-msg-2',
@@ -36,6 +37,7 @@ const MESSAGES: ThreadMessageItem[] = [
     authorDisplayName: '나',
     createdAt: '2026-09-10T01:01:00Z',
     completedAt: '2026-09-10T01:01:00Z',
+    attachments: [],
   },
   {
     id: 'mock-msg-3',
@@ -47,6 +49,7 @@ const MESSAGES: ThreadMessageItem[] = [
     authorDisplayName: null,
     createdAt: '2026-09-10T01:01:02Z',
     completedAt: '2026-09-10T01:01:09Z',
+    attachments: [],
   },
 ];
 

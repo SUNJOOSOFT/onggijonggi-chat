@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
 import type { ThreadMessageItem } from '@/lib/api/thread-history';
-import type { PresenceParticipant, WsFrame } from '@/lib/transport/frames';
+import type {
+  MessageAttachment,
+  PresenceParticipant,
+  WsFrame,
+} from '@/lib/transport/frames';
 import {
   type RoomMessage,
   type RoomState,
@@ -45,6 +49,7 @@ function say(
   content: string,
   msgId?: string,
   seq?: number,
+  attachments: MessageAttachment[] = [],
 ): WsFrame {
   frameCounter += 1;
   return {
@@ -57,6 +62,7 @@ function say(
     from,
     fromDisplayName: `${from} 님`,
     content,
+    attachments,
   };
 }
 
@@ -208,6 +214,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
         turnId: null,
         citations: [],
         restrictedResultsOmitted: false,
+        attachments: [],
       },
       // 입퇴장 줄 번호는 서버 msgId를 쓰는 메시지와 카운터를 나눠 쓰지 않는다(이슈 #190).
       { id: 'm2', event: 'leave', participant: person('sujin') },
@@ -258,6 +265,7 @@ describe('applyFrame - chat.message', () => {
         turnId: null,
         citations: [],
         restrictedResultsOmitted: false,
+        attachments: [],
       },
     ]);
   });
@@ -577,6 +585,7 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
     authorDisplayName: 'sujin 님',
     createdAt: '2026-09-10T01:00:00Z',
     completedAt: '2026-09-10T01:00:00Z',
+    attachments: [],
     ...overrides,
   });
 
@@ -660,6 +669,22 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
     expect(state.messages).toHaveLength(2);
     expect(isPresenceNotice(state.messages[1])).toBe(true);
   });
+
+  it('첨부만 보낸 메시지는 본문이 비어도 첨부와 함께 남는다', () => {
+    const attachment = { id: 'f1', fileName: '규정.pdf' };
+    const state = applyHistory(initialRoomState, [
+      historyItem('a', 0, '', { attachments: [attachment] }),
+    ]);
+    expect(chats(state).map((m) => m.attachments)).toEqual([[attachment]]);
+  });
+});
+
+describe('applyFrame - 첨부', () => {
+  it('chat.message의 첨부를 메시지에 남긴다', () => {
+    const attachment = { id: 'f1', fileName: '규정.pdf' };
+    const state = fold([say('sujin', '요약해줘', 'm1', 1, [attachment])]);
+    expect(chats(state)[0].attachments).toEqual([attachment]);
+  });
 });
 
 describe('재접속 따라잡기 커서(#190)', () => {
@@ -678,6 +703,7 @@ describe('재접속 따라잡기 커서(#190)', () => {
     authorDisplayName: 'sujin 님',
     createdAt: '2026-09-10T01:00:00Z',
     completedAt: '2026-09-10T01:00:00Z',
+    attachments: [],
     ...overrides,
   });
 

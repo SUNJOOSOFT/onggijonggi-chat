@@ -99,11 +99,14 @@ export interface Room {
    * 잃은 재시도가 서버 idempotency(DirectChatTurnService, DIRECT 전용)에 걸리려면 clientMsgId가
    * 원래 시도와 같아야 한다. turnId는 재시도여도 항상 새로 만든다 — 재접속 응답은 이 새
    * turnId로 이 화면에만 유니캐스트된다.
+   *
+   * attachmentIds는 미리 올려 둔 첨부다(lib/api/attachments.ts). 비었으면 싣지 않는다.
    */
   send: (
     content: string,
     model?: string,
     reuseClientMsgId?: string,
+    attachmentIds?: string[],
   ) => { clientMsgId: string; turnId: string } | null;
   /** 이 화면(이 커넥션)에서 보낸 발화가 부른 @AI 턴을 멈춘다(이슈 #160). 실제로 멈췄는지는
    * chat.answer(done)나 chat.queued(cancelled)로 온다 — 이미 끝난 턴이면 아무것도 오지 않는다.
@@ -347,7 +350,12 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
   const myTurnIdsRef = useRef<Set<string>>(new Set());
 
   const send = useCallback(
-    (content: string, model?: string, reuseClientMsgId?: string) => {
+    (
+      content: string,
+      model?: string,
+      reuseClientMsgId?: string,
+      attachmentIds?: string[],
+    ) => {
       const ids = {
         clientMsgId: reuseClientMsgId ?? generateUUID(),
         turnId: generateUUID(),
@@ -358,6 +366,7 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
         content,
         model,
         ...ids,
+        ...(attachmentIds && attachmentIds.length > 0 ? { attachmentIds } : {}),
       });
       if (!sent) return null;
       myTurnIdsRef.current.add(ids.turnId);

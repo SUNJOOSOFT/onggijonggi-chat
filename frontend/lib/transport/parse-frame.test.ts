@@ -140,6 +140,7 @@ describe('parseFrame', () => {
       from: 'u1',
       fromDisplayName: '주성민',
       content: '안녕하세요',
+      attachments: [{ id: 'f1', fileName: '규정.pdf' }],
     });
     expect(frame).toEqual({
       type: 'chat.message',
@@ -151,6 +152,7 @@ describe('parseFrame', () => {
       from: 'u1',
       fromDisplayName: '주성민',
       content: '안녕하세요',
+      attachments: [{ id: 'f1', fileName: '규정.pdf' }],
     });
   });
 
@@ -443,6 +445,7 @@ describe('parseFrame — system.notice(#29)', () => {
       from: 'u1',
       fromDisplayName: '주성민',
       content: '안녕하세요',
+      attachments: [],
     };
     expect(parseFrame({ ...message, clientMsgId: 'c1' })).toBeNull();
     expect(parseFrame({ ...message, clientMsgId: 'c1', turnId: 't1' })).toEqual(

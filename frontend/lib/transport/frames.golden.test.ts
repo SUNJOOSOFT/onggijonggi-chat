@@ -62,6 +62,7 @@ const INBOUND_SAMPLES: {
     model: '',
     clientMsgId: '',
     turnId: '',
+    attachmentIds: [],
   },
   'chat.cancel': { type: 'chat.cancel', threadId: '', turnId: '' },
   'room.subscribe': { type: 'room.subscribe', threadId: '' },

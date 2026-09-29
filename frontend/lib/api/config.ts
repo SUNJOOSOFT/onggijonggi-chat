@@ -73,6 +73,9 @@ export const WORKSPACES_PATH = '/api/workspaces';
 export const PERMISSIONS_ADMIN_PATH = '/api/platform/rbac/admin';
 export const MEMBERS_IMPORT_PATH = '/api/platform/rbac/members/import';
 
+/** 채팅 첨부 업로드. 방과 묶지 않는다 — 1:1 첫 발화는 방이 아직 없어서다(MsgFileController). */
+export const ATTACHMENTS_PATH = '/api/attachments';
+
 /** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3).
  * 경로에 방이 없다 — 커넥션 하나가 여러 방을 나르고, 방은 room.subscribe 프레임으로 건다(이슈 #161). */
 export const WS_PATH = '/api/ws';

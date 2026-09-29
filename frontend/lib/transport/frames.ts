@@ -51,6 +51,15 @@ export interface ChatAnswerFrame {
   status: 'streaming' | 'done' | 'cancelled' | 'denied';
 }
 
+/**
+ * 발화에 실린 첨부 파일 하나(백엔드 MsgFileView). 화면에는 이름만 보인다 — 서버가 뽑은 텍스트는
+ * AI 문맥에만 쓰이고 내려오지 않는다. 업로드 응답·chat.message·이력이 같은 모양이다.
+ */
+export interface MessageAttachment {
+  id: string;
+  fileName: string;
+}
+
 /** 참여자 간 일반 대화 메시지. AI 호출 라우팅 정책은 이슈 #13에서 결정 중. */
 export interface ChatMessageFrame {
   type: 'chat.message';
@@ -72,6 +81,8 @@ export interface ChatMessageFrame {
   /** 작성자의 표시 이름. 서버가 발신 시점의 JWT claim에서 읽어 실어 보낸다. */
   fromDisplayName: string;
   content: string;
+  /** 이 발화에 실린 첨부. 없으면 빈 배열이다. 첨부가 있으면 content가 비어 있을 수 있다. */
+  attachments: MessageAttachment[];
 }
 
 /**
@@ -243,6 +254,8 @@ export type WsFrameType = WsFrame['type'];
  *   에코와 그 턴의 chat.answer·chat.queued에 돌려준다. 에코 전에도 이 값으로 취소할 수 있다.
  *   턴을 만들지는 서버가 정하므로 모든 발화에 싣는다.
  * model은 턴에 쓸 게이트웨이 모델 별칭이고 생략하면 서버 기본값을 쓴다.
+ * attachmentIds는 POST /api/attachments로 미리 올린 첨부다 — 본인이 올렸고 아직 다른 발화에 실리지
+ * 않은 것만 받는다. 첨부가 있으면 content가 비어도 된다.
  * threadId는 말할 방이다(이슈 #161) — 이 커넥션이 구독한 방이어야 하고, 아니면 NOT_SUBSCRIBED가 온다.
  */
 export interface ClientChatMessageFrame {
@@ -252,6 +265,7 @@ export interface ClientChatMessageFrame {
   model?: string;
   clientMsgId?: string;
   turnId?: string;
+  attachmentIds?: string[];
 }
 
 /** 진행 중이거나 기다리는 @AI 턴을 멈춘다. 그 턴을 부른 발화의 turnId로 가리킨다. 서버는 이

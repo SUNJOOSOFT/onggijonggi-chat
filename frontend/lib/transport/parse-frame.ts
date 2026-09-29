@@ -42,6 +42,7 @@ const chatMessageFrameSchema = z.object({
   from: z.string(),
   fromDisplayName: z.string(),
   content: z.string(),
+  attachments: z.array(z.object({ id: z.string(), fileName: z.string() })),
 });
 
 /** 사람 하나를 가리키는 값(이슈 #130). presence 계열이 공유한다. */

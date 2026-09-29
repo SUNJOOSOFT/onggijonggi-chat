@@ -16,9 +16,11 @@
 import { useRef, useState } from 'react';
 import { toast } from 'sonner';
 
+import { AttachButton, PendingAttachments } from '@/components/attachments';
 import { ArrowUpIcon, StopIcon } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { useAttachments } from '@/lib/chat/use-attachments';
 import { AI_MENTION, mentionsAi } from '@/lib/collab/mention';
 
 export function CollabInput({
@@ -28,27 +30,38 @@ export function CollabInput({
 }: {
   /** 연결이 열려 있는지. 닫혀 있으면 보내기를 막는다. */
   canSend: boolean;
-  /** 실제 전송. 끊겨 있어 못 보냈으면 false를 돌려준다(큐잉하지 않는다). */
-  onSend: (content: string) => boolean;
+  /** 실제 전송. 끊겨 있어 못 보냈으면 false를 돌려준다(큐잉하지 않는다). attachmentIds는 다 올라간 첨부다. */
+  onSend: (content: string, attachmentIds: string[]) => boolean;
   /** 내가 부른 AI 답변이 흐르는 동안만 주어진다. 있으면 보내기 대신 중지를 그린다. */
   onCancel?: () => void;
 }) {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const attachments = useAttachments();
   const callsAi = mentionsAi(input);
+  // 첨부만 있어도 보낼 수 있다(AI는 부르지 않는다 — 나중에 @AI로 물으면 문맥으로 읽는다).
+  // 올라가는 중인 첨부가 있으면 기다린다 — 지금 보내면 그 파일이 빠진다.
+  const hasContent = input.trim() !== '' || attachments.uploaded.length > 0;
+  const canSubmit = hasContent && !attachments.uploading;
 
   const submit = () => {
     // 공백뿐인 입력만 막고, 정상 content의 앞뒤 공백은 지우지 않고 원문 그대로 보낸다 —
     // 방에는 원문을 그대로 방송해야(#17 프로토콜) 내가 보낸 것과 남이 보는 것이 정확히
     // 같아진다. trim()은 여기 빈 값 판정에만 쓰고 보내는 값에는 적용하지 않는다.
-    if (input.trim() === '') return;
+    if (!canSubmit) return;
 
-    if (!onSend(input)) {
+    if (
+      !onSend(
+        input,
+        attachments.uploaded.map((attachment) => attachment.id),
+      )
+    ) {
       // 재연결될 때까지 쌓아 두지 않는다 — 뒤늦게 나가면 대화 순서가 어긋난다(ws-connection.ts).
       toast.error('연결이 끊겨 보내지 못했습니다. 다시 연결되면 보내주세요.');
       return;
     }
     setInput('');
+    attachments.clear();
   };
 
   /** 입력창 맨 앞에 멘션을 넣어준다 — 표기를 외우지 않아도 AI를 부를 수 있게 하는 안내의 일부다.
@@ -79,6 +92,11 @@ export function CollabInput({
         </Button>
       </div>
 
+      <PendingAttachments
+        items={attachments.items}
+        onRemove={attachments.remove}
+      />
+
       <div className="relative w-full">
         <Textarea
           ref={textareaRef}
@@ -105,6 +123,10 @@ export function CollabInput({
           }}
         />
 
+        <div className="absolute bottom-0 left-0 flex w-fit flex-row justify-start p-2">
+          <AttachButton onPick={attachments.add} disabled={!canSend} />
+        </div>
+
         <div className="absolute bottom-0 right-0 flex w-fit flex-row justify-end p-2">
           {/* 답변이 흐르는 동안에는 보내기 자리를 중지가 대신한다. 아이콘·모양은 1:1 입력창의
               StopButton/SendButton과 같은 값을 쓴다 — 두 화면을 오갈 때 같은 자리에 같은 것이
@@ -129,7 +151,7 @@ export function CollabInput({
               className="h-fit rounded-full border p-1.5 dark:border-zinc-600"
               aria-label="메시지 보내기"
               onClick={submit}
-              disabled={!canSend || input.trim() === ''}
+              disabled={!canSend || !canSubmit}
             >
               <ArrowUpIcon size={14} />
             </Button>

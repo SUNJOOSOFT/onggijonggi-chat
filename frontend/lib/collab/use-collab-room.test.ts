@@ -58,6 +58,7 @@ function item(id: string, seq: number): ThreadMessageItem {
     authorDisplayName: '사용자',
     createdAt: new Date(seq * 1000).toISOString(),
     completedAt: new Date(seq * 1000).toISOString(),
+    attachments: [],
   };
 }
 

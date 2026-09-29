@@ -33,6 +33,7 @@ import {
 import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import { type RoomMessage, isPresenceNotice } from '@/lib/chat/room-state';
 import { useRoom } from '@/lib/chat/use-room';
+import type { MessageAttachment } from '@/lib/transport/frames';
 import {
   EMPTY_FAILED_MESSAGE_IDS,
   useChatSessionsHydrated,
@@ -180,6 +181,7 @@ function ChatSession({
         id: message.id,
         role: message.from === null ? 'assistant' : 'user',
         content: message.content,
+        attachments: message.attachments,
       })),
     [roomMessages],
   );
@@ -292,8 +294,17 @@ function ChatSession({
   );
 
   const sendTurn = useCallback(
-    (content: string, reuseClientMsgId?: string) => {
-      const ids = send(content, modelIdRef.current, reuseClientMsgId);
+    (
+      content: string,
+      reuseClientMsgId?: string,
+      attachments: MessageAttachment[] = [],
+    ) => {
+      const ids = send(
+        content,
+        modelIdRef.current,
+        reuseClientMsgId,
+        attachments.map((attachment) => attachment.id),
+      );
       if (ids === null) {
         toast.error('연결이 끊겨 있어 메시지를 보내지 못했습니다.');
         return;
@@ -316,10 +327,17 @@ function ChatSession({
       .reverse()
       .find((message) => message.role === 'user');
     if (!latestUser) return;
+    if (latestUser.content.trim() === '') {
+      // 첨부만 보낸 메시지다 — 첨부를 다시 실을 수 없어 본문 없이 보내면 서버가 거절한다.
+      toast.error('파일에 대해 물어볼 내용을 입력해 다시 보내 주세요.');
+      return;
+    }
     const reuseClientMsgId =
       lastSentRef.current?.content === latestUser.content
         ? lastSentRef.current.clientMsgId
         : undefined;
+    // 첨부는 다시 싣지 않는다. 이 메시지는 이미 저장돼 첨부도 거기 붙어 있어(서버가 이미 쓴 첨부는
+    // 거절한다) AI는 문맥의 그 메시지로 파일을 읽는다.
     sendTurn(latestUser.content, reuseClientMsgId);
   }, [renderedMessages, sendTurn]);
 
@@ -362,16 +380,22 @@ function ChatSession({
   // 입력창이 완성한 발화 하나를 받아 보낸다. 세션은 첫 메시지를 실제로 보낼 때만 스토어에
   // 만든다(draft 화면 새로고침으로 빈 세션이 쌓이지 않도록).
   const handleSend = useCallback(
-    (content: string) => {
+    (content: string, attachments: MessageAttachment[]) => {
       const { sessions, createSession, applyFirstMessageTitle } =
         useChatSessionsStore.getState();
       if (!sessions.some((session) => session.id === id)) {
         createSession({ id, modelId: modelIdRef.current });
       }
       // 서버도 첫 발화로 제목을 정하지만 사이드바는 마운트당 한 번만 서버 목록을 읽는다 —
-      // 여기서 정해 두지 않으면 새 대화가 새로고침 전까지 "새 대화"로 남는다.
-      applyFirstMessageTitle(id, content);
-      sendTurn(content);
+      // 여기서 정해 두지 않으면 새 대화가 새로고침 전까지 "새 대화"로 남는다. 첨부만 보냈으면
+      // 서버와 같이 첫 파일 이름을 제목으로 쓴다.
+      applyFirstMessageTitle(
+        id,
+        content.trim() === '' && attachments.length > 0
+          ? attachments[0].fileName
+          : content,
+      );
+      sendTurn(content, undefined, attachments);
     },
     [id, sendTurn],
   );

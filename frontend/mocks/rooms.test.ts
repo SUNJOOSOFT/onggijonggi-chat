@@ -47,6 +47,7 @@ function say(content: string): ChatMessageFrame {
     from: 'alice',
     fromDisplayName: '보낸 사람',
     content,
+    attachments: [],
   };
 }
 

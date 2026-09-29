@@ -23,6 +23,7 @@ import { friendlyMessageForCode } from '@/lib/api/errors';
 import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import type {
   ChatAnswerFrame,
+  MessageAttachment,
   PresenceParticipant,
   SystemNoticeFrame,
   WsFrame,
@@ -77,6 +78,8 @@ export interface RoomMessage {
   turnId: string | null;
   citations: Citation[];
   restrictedResultsOmitted: boolean;
+  /** 사람 메시지에 실린 첨부. 이름만 든다. AI 답변은 언제나 빈 배열이다. */
+  attachments: MessageAttachment[];
 }
 
 /**
@@ -209,6 +212,7 @@ function appendMessage(
   content: string,
   streaming: boolean,
   turnId: string | null,
+  attachments: MessageAttachment[] = [],
 ): RoomState {
   return {
     ...state,
@@ -224,6 +228,7 @@ function appendMessage(
         turnId,
         citations: [],
         restrictedResultsOmitted: false,
+        attachments,
       },
     ],
     // 실시간으로 받은 것도 커서를 밀어준다 — 끊겼을 때 어디서부터 따라잡을지가 이 값이다.
@@ -312,8 +317,12 @@ export function applyHistory(
     // 빈 본문은 아직 채워지지 않은 예약 행(PENDING)이라 그리지 않는다. 다만 중지·거부로 끝난
     // 답변은 비는 것이 정상이고 그 사실 자체가 보여야 할 내용이라 예외로 남긴다 — 여기서
     // 걸러 버리면 방을 다시 열었을 때 "중지됨"이 조용히 사라진다.
+    // 첨부만 보낸 사람 메시지도 본문이 비지만 보여야 할 내용이 있다.
     .filter(
-      (item) => item.content !== '' || terminalStatusOf(item.status) !== null,
+      (item) =>
+        item.content !== '' ||
+        terminalStatusOf(item.status) !== null ||
+        item.attachments.length > 0,
     )
     .sort((left, right) => left.seq - right.seq)
     .map(toRoomMessage);
@@ -350,6 +359,7 @@ function toRoomMessage(item: ThreadMessageItem): RoomMessage {
     turnId: null,
     citations: [],
     restrictedResultsOmitted: false,
+    attachments: item.attachments,
   };
 }
 
@@ -528,6 +538,7 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         frame.content,
         false,
         null,
+        frame.attachments,
       );
 
     case 'chat.answer': {

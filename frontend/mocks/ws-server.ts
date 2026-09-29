@@ -370,6 +370,8 @@ const server = Bun.serve<SocketData>({
         from: subject,
         fromDisplayName: displayName,
         content,
+        // 목업에는 업로드 경로가 없어 첨부가 실릴 일이 없다.
+        attachments: [],
       });
 
       scheduleMockNotice(threadId, generation, content);

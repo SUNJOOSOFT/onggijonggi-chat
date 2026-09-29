@@ -4,6 +4,7 @@
         prefetch가 아닌 이 경로와 afterSeq catch-up을 정본으로 사용한다.
  *********************************************************/
 
+import type { MessageAttachment } from '@/lib/transport/frames';
 import { bffUrl, threadMessagesPath } from './config';
 import { authFetch } from './http';
 
@@ -26,6 +27,8 @@ export interface ThreadMessageItem {
   authorDisplayName: string | null;
   createdAt: string;
   completedAt: string | null;
+  /** HUMAN 메시지에 실린 첨부. 없으면 빈 배열이다. WS chat.message의 같은 필드와 짝이다. */
+  attachments: MessageAttachment[];
 }
 
 export async function fetchThreadMessages(
