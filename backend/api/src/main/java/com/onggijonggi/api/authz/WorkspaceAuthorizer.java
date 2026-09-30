@@ -75,6 +75,17 @@ public class WorkspaceAuthorizer {
 		return authorize(subject, workspaceNodeId, CasbinPolicy.MANAGE);
 	}
 
+	/**
+	 * 검색 결과를 워크스페이스 경로로 거를 때 쓴다 — 판정이 꺼져 있으면 {@link AccessibleNodePaths#noRestriction()}를
+	 * 돌려줘 호출부가 필터를 아예 안 걸게 한다. Tenant 안의 ACTIVE 노드마다 VIEW를 묻는 방식이라, 노드 수가 많아지면
+	 * 비용이 늘어난다 — 지금은 노드 수가 문서 수보다 훨씬 적을 것으로 보고 이 모양을 쓴다.
+	 */
+	public Mono<AccessibleNodePaths> accessibleNodePaths(String subject, UUID tenantId) {
+		if (!rbacProperties.isEnforce()) return Mono.just(AccessibleNodePaths.noRestriction());
+		return Mono.fromCallable(() -> AccessibleNodePaths.restrictedTo(accessibleNodePathsBlocking(subject, tenantId)))
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
 	/** workspaceNodeId가 null(워크스페이스가 정해지지 않은 방)이면 판정이 켜져 있을 때 어떤 액션이든 거부다. */
 	private Mono<Boolean> authorize(String subject, UUID workspaceNodeId, String action) {
 		if (!rbacProperties.isEnforce()) return Mono.just(true);
@@ -86,15 +97,34 @@ public class WorkspaceAuthorizer {
 		Optional<WorkspaceNode> node = nodes.findById(workspaceNodeId);
 		if (node.isEmpty() || node.get().getStatus() != WorkspaceNodeStatus.ACTIVE) return false;
 		UUID tenantId = node.get().getTenantId();
-		if (policyRefresh.isBlocked(tenantId)) return false;
-		if (!isActiveTenant(tenantId)) return false;
-		List<OrgUnitMember> assignments = members.findBySubject(subject).stream()
-				.filter(assignment -> tenantId.equals(assignment.getTenantId()) && isActiveOrgUnit(assignment))
-				.toList();
-		if (assignments.isEmpty()) return false;
+		if (policyRefresh.isBlocked(tenantId) || !isActiveTenant(tenantId)) return false;
+		List<String> attributesList = activeAssignmentAttributes(subject, tenantId);
+		if (attributesList.isEmpty()) return false;
 		loader.ensureLoaded();
-		for (OrgUnitMember assignment : assignments) {
-			String attributes = attributes(assignment);
+		return passesAnyAssignment(attributesList, workspaceNodeId, action);
+	}
+
+	private List<UUID[]> accessibleNodePathsBlocking(String subject, UUID tenantId) {
+		if (policyRefresh.isBlocked(tenantId) || !isActiveTenant(tenantId)) return List.of();
+		List<String> attributesList = activeAssignmentAttributes(subject, tenantId);
+		if (attributesList.isEmpty()) return List.of();
+		loader.ensureLoaded();
+		return nodes.findByTenantId(tenantId).stream()
+				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
+				.filter(node -> passesAnyAssignment(attributesList, node.getId(), CasbinPolicy.VIEW))
+				.map(WorkspaceNode::getPath)
+				.toList();
+	}
+
+	private List<String> activeAssignmentAttributes(String subject, UUID tenantId) {
+		return members.findBySubject(subject).stream()
+				.filter(assignment -> tenantId.equals(assignment.getTenantId()) && isActiveOrgUnit(assignment))
+				.map(this::attributes)
+				.toList();
+	}
+
+	private boolean passesAnyAssignment(List<String> attributesList, UUID workspaceNodeId, String action) {
+		for (String attributes : attributesList) {
 			if (client.enforce(attributes, workspaceNodeId.toString(), action)) return true;
 			// 서버가 재시작해 규칙을 잃었으면 한 번만 다시 넣고 다시 묻는다. 그래도 안 되면 거부다.
 			if (!client.isLoaded()) {

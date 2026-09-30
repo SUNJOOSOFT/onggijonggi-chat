@@ -216,4 +216,44 @@ class WorkspaceAuthorizerTest {
 		verify(loader, times(1)).ensureLoaded();
 		verify(loader, never()).onReadiness(any());
 	}
+
+	@Test
+	void accessibleNodePathsIsUnrestrictedWhenEnforcementIsOff() {
+		rbac.setEnforce(false);
+
+		AccessibleNodePaths result = authorizer.accessibleNodePaths(SUBJECT, tenantId).block();
+
+		assertThat(result.unrestricted()).isTrue();
+		verifyNoInteractions(nodes, members, tenants, orgUnits, loader, client);
+	}
+
+	@Test
+	void accessibleNodePathsIsEmptyWithoutAnAssignment() {
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of());
+
+		AccessibleNodePaths result = authorizer.accessibleNodePaths(SUBJECT, tenantId).block();
+
+		assertThat(result.unrestricted()).isFalse();
+		assertThat(result.paths()).isEmpty();
+		verifyNoInteractions(nodes, client);
+	}
+
+	@Test
+	void accessibleNodePathsOnlyIncludesActiveNodesThatPassView() {
+		WorkspaceNode finance = WorkspaceNode.child(tenantId, root.getId(), root.getPath(), "fin", WorkspaceNodeKind.ORG, "재무팀",
+				WorkspaceNodeStatus.ACTIVE);
+		WorkspaceNode retired = WorkspaceNode.child(tenantId, root.getId(), root.getPath(), "retired", WorkspaceNodeKind.ORG, "폐쇄팀",
+				WorkspaceNodeStatus.INACTIVE);
+		when(nodes.findByTenantId(tenantId)).thenReturn(List.of(hr, finance, retired));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.K)));
+		when(client.enforce(anyString(), eq(hr.getId().toString()), eq(CasbinPolicy.VIEW))).thenReturn(true);
+		when(client.enforce(anyString(), eq(finance.getId().toString()), eq(CasbinPolicy.VIEW))).thenReturn(false);
+
+		AccessibleNodePaths result = authorizer.accessibleNodePaths(SUBJECT, tenantId).block();
+
+		assertThat(result.unrestricted()).isFalse();
+		assertThat(result.paths()).containsExactly(hr.getPath());
+		// INACTIVE 노드는 Casbin에 묻지도 않는다 — retired.getId()로는 enforce가 한 번도 안 불린다.
+		verify(client, times(0)).enforce(anyString(), eq(retired.getId().toString()), any());
+	}
 }
