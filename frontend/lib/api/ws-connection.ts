@@ -92,6 +92,14 @@ const MIN_USABLE_TOKEN_LIFE_FRACTION = 0.3;
  * 있으나, 연속이면 세션이 쓸 만한 토큰을 내주지 못하는 상태다 — #181 루프가 여기서 끝난다. */
 const SHORT_LIVED_TOKENS_BEFORE_REAUTH = 2;
 
+/** 선제 갱신(#188)이 freshToken()을 불렀는데 옛 토큰 그대로 돌아왔을 때, 한 번 더 물어보기
+ * 전에 기다리는 시간(이슈 #226). next-auth의 jwt 콜백이 리프레시를 시작은 했지만 아직 새
+ * 토큰으로 세션을 갱신하지 못한 채로 getSession()이 그 틈을 비집고 들어오면 옛 토큰이 그대로
+ * 나온다 — 그 순간 곧바로 포기하면 옛 소켓 하나로 만료 시각까지 버티다 서버가 4000으로 끊을
+ * 때까지 그 소켓으로 보낸 메시지가 유실될 수 있다. 리프레시 왕복(네트워크 1회)이 끝나기에
+ * 충분하면서도 만료 마진을 다 까먹지 않을 만큼 짧게 잡는다. */
+const SAME_TOKEN_RETRY_DELAY_MS = 200;
+
 /** "쓸 수 있는 토큰"의 최소 잔여 수명(초). 토큰 자기 수명(exp - iat)이 MIN_USABLE_TOKEN_LIFE_S
  * 보다 짧으면(극단 설정) 고정 하한 대신 그 수명의 MIN_USABLE_TOKEN_LIFE_FRACTION을 쓴다 —
  * 안 그러면 그런 설정에서 방금 발급된 정상 토큰마저 매번 근-만료로 오판한다. iat을 모르면
@@ -435,10 +443,17 @@ export function openWsConnection(
     if (!isOpen || closedByCaller) {
       return await pending;
     }
-    const newToken = await freshToken();
+    let newToken = await freshToken();
     if (newToken === null) return { opened: true, code: CLOSE_NORMAL };
     if (newToken === initialToken) {
-      return await pending;
+      // next-auth의 리프레시가 아직 안 끝난 채로 옛 토큰이 나왔을 수 있다(이슈 #226) — 곧바로
+      // 포기하지 않고 짧게 한 번 더 확인한다.
+      await realSleep(SAME_TOKEN_RETRY_DELAY_MS);
+      newToken = await freshToken();
+      if (newToken === null) return { opened: true, code: CLOSE_NORMAL };
+      if (newToken === initialToken) {
+        return await pending;
+      }
     }
 
     const oldSocket = socket;

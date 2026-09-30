@@ -579,6 +579,60 @@ describe('openWsConnection - [#188] 선제 토큰 갱신', () => {
     h.connection.close();
   });
 
+  it('갱신 시도에서 옛 토큰 그대로 받으면 곧바로 포기하지 않고 한 번 더 확인한다(이슈 #226)', async () => {
+    // next-auth의 리프레시가 아직 안 끝나 첫 재조회(call 1)가 옛 토큰을 그대로 돌려주는 경합을
+    // 흉내 낸다. 재시도(call 2)에서야 새 토큰이 나온다.
+    //
+    // jwtDueInMs(수명 6초)를 그대로 두 번 돌려주면, 이 재시도 로직과 무관한 #181 근-만료
+    // 가드(SHORT_LIVED_TOKENS_BEFORE_REAUTH)가 먼저 걸려 강제 재로그인으로 빠진다 — 잔여
+    // 수명이 그 가드의 하한(lifespan × 0.3)보다 매번 작기 때문이다. 수명을 3초로 낮춰 하한을
+    // 0.9초로 내리면, 남은 수명(margin 1초 안팎)이 하한보다 커서 그 가드를 안 건드리고 이
+    // 재시도 로직만 순수하게 검증할 수 있다.
+    function jwtDueInMsShortLifespan(delayMs: number): string {
+      const nowMs = Date.now();
+      const lifespanMs = 3_000;
+      const expiresAtMs = nowMs + 1_000 + delayMs;
+      const issuedAtMs = expiresAtMs - lifespanMs;
+      const payload = btoa(
+        JSON.stringify({ iat: issuedAtMs / 1000, exp: expiresAtMs / 1000 }),
+      );
+      return `h.${payload}.s`;
+    }
+    const dueToken = jwtDueInMsShortLifespan(150);
+    const healthy = jwtWithLife(300);
+    const h = harness(
+      [
+        { accessToken: dueToken },
+        { accessToken: dueToken },
+        { accessToken: healthy },
+      ],
+      { rooms: () => [THREAD_ID] },
+    );
+
+    const first = await h.waitForSocket(1);
+    first.open();
+
+    // 첫 재조회가 옛 토큰과 같아 재시도 대기 중인 동안에는 아직 새 소켓을 만들지 않는다.
+    await new Promise((resolve) => setTimeout(resolve, 200));
+    expect(h.sockets).toHaveLength(1);
+
+    const second = await h.waitForSocket(2);
+    expect(second.protocols).toEqual(['access_token', healthy]);
+    expect(first.closedWith).toBeNull();
+
+    second.open();
+    second.message(
+      JSON.stringify({
+        type: 'presence.snapshot',
+        threadId: THREAD_ID,
+        participants: [],
+      }),
+    );
+    await vi.waitFor(() => expect(first.closedWith).toBe(1000));
+
+    h.connection.close();
+  });
+
   it('구독한 방이 여럿이면 방마다 답(스냅샷이든 거부든)이 다 와야 옛 소켓을 닫는다', async () => {
     const h = harness(
       [{ accessToken: jwtDueInMs(150) }, { accessToken: jwtWithLife(300) }],
