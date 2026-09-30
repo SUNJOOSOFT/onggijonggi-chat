@@ -127,10 +127,11 @@ const PurePreviewMessage = ({
               <CitationsPanel state={citations} />
             )}
 
-            {/* 재전송 중엔 숨긴다 — 다시 실패하면 onError가 failed를 재설정한다. */}
+            {/* 재전송 중엔 숨긴다 — 다시 실패하면 onError가 failed를 재설정한다. 문구를
+             * "로그인이 풀려서"로 단정하지 않는다 — 연결 끊김(이슈 #226)도 같은 표시를 쓴다. */}
             {message.role === 'user' && failed && !isLoading && (
               <div className="flex flex-row gap-2 items-center text-sm text-destructive">
-                <span>로그인이 풀려 전송되지 않았어요.</span>
+                <span>메시지가 전송되지 않았습니다.</span>
                 <Button
                   variant="outline"
                   className="h-fit py-1 px-2"
