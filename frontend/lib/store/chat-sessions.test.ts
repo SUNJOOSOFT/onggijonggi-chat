@@ -66,13 +66,41 @@ describe('persist v0 → v1 — 임시 id로 굳은 메시지 사본을 버린�
     expect(sessions[0].modelId).toBe('gemma');
   });
 
-  it('이미 v1이면 손대지 않는다', () => {
-    const state = { sessions: [{ id: 'a', title: '안녕' }] };
-    expect(migrateChatSessions(state, 1)).toBe(state);
-  });
-
   it('sessions가 없는 저장본도 그대로 통과시킨다', () => {
     const state = { currentSessionId: null };
     expect(migrateChatSessions(state, 0)).toBe(state);
+  });
+});
+
+describe('persist v1 → v2 — failedMessageIds(번호만)를 failedMessages(번호+내용)로 바꾼다', () => {
+  it('내용을 복원할 수 없어 빈 배열로 시작한다', () => {
+    const migrated = migrateChatSessions(
+      {
+        sessions: [
+          {
+            id: 'a',
+            title: '안녕',
+            modelId: 'gemma',
+            createdAt: 1,
+            failedMessageIds: ['old-id'],
+            titleCustomized: false,
+          },
+        ],
+        currentSessionId: 'a',
+      },
+      1,
+    );
+
+    const sessions = (migrated as { sessions: Array<Record<string, unknown>> })
+      .sessions;
+    expect(sessions[0]).not.toHaveProperty('failedMessageIds');
+    expect(sessions[0].failedMessages).toEqual([]);
+    // 나머지 필드는 그대로 살아남아야 한다.
+    expect(sessions[0].title).toBe('안녕');
+  });
+
+  it('이미 v2면 손대지 않는다', () => {
+    const state = { sessions: [{ id: 'a', title: '안녕' }] };
+    expect(migrateChatSessions(state, 2)).toBe(state);
   });
 });

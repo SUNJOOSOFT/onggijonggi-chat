@@ -34,10 +34,11 @@ import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import { type RoomMessage, isPresenceNotice } from '@/lib/chat/room-state';
 import { useRoom } from '@/lib/chat/use-room';
 import {
-  EMPTY_FAILED_MESSAGE_IDS,
+  EMPTY_FAILED_MESSAGES,
   useChatSessionsHydrated,
   useChatSessionsStore,
 } from '@/lib/store/chat-sessions';
+import { generateUUID } from '@/lib/utils';
 import type { CitationsState } from './citations-panel';
 import { Messages } from './messages';
 import { MultimodalInput } from './multimodal-input';
@@ -174,14 +175,38 @@ function ChatSession({
     [room.state.messages],
   );
 
+  // EMPTY_FAILED_MESSAGES는 고정 참조 — 매번 새 배열을 반환하면 zustand가 값이 바뀐
+  // 것으로 보고 무한 리렌더로 이어진다.
+  const failedMessages = useChatSessionsStore(
+    (state) =>
+      state.sessions.find((session) => session.id === id)?.failedMessages ??
+      EMPTY_FAILED_MESSAGES,
+  );
+  const failedMessageIds = useMemo(
+    () => failedMessages.map((failed) => failed.id),
+    [failedMessages],
+  );
+
+  // 연결이 끊겨 서버로 아예 못 나간 메시지도 이력에 남긴다(이슈 #226) — 서버가 받은 적이
+  // 없어 msgId를 못 받으므로, roomMessages와 절대 안 겹치는 로컬 전용 id를 그대로 쓴다.
+  // 재조정(reconciliation)이 없으니 예전 낙관적 렌더링이 만들던 중복 버그(#232)와는
+  // 다르다 — 이 항목은 재전송해 성공하면 그 즉시 지워질 뿐, 나중에 다른 것으로 바뀌지 않는다.
   const renderedMessages = useMemo<RenderedMessage[]>(
-    () =>
-      roomMessages.map((message) => ({
-        id: message.id,
-        role: message.from === null ? 'assistant' : 'user',
-        content: message.content,
+    () => [
+      ...roomMessages.map(
+        (message): RenderedMessage => ({
+          id: message.id,
+          role: message.from === null ? 'assistant' : 'user',
+          content: message.content,
+        }),
+      ),
+      ...failedMessages.map((failed) => ({
+        id: failed.id,
+        role: 'user' as const,
+        content: failed.content,
       })),
-    [roomMessages],
+    ],
+    [roomMessages, failedMessages],
   );
 
   /**
@@ -295,13 +320,19 @@ function ChatSession({
     (content: string, reuseClientMsgId?: string) => {
       const ids = send(content, modelIdRef.current, reuseClientMsgId);
       if (ids === null) {
+        // 서버가 받은 적이 없어 재시도할 turnId·clientMsgId가 없다 — 그 자리에서 로컬
+        // 전용 id를 만들어 "미전송" 메시지로 이력에 남긴다(이슈 #226). 재전송은
+        // handleResendFailedMessage가 이 content로 sendTurn을 다시 부르는 것뿐이다.
+        useChatSessionsStore
+          .getState()
+          .markMessageFailed(id, `local-${generateUUID()}`, content);
         toast.error('연결이 끊겨 있어 메시지를 보내지 못했습니다.');
         return;
       }
       lastSentRef.current = { content, clientMsgId: ids.clientMsgId };
       setPendingTurnIds((previous) => [...previous, ids.turnId]);
     },
-    [send],
+    [send, id],
   );
 
   // room.state.error(아래)로만 불린다 — 그 프레임을 받았다는 것 자체가 같은 연결로 사람
@@ -340,23 +371,13 @@ function ChatSession({
     dismissError();
   }, [room.state.error, retryLatestTurn, dismissError]);
 
-  // EMPTY_FAILED_MESSAGE_IDS는 고정 참조 — 매번 새 배열을 반환하면 zustand가 값이 바뀐
-  // 것으로 보고 무한 리렌더로 이어진다.
-  const failedMessageIds = useChatSessionsStore(
-    (state) =>
-      state.sessions.find((session) => session.id === id)?.failedMessageIds ??
-      EMPTY_FAILED_MESSAGE_IDS,
-  );
-
   const handleResendFailedMessage = useCallback(
     (messageId: string) => {
+      const failed = failedMessages.find((entry) => entry.id === messageId);
       useChatSessionsStore.getState().clearMessageFailed(id, messageId);
-      const failed = renderedMessages.find(
-        (message) => message.id === messageId,
-      );
-      if (failed?.role === 'user') sendTurn(failed.content);
+      if (failed) sendTurn(failed.content);
     },
-    [id, renderedMessages, sendTurn],
+    [id, failedMessages, sendTurn],
   );
 
   // 입력창이 완성한 발화 하나를 받아 보낸다. 세션은 첫 메시지를 실제로 보낼 때만 스토어에

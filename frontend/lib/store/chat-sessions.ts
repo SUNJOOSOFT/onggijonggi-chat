@@ -4,7 +4,10 @@
  지속한다. 대화 내용은 여기 두지 않는다 — 이력의 정본은 서버이고(이슈 #218), 로컬 사본은 서버
  이력과 id가 어긋나 같은 메시지를 두 벌로 보이게 하던 원인이었다. 스트리밍 여부도 방 상태
  (lib/chat/room-state)에서 나오므로 여긴 두지 않는다.
- failedMessageIds는 재로그인 리다이렉트 후에도 "전송 실패 + 재전송" 표시가 남아야 해서 이 스토어에 둔다.
+ failedMessages는 재로그인 리다이렉트·새로고침 후에도 "전송 실패 + 재전송" 표시가 남아야 해서
+ 이 스토어에 둔다. 내용까지 함께 저장하는 이유는(이슈 #226) 서버가 이 메시지를 받은 적이
+ 없어 이력 어디에도 사본이 없기 때문이다 — 다른 메시지처럼 서버가 정본이 될 수 없는, 로컬이
+ 유일한 사본인 경우라 위 "서버가 정본" 원칙과 부딪히지 않는다.
  하이드레이션: 서버 평가 시점엔 localStorage가 없어 skipHydration으로 자동 복원을 끄고,
  클라이언트 마운트 후 useChatSessionsHydrated가 명시적으로 복원한다.
  *********************************************************/
@@ -20,12 +23,19 @@ export interface ServerChatSession {
   createdAt: string;
 }
 
+/** 전송 자체가 안 된 메시지 하나(이슈 #226). id는 서버 msgId가 아니라 이 항목만을 위한
+ * 로컬 전용 값이다 — 서버가 이 메시지를 받은 적이 없어 msgId를 줄 수 없다. */
+export interface FailedMessage {
+  id: string;
+  content: string;
+}
+
 export interface ChatSession {
   id: string;
   title: string;
   modelId: string;
   createdAt: number;
-  failedMessageIds: string[];
+  failedMessages: FailedMessage[];
   /** true면 renameSession으로 사용자가 직접 정한 제목 — 자동 파생·서버 동기화가 덮어쓰지 않는다. */
   titleCustomized: boolean;
 }
@@ -34,9 +44,9 @@ const DEFAULT_TITLE = '새 대화';
 /** 세션 탭 제목 최대 길이. 자동 파생(deriveTitle)과 사용자 수동 변경(renameSession) 둘 다 이 값으로 자른다. */
 export const TITLE_MAX_LENGTH = 40;
 
-/** failedMessageIds 폴백용 고정 참조 — 매번 새 배열(`?? []`)을 셀렉터에서 반환하면
+/** failedMessages 폴백용 고정 참조 — 매번 새 배열(`?? []`)을 셀렉터에서 반환하면
  * zustand가 "바뀐 값"으로 보고 매 렌더 재구독을 트리거해 무한 리렌더로 이어진다. */
-export const EMPTY_FAILED_MESSAGE_IDS: string[] = [];
+export const EMPTY_FAILED_MESSAGES: FailedMessage[] = [];
 
 /** 첫 발화로 세션 탭 제목을 만든다. 비었으면 기본 제목, TITLE_MAX_LENGTH 초과 시 말줄임표로 자른다. */
 export function deriveTitle(content: string): string {
@@ -69,7 +79,7 @@ interface ChatSessionsState {
   applyFirstMessageTitle: (id: string, content: string) => void;
   clearCurrentSession: () => void;
   setSessions: (serverSessions: ServerChatSession[]) => void;
-  markMessageFailed: (sessionId: string, messageId: string) => void;
+  markMessageFailed: (sessionId: string, messageId: string, content: string) => void;
   clearMessageFailed: (sessionId: string, messageId: string) => void;
   renameSession: (id: string, title: string) => void;
 }
@@ -81,23 +91,43 @@ interface ChatSessionsState {
  * 만들던 nanoid)로 저장돼 있어 서버 이력의 msgId와 짝이 맞지 않고, 합치는 쪽은 id로만 같은
  * 메시지를 알아보기 때문이다. 버려도 잃는 것은 없다 — 이력의 정본은 서버다(이슈 #218).
  *
+ * v1 → v2: failedMessageIds(번호만)를 failedMessages(번호+내용)로 바꾼다(이슈 #226).
+ * 예전 버전은 내용을 저장하지 않아 마이그레이션으로 복원할 수 없으므로 빈 배열로 시작한다 —
+ * 실패 표시가 새로고침 한 번 사라지는 것뿐이라, 다시 보내면 되는 낮은 비용이다.
+ *
  * persist 옵션 안에 두지 않고 밖으로 뺀 이유는 시험하기 위해서다. vitest 환경이 'node'라
  * localStorage가 없어 persist가 아예 안 붙고, 그러면 스토어를 통해서는 이 함수에 닿을 수 없다.
  */
 export function migrateChatSessions(persisted: unknown, version: number) {
-  if (version >= 1) return persisted;
-  const state = persisted as { sessions?: unknown[] } | null;
-  if (state?.sessions === undefined) return persisted;
-  return {
-    ...state,
-    sessions: state.sessions.map((session) => {
-      const { messages: _dropped, ...rest } = session as Record<
-        string,
-        unknown
-      >;
-      return rest;
-    }),
-  };
+  let state = persisted as { sessions?: unknown[] } | null;
+
+  if (version < 1 && state?.sessions !== undefined) {
+    state = {
+      ...state,
+      sessions: state.sessions.map((session) => {
+        const { messages: _dropped, ...rest } = session as Record<
+          string,
+          unknown
+        >;
+        return rest;
+      }),
+    };
+  }
+
+  if (version < 2 && state?.sessions !== undefined) {
+    state = {
+      ...state,
+      sessions: state.sessions.map((session) => {
+        const { failedMessageIds: _dropped, ...rest } = session as Record<
+          string,
+          unknown
+        >;
+        return { ...rest, failedMessages: [] };
+      }),
+    };
+  }
+
+  return state ?? persisted;
 }
 
 export const useChatSessionsStore = create<ChatSessionsState>()(
@@ -115,7 +145,7 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
               title: DEFAULT_TITLE,
               modelId,
               createdAt: Date.now(),
-              failedMessageIds: [],
+              failedMessages: [],
               titleCustomized: false,
             },
           ],
@@ -161,40 +191,50 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
 
       // 서버가 진실의 원천이라 서버 목록에 없는 로컬 세션은 제거한다. title은 titleCustomized면
       // 로컬 값을 지킨다 — 그러지 않으면 PATCH 실패 시 새로고침마다 이름이 되돌아간다.
+      //
+      // 예외: 실패 메시지가 남아 있는 로컬 전용 세션은 지우지 않는다(이슈 #226). 새 대화의
+      // 첫 메시지가 실패하면 서버에 그 thr 자체가 안 만들어지므로 서버 목록에 영원히 안 뜨는데,
+      // 그대로 지우면 "실패해도 이력에 남는다"는 이번 기능이 바로 이 경우에만 무력화된다.
       setSessions: (serverSessions) =>
         set((state) => {
           const localById = new Map(
             state.sessions.map((session) => [session.id, session]),
           );
-          return {
-            sessions: serverSessions.map((server) => {
-              const local = localById.get(server.id);
-              return {
-                id: server.id,
-                title: local?.titleCustomized ? local.title : server.title,
-                // 서버 응답에는 모델이 없다. 로컬 기록이 없으면 비워둔다 — 이 값은 세션을 만든
-                // 시점의 기록일 뿐이고, 실제 전송에 쓰이는 모델은 chat.tsx가 쥔 modelId 상태다.
-                modelId: local?.modelId ?? '',
-                createdAt: new Date(server.createdAt).getTime(),
-                failedMessageIds: local?.failedMessageIds ?? [],
-                titleCustomized: local?.titleCustomized ?? false,
-              };
-            }),
-          };
+          const serverIds = new Set(serverSessions.map((server) => server.id));
+          const fromServer = serverSessions.map((server) => {
+            const local = localById.get(server.id);
+            return {
+              id: server.id,
+              title: local?.titleCustomized ? local.title : server.title,
+              // 서버 응답에는 모델이 없다. 로컬 기록이 없으면 비워둔다 — 이 값은 세션을 만든
+              // 시점의 기록일 뿐이고, 실제 전송에 쓰이는 모델은 chat.tsx가 쥔 modelId 상태다.
+              modelId: local?.modelId ?? '',
+              createdAt: new Date(server.createdAt).getTime(),
+              failedMessages: local?.failedMessages ?? [],
+              titleCustomized: local?.titleCustomized ?? false,
+            };
+          });
+          const orphanedWithFailures = state.sessions.filter(
+            (session) =>
+              !serverIds.has(session.id) && session.failedMessages.length > 0,
+          );
+          return { sessions: [...fromServer, ...orphanedWithFailures] };
         }),
 
-      // 재로그인이 강제된 요청의 마지막 user 메시지를 "전송 실패"로 표시한다(중복 추가 방지).
-      markMessageFailed: (sessionId, messageId) =>
+      // 재로그인 강제·연결 끊김 등으로 못 보낸 메시지를 내용째로 "전송 실패"로 남긴다
+      // (중복 추가 방지, 이슈 #226). 서버가 받은 적이 없어 이력 어디에도 사본이 없으므로
+      // 여기 남긴 내용이 유일한 사본이다.
+      markMessageFailed: (sessionId, messageId, content) =>
         set((state) => ({
           sessions: state.sessions.map((session) => {
             if (session.id !== sessionId) return session;
             // 이 필드 도입 전 저장된 로컬 세션엔 없을 수 있다.
-            const failedMessageIds = session.failedMessageIds ?? [];
-            return failedMessageIds.includes(messageId)
+            const failedMessages = session.failedMessages ?? [];
+            return failedMessages.some((failed) => failed.id === messageId)
               ? session
               : {
                   ...session,
-                  failedMessageIds: [...failedMessageIds, messageId],
+                  failedMessages: [...failedMessages, { id: messageId, content }],
                 };
           }),
         })),
@@ -207,8 +247,8 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
             session.id === sessionId
               ? {
                   ...session,
-                  failedMessageIds: (session.failedMessageIds ?? []).filter(
-                    (id) => id !== messageId,
+                  failedMessages: (session.failedMessages ?? []).filter(
+                    (failed) => failed.id !== messageId,
                   ),
                 }
               : session,
@@ -233,7 +273,7 @@ export const useChatSessionsStore = create<ChatSessionsState>()(
       name: 'chat-sessions',
       storage: createJSONStorage(() => localStorage),
       skipHydration: true,
-      version: 1,
+      version: 2,
       migrate: migrateChatSessions,
     },
   ),
