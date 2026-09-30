@@ -25,7 +25,8 @@ export type BffErrorCode =
   | 'FILE_TOO_LARGE' // 413 CORE — 첨부가 크기 상한을 넘음
   | 'EMPTY_FILE_TEXT' // 422 CORE — 첨부에서 글자를 못 찾음(스캔 PDF 등)
   | 'UNREADABLE_FILE' // 422 CORE — 첨부가 손상됐거나 암호가 걸림
-  | 'INVALID_ATTACHMENT'; // 400·WS CORE — 발화에 실은 첨부가 없거나 이미 쓰였거나 개수 초과
+  | 'INVALID_ATTACHMENT' // 400·WS CORE — 발화에 실은 첨부가 없거나 이미 쓰였거나 개수 초과
+  | 'SERVICE_UNAVAILABLE'; // 503 CORE·WS — 새 대화를 놓을 고객사(Tenant)를 정할 수 없음(서버 설정 문제)
 
 export interface BffErrorEnvelope {
   error: { code: string; message?: string; traceId?: string };
@@ -60,6 +61,9 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
     '지금 권한 구성으로는 바꿀 수 없어요. 먼저 정리해야 할 항목이 있는지 확인해 주세요.',
   MESSAGE_DELIVERY_FAILED:
     '메시지를 전달하지 못했어요. 연결을 확인하고 다시 보내 주세요.',
+  // 재시도로 풀리지 않는다 — 새 대화를 놓을 조직 설정이 서버에 아직 없거나 둘 이상이라 관리자가 고쳐야 한다.
+  SERVICE_UNAVAILABLE:
+    '지금은 새 대화를 만들 수 없어요. 서버의 조직 설정이 준비되지 않았으니 관리자에게 문의해 주세요.',
   // 모델 목록에는 API 키를 채우지 않은 모델도 뜬다 — 어떤 키가 설정됐는지는 게이트웨이만 알기
   // 때문이다. 그래서 고르기 전에 막지 못하고 이 시점에 안내한다.
   MODEL_UNAVAILABLE:

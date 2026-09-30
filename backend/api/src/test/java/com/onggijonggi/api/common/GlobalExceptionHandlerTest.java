@@ -7,6 +7,7 @@ import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.mock.http.server.reactive.MockServerHttpRequest;
 import org.springframework.mock.web.server.MockServerWebExchange;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Class Name : GlobalExceptionHandlerTest.java
@@ -33,4 +34,16 @@ class GlobalExceptionHandlerTest {
 		assertThat(response.getBody().error().code()).isEqualTo("PARTICIPANT_STATE_CONFLICT");
 	}
 
+	/** 새 대화를 놓을 Tenant를 정할 수 없을 때(503)와 워크스페이스 누락(400)이 화면이 문구를 고를 수 있는 코드로 나간다. */
+	@Test
+	void mapsBadRequestAndServiceUnavailableToTheirOwnCodes() {
+		MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.post("/api/x"));
+
+		var badRequest = handler.handleStatusException(new ResponseStatusException(HttpStatus.BAD_REQUEST), exchange);
+		var unavailable = handler.handleStatusException(new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE), exchange);
+
+		assertThat(badRequest.getBody().error().code()).isEqualTo("VALIDATION_ERROR");
+		assertThat(unavailable.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+		assertThat(unavailable.getBody().error().code()).isEqualTo("SERVICE_UNAVAILABLE");
+	}
 }

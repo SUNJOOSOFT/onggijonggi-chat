@@ -67,6 +67,14 @@ public class GlobalExceptionHandler {
 		} else if (status == HttpStatus.CONFLICT) {
 			code = "PARTICIPANT_STATE_CONFLICT";
 			message = "참여자 상태가 바뀌어 요청을 처리할 수 없습니다.";
+		} else if (status == HttpStatus.BAD_REQUEST) {
+			// 워크스페이스 필수 등 서비스가 던지는 입력 오류. 화면이 "입력을 확인하라"고 안내할 수 있게 검증 오류와 같은 코드를 쓴다.
+			code = "VALIDATION_ERROR";
+			message = "요청 내용을 확인해 주세요.";
+		} else if (status == HttpStatus.SERVICE_UNAVAILABLE) {
+			// 새 대화를 놓을 고객사(Tenant)를 정할 수 없는 등 서버 설정이 준비되지 않은 경우. 재시도로 풀리지 않는다.
+			code = "SERVICE_UNAVAILABLE";
+			message = "서비스를 사용할 수 없습니다.";
 		}
 		return ResponseEntity.status(status).body(ErrorResponse.of(code, message, traceId(exchange)));
 	}

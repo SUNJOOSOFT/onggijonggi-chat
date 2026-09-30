@@ -37,6 +37,11 @@ public class ThreadLifecycleService {
 		this.thrMbrRepository = thrMbrRepository;
 	}
 
+	/** 전이로 바뀐 열만 저장한다 — Thr 전체를 save하면 동시에 오른 next_seq를 옛 값으로 덮어쓴다. */
+	private void saveLifecycle(Thr thr) {
+		thrRepository.updateLifecycle(thr.getId(), thr.getStatus(), thr.getLockedAt(), thr.getArchivedAt(), thr.getUpdatedAt());
+	}
+
 	/** ACTIVE인 방만 잠글 수 있다. 이미 LOCKED·ARCHIVED면 409. */
 	public Mono<Void> lock(UUID threadId, UUID actorUserId) {
 		return Mono.<Void>fromCallable(() -> {
@@ -45,7 +50,7 @@ public class ThreadLifecycleService {
 						throw stateConflict();
 					}
 					thr.lock();
-					thrRepository.save(thr);
+					saveLifecycle(thr);
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());
@@ -59,7 +64,7 @@ public class ThreadLifecycleService {
 						throw stateConflict();
 					}
 					thr.archive();
-					thrRepository.save(thr);
+					saveLifecycle(thr);
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());

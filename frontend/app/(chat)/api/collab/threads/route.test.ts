@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { MOCK_COMMON_ID, MOCK_COMMON_NAME } from '@/mocks/workspaces';
 import { GET, POST } from './route';
 
 describe('POST /api/collab/threads mock', () => {
@@ -24,9 +25,22 @@ describe('POST /api/collab/threads mock', () => {
       id: created.id,
       title,
       participants: [],
-      workspaceId: null,
-      workspaceName: null,
+      workspaceId: MOCK_COMMON_ID,
+      workspaceName: MOCK_COMMON_NAME,
     });
+  });
+
+  it('모르는 워크스페이스나 ROOT에는 만들 수 없다(403)', async () => {
+    const unknown = await POST(
+      new Request('http://localhost/api/collab/threads', {
+        method: 'POST',
+        body: JSON.stringify({
+          title: '없는 곳',
+          workspaceId: crypto.randomUUID(),
+        }),
+      }),
+    );
+    expect(unknown.status).toBe(403);
   });
 
   it('빈 제목과 잘못된 JSON을 기존 오류 코드로 거부한다', async () => {

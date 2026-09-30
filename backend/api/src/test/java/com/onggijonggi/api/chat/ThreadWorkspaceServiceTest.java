@@ -85,7 +85,7 @@ class ThreadWorkspaceServiceTest {
 	void collabThreadGoesIntoTheChosenWorkspaceWhereTheSubjectCanCreateThreads() {
 		creatable(hr);
 
-		assertThat(service.collabPlacement(SUBJECT, hr.getId()).block()).contains(hr);
+		assertThat(service.collabPlacement(SUBJECT, hr.getId()).block()).isEqualTo(hr);
 	}
 
 	/** 보기(VIEWER)만 있으면 방을 만들 수 없다 — 협업방 생성은 THREAD_CREATE다(#299). */
@@ -102,10 +102,21 @@ class ThreadWorkspaceServiceTest {
 	}
 
 	@Test
-	void workspaceIsOptionalWhenEnforcementIsOff() {
+	void withoutAWorkspaceTheRoomGoesIntoTheOnlyActiveTenantsCommonWhenEnforcementIsOff() {
 		rbac.setEnforce(false);
+		when(tenants.findAll()).thenReturn(List.of(tenant));
+		when(nodes.findByTenantIdAndKey(tenant.getId(), "common")).thenReturn(Optional.of(common));
 
-		assertThat(service.collabPlacement(SUBJECT, null).block()).isEmpty();
+		assertThat(service.collabPlacement(SUBJECT, null).block()).isEqualTo(common);
+	}
+
+	/** 모든 Thread는 워크스페이스에 놓여야 한다(절체 뒤 NOT NULL) — common을 정할 수 없으면 제약 위반 500 대신 503이다. */
+	@Test
+	void withoutADefaultCommonTheRoomIsRefusedWith503WhenEnforcementIsOff() {
+		rbac.setEnforce(false);
+		when(tenants.findAll()).thenReturn(List.of());
+
+		assertStatus(service.collabPlacement(SUBJECT, null), HttpStatus.SERVICE_UNAVAILABLE);
 	}
 
 	@Test
@@ -131,7 +142,7 @@ class ThreadWorkspaceServiceTest {
 		when(tenants.findById(tenant.getId())).thenReturn(Optional.of(tenant));
 		when(nodes.findByTenantIdAndKey(tenant.getId(), "common")).thenReturn(Optional.of(common));
 
-		assertThat(service.directPlacementBlocking(userId)).contains(common);
+		assertThat(service.directPlacementBlocking(userId)).isEqualTo(common);
 	}
 
 	/** 배정이 없으면 1:1도 만들 수 없다 — common도 배정이 있어야 본다(#299). */
@@ -159,9 +170,9 @@ class ThreadWorkspaceServiceTest {
 		assertThatThrownBy(() -> service.directPlacementBlocking(other)).isInstanceOf(ResponseStatusException.class);
 	}
 
-	/** 판정이 꺼져 있으면 지금처럼 ACTIVE Tenant가 하나일 때만 그 common이고, 여럿이면 비워 둔다. */
+	/** 판정이 꺼져 있으면 ACTIVE Tenant가 하나일 때만 그 common이고, 여럿이면 놓을 곳이 없어 503이다. */
 	@Test
-	void withEnforcementOffDirectThreadGoesIntoTheOnlyActiveTenantsCommonOrStaysUnplaced() {
+	void withEnforcementOffDirectThreadGoesIntoTheOnlyActiveTenantsCommonOrIsRefused() {
 		rbac.setEnforce(false);
 		UUID userId = UUID.randomUUID();
 		AppUser user = mock(AppUser.class);
@@ -169,10 +180,12 @@ class ThreadWorkspaceServiceTest {
 		when(appUsers.findById(userId)).thenReturn(Optional.of(user));
 		when(tenants.findAll()).thenReturn(List.of(tenant, new Tenant("old", "옛 고객사", TenantStatus.INACTIVE)));
 		when(nodes.findByTenantIdAndKey(tenant.getId(), "common")).thenReturn(Optional.of(common));
-		assertThat(service.directPlacementBlocking(userId)).contains(common);
+		assertThat(service.directPlacementBlocking(userId)).isEqualTo(common);
 
 		when(tenants.findAll()).thenReturn(List.of(tenant, new Tenant("acme", "다른 고객사", TenantStatus.ACTIVE)));
-		assertThat(service.directPlacementBlocking(userId)).isEmpty();
+		assertThatThrownBy(() -> service.directPlacementBlocking(userId))
+				.isInstanceOfSatisfying(ResponseStatusException.class,
+						error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE));
 		verifyNoInteractions(members);
 	}
 

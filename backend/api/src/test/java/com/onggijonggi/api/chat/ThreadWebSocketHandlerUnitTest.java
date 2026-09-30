@@ -339,6 +339,40 @@ class ThreadWebSocketHandlerUnitTest {
 				.contains("\"code\":\"NOT_SUBSCRIBED\"", "\"threadId\":\"" + threadId + "\"");
 	}
 
+	@Test
+	void directBootstrapPreservesForbiddenAndUnavailableErrors() {
+		assertBootstrapError(HttpStatus.FORBIDDEN, "FORBIDDEN");
+		assertBootstrapError(HttpStatus.SERVICE_UNAVAILABLE, "SERVICE_UNAVAILABLE");
+	}
+
+	private static void assertBootstrapError(HttpStatus status, String expectedCode) {
+		UUID threadId = UUID.randomUUID();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
+		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
+		var directChatTurnService = mock(DirectChatTurnService.class);
+		WebSocketSession session = mock(WebSocketSession.class);
+		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
+		List<String> sent = new CopyOnWriteArrayList<>();
+
+		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just((Principal) () -> "bootstrap-user"));
+		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
+		when(provisioning.resolveOrProvision("bootstrap-user")).thenReturn(Mono.just(UUID.randomUUID()));
+		when(directChatTurnService.prepareOrCreateWithPendingAgentBlocking(any(), any(), any(), any(), any(), any()))
+				.thenThrow(new ResponseStatusException(status));
+		stubTextMessages(session);
+		when(session.receive()).thenReturn(Flux.just(inboundText(WsTestExchange.chatMessageFrame(threadId, "hello"))));
+		when(session.send(any())).thenAnswer(invocation -> Flux.from(
+				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
+				.doOnNext(message -> sent.add(message.getPayloadAsText())).then());
+		when(session.close(any(CloseStatus.class))).thenReturn(Mono.empty());
+
+		handler(registry, provisioning, MESSAGES_PER_WINDOW, directChatTurnService).handle(session).block();
+
+		assertThat(sent).singleElement().asString()
+				.contains("\"code\":\"" + expectedCode + "\"", "\"threadId\":\"" + threadId + "\"")
+				.doesNotContain("NOT_SUBSCRIBED");
+	}
+
 	/**
 	* 기존 DIRECT 방에 이어 쓰다가 HUMAN·PENDING AGENT 예약 저장 자체가 실패하면(이슈 #162, §2.2)
 	* 아직 아무것도 방송되지 않았으므로 요청자에게만 오류를 주는 대신, 방 전체에 warning

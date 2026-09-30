@@ -2,6 +2,7 @@ package com.onggijonggi.api.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -60,7 +61,7 @@ class ThreadLifecycleServiceTest {
 		assertThat(thr.getStatus()).isEqualTo(ThrStatus.LOCKED);
 		assertThat(thr.getLockedAt()).isNotNull();
 		assertThat(thr.getArchivedAt()).isNull();
-		verify(thrRepository).save(thr);
+		verify(thrRepository).updateLifecycle(eq(threadId), eq(thr.getStatus()), any(), any(), any());
 	}
 
 	@Test
@@ -109,7 +110,7 @@ class ThreadLifecycleServiceTest {
 		assertNotFound(service.delete(threadId, actorUserId));
 
 		assertThat(direct.getStatus()).isEqualTo(ThrStatus.ACTIVE);
-		verify(thrRepository, never()).save(any());
+		verify(thrRepository, never()).updateLifecycle(any(), any(), any(), any(), any());
 		verify(thrRepository, never()).delete(any());
 	}
 
@@ -129,7 +130,7 @@ class ThreadLifecycleServiceTest {
 						.isInstanceOf(ResponseStatusException.class)
 						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
 						.isEqualTo(HttpStatus.CONFLICT));
-		verify(thrRepository, never()).save(any());
+		verify(thrRepository, never()).updateLifecycle(any(), any(), any(), any(), any());
 	}
 
 	@Test
@@ -185,7 +186,7 @@ class ThreadLifecycleServiceTest {
 						.isInstanceOf(ResponseStatusException.class)
 						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
 						.isEqualTo(HttpStatus.CONFLICT));
-		verify(thrRepository, never()).save(any());
+		verify(thrRepository, never()).updateLifecycle(any(), any(), any(), any(), any());
 	}
 
 	@Test

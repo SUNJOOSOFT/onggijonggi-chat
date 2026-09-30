@@ -31,5 +31,11 @@ subprojects {
 
 	tasks.named('test') {
 		useJUnitPlatform()
+		// CI에서 테스트가 멈추면 어느 테스트인지 알 수 있게 시작·종료를 로그에 남긴다.
+		if (System.getenv('CI')) {
+			testLogging {
+				events 'started', 'passed', 'failed', 'skipped'
+			}
+		}
 	}
 }

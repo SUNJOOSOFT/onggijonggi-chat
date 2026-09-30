@@ -54,6 +54,10 @@ export function ThreadList() {
   const [threads, setThreads] = useState<CollabThreadSummary[] | null>(null);
   const [failed, setFailed] = useState(false);
   const [workspaces, setWorkspaces] = useState<Workspace[]>([]);
+  /** 워크스페이스 목록을 아직 받는 중인지, 받았는지, 못 받았는지. 받았는데 비어 있으면 어디에도 방을 만들 수 없다. */
+  const [workspacesStatus, setWorkspacesStatus] = useState<
+    'loading' | 'ready' | 'failed'
+  >('loading');
   const [title, setTitle] = useState('');
   const [creating, setCreating] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -71,12 +75,16 @@ export function ThreadList() {
       .catch(() => {
         if (alive) setFailed(true);
       });
-    // 못 불러오면 트리 없이 예전 화면으로 둔다. 권한 기능이 켜진 배포라면 만들 때 서버가 거절하고 그 문구가 뜬다.
+    // 못 불러오면 트리 없이 예전 화면으로 둔다. 서버가 만들 때 거절하면 그 문구가 뜬다.
     fetchWorkspaces()
       .then((list) => {
-        if (alive) setWorkspaces(list);
+        if (!alive) return;
+        setWorkspaces(list);
+        setWorkspacesStatus('ready');
       })
-      .catch(() => {});
+      .catch(() => {
+        if (alive) setWorkspacesStatus('failed');
+      });
     return () => {
       alive = false;
     };
@@ -162,10 +170,20 @@ export function ThreadList() {
                 placeholder="새 협업방 제목"
                 value={title}
               />
-              <Button disabled={creating} type="submit">
+              <Button
+                disabled={creating || workspacesStatus !== 'failed'}
+                type="submit"
+              >
                 {creating ? '만드는 중…' : '만들기'}
               </Button>
             </form>
+
+            {workspacesStatus === 'ready' && (
+              <p className="rounded-lg bg-muted px-4 py-3 text-sm">
+                방을 만들 수 있는 워크스페이스가 없어요. 팀 배정이 필요하면
+                관리자에게 문의해 주세요.
+              </p>
+            )}
 
             {createError && (
               <p

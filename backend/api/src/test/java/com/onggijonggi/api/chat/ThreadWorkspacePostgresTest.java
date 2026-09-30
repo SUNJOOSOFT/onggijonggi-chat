@@ -249,7 +249,7 @@ class ThreadWorkspacePostgresTest extends PostgresSpringTestBase {
 				.contains("{\"id\":\"" + root.getId() + "\",\"parentId\":null,\"name\":\"워크스페이스 시험\",\"kind\":\"ROOT\"");
 	}
 
-	/** bootstrap은 staging 검증 없이 기존 방의 Tenant를 추정해 배치하지 않는다. */
+	/** bootstrap은 절체 migration 없이 기존 방의 Tenant를 추정해 배치하지 않는다. */
 	@Test
 	void bootstrapLeavesUnassignedThreadsForValidatedCutover() {
 		UUID unplaced = rooms.openRoom("move-a-" + suffix);

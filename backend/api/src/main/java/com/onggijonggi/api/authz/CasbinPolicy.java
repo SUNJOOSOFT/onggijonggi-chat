@@ -1,5 +1,6 @@
 package com.onggijonggi.api.authz;
 
+import com.onggijonggi.common.authz.OrgUnitMember;
 import com.onggijonggi.common.authz.RankGrant;
 import com.onggijonggi.common.authz.WorkspaceGrant;
 import com.onggijonggi.common.authz.WorkspaceRole;
@@ -48,6 +49,17 @@ public final class CasbinPolicy {
 	/** 그 role이 이 액션을 포함하나. 규칙 펼치기와 같은 표를 쓴다 — Casbin 밖에서 판정하는 곳도 뜻이 갈라지지 않게 한다. */
 	public static boolean roleAllows(WorkspaceRole role, String action) {
 		return ROLE_ACTIONS.get(role).contains(action);
+	}
+
+	/** 팀 직접 부여가 그 배정에게 이 액션을 주나. rules()의 `r.sub.OrgUnit == '<팀>'` 규칙과 같은 뜻이다. Casbin 밖에서 계산하는 곳이 함께 쓴다. */
+	public static boolean allows(WorkspaceGrant grant, OrgUnitMember assignment, String action) {
+		return grant.getOrgUnitId().equals(assignment.getOrgUnitId()) && roleAllows(grant.getRole(), action);
+	}
+
+	/** 직급 규칙이 그 배정에게 이 액션을 주나. rules()의 `r.sub.OrgUnit == '<팀>' && r.sub.Rank <= N`(팀이 없으면 서열 조건만)과 같다. */
+	public static boolean allows(RankGrant rule, OrgUnitMember assignment, String action) {
+		return (rule.getOrgUnitId() == null || rule.getOrgUnitId().equals(assignment.getOrgUnitId()))
+				&& assignment.getRank().order() <= rule.getRank().order() && roleAllows(rule.getRole(), action);
 	}
 
 	/** Casbin p 정책 한 행. 순서대로 sub_rule, obj(wrk_node.id), act다. */

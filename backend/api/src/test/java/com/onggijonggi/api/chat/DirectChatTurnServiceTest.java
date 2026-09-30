@@ -8,6 +8,7 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.chat.domain.AthKind;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.MsgIdmKey;
@@ -72,6 +73,10 @@ class DirectChatTurnServiceTest {
 		when(thrRepository.save(any(Thr.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(thrMbrRepository.save(any(ThrMbr.class))).thenAnswer(invocation -> invocation.getArgument(0));
 		when(msgRepository.save(any(Msg.class))).thenAnswer(invocation -> invocation.getArgument(0));
+		UUID tenantId = UUID.randomUUID();
+		WorkspaceNode root = WorkspaceNode.root(tenantId, "기본");
+		WorkspaceNode common = WorkspaceNode.common(tenantId, root.getId(), root.getPath(), "공용");
+		when(threadWorkspaceService.directPlacementBlocking(userId)).thenReturn(common);
 
 		DirectChatTurnService.StoredTurn turn = service.prepareOrCreateWithPendingAgentBlocking(threadId, userId,
 				"안녕", List.of(), "안녕", "key-1");

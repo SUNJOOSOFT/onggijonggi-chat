@@ -438,7 +438,8 @@ public class WorkspaceManagementService {
 		preauthorized(actor, existing.getWorkspaceNodeId(), true);
 		transactions.executeWithoutResult(status -> {
 			lock(tenantId);
-			Thr thread = threads.findById(threadId).orElseThrow(WorkspaceManagementService::notFound);
+			// 행 잠금으로 읽는다 — 잠금 없이 읽은 값을 그대로 저장하면 그사이 메시지 채번이 올린 next_seq를 옛 값으로 되돌린다.
+			Thr thread = threads.findByIdForSeqUpdate(threadId).orElseThrow(WorkspaceManagementService::notFound);
 			if (thread.getKind() != ThrKind.COLLAB || !tenantId.equals(thread.getTenantId())
 					|| thread.getWorkspaceNodeId() == null) throw notFound();
 			WorkspaceNode source = node(thread.getWorkspaceNodeId(), tenantId);

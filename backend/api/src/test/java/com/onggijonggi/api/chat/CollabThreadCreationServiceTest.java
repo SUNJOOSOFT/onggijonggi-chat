@@ -5,6 +5,9 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.common.authz.WorkspaceNode;
+import com.onggijonggi.common.authz.WorkspaceNodeKind;
+import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrIdmKey;
 import com.onggijonggi.common.chat.domain.ThrMbr;
@@ -36,7 +39,7 @@ import org.springframework.test.context.bean.override.mockito.MockitoBean;
  */
 @SpringBootTest
 @ActiveProfiles("test")
-@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, FakeKeycloakAdminConfig.class})
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, FakeKeycloakAdminConfig.class, DefaultWorkspaceFixture.class})
 class CollabThreadCreationServiceTest {
 
 	@Autowired
@@ -44,6 +47,9 @@ class CollabThreadCreationServiceTest {
 
 	@Autowired
 	private ThrRepository thrRepository;
+
+	@Autowired
+	private WorkspaceNodeRepository workspaceNodeRepository;
 
 	@Autowired
 	private ThrIdmKeyRepository thrIdmKeyRepository;
@@ -58,7 +64,7 @@ class CollabThreadCreationServiceTest {
 		when(thrMbrRepository.save(any(ThrMbr.class)))
 				.thenThrow(new DataIntegrityViolationException("thr_mbr 저장 실패"));
 
-		assertThatThrownBy(() -> collabThreadCreationService.createBlocking(UUID.randomUUID(), title, null, null))
+		assertThatThrownBy(() -> collabThreadCreationService.createBlocking(UUID.randomUUID(), title, null, workspace()))
 				.isInstanceOf(DataIntegrityViolationException.class);
 
 		assertThat(thrRepository.findAll())
@@ -72,8 +78,8 @@ class CollabThreadCreationServiceTest {
 		UUID userId = UUID.randomUUID();
 		String title = "키 없는 방";
 
-		UUID first = collabThreadCreationService.createBlocking(userId, title, null, null);
-		UUID second = collabThreadCreationService.createBlocking(userId, title, null, null);
+		UUID first = collabThreadCreationService.createBlocking(userId, title, null, workspace());
+		UUID second = collabThreadCreationService.createBlocking(userId, title, null, workspace());
 
 		assertThat(first).isNotEqualTo(second);
 	}
@@ -85,8 +91,8 @@ class CollabThreadCreationServiceTest {
 		String title = "재시도 방";
 		String key = UUID.randomUUID().toString();
 
-		UUID first = collabThreadCreationService.createBlocking(userId, title, key, null);
-		UUID retried = collabThreadCreationService.createBlocking(userId, title, key, null);
+		UUID first = collabThreadCreationService.createBlocking(userId, title, key, workspace());
+		UUID retried = collabThreadCreationService.createBlocking(userId, title, key, workspace());
 
 		assertThat(retried).isEqualTo(first);
 		assertThat(thrRepository.findAll()).extracting(Thr::getTitle).containsOnlyOnce(title);
@@ -98,9 +104,9 @@ class CollabThreadCreationServiceTest {
 		UUID userId = UUID.randomUUID();
 		String key = UUID.randomUUID().toString();
 
-		collabThreadCreationService.createBlocking(userId, "첫 제목", key, null);
+		collabThreadCreationService.createBlocking(userId, "첫 제목", key, workspace());
 
-		assertThatThrownBy(() -> collabThreadCreationService.createBlocking(userId, "다른 제목", key, null))
+		assertThatThrownBy(() -> collabThreadCreationService.createBlocking(userId, "다른 제목", key, workspace()))
 				.isInstanceOf(IdempotencyKeyConflictException.class);
 	}
 
@@ -123,7 +129,7 @@ class CollabThreadCreationServiceTest {
 			Callable<Throwable> attempt = () -> {
 				barrier.await();
 				try {
-					collabThreadCreationService.createBlocking(userId, title, key, null);
+					collabThreadCreationService.createBlocking(userId, title, key, workspace());
 					return null;
 				} catch (Throwable thrown) {
 					return thrown;
@@ -144,6 +150,11 @@ class CollabThreadCreationServiceTest {
 		}
 	}
 
+	/** 모든 방은 워크스페이스에 놓이므로 fixture가 만든 Tenant의 common을 쓴다. */
+	private WorkspaceNode workspace() {
+		return workspaceNodeRepository.findAll().stream().filter(node -> node.getKind() == WorkspaceNodeKind.COMMON).findFirst().orElseThrow();
+	}
+
 	private Throwable unwrap(Future<Throwable> future) {
 		try {
 			return future.get();
@@ -158,8 +169,8 @@ class CollabThreadCreationServiceTest {
 		String key = UUID.randomUUID().toString();
 		String title = "각자의 방";
 
-		UUID firstUsersThread = collabThreadCreationService.createBlocking(UUID.randomUUID(), title, key, null);
-		UUID secondUsersThread = collabThreadCreationService.createBlocking(UUID.randomUUID(), title, key, null);
+		UUID firstUsersThread = collabThreadCreationService.createBlocking(UUID.randomUUID(), title, key, workspace());
+		UUID secondUsersThread = collabThreadCreationService.createBlocking(UUID.randomUUID(), title, key, workspace());
 
 		assertThat(firstUsersThread).isNotEqualTo(secondUsersThread);
 	}
@@ -176,7 +187,7 @@ class CollabThreadCreationServiceTest {
 		String title = "만료된 방";
 		String key = UUID.randomUUID().toString();
 
-		UUID first = collabThreadCreationService.createBlocking(userId, title, key, null);
+		UUID first = collabThreadCreationService.createBlocking(userId, title, key, workspace());
 
 		ThrIdmKey saved = thrIdmKeyRepository.findByUserIdAndKey(userId, key).orElseThrow();
 		var createdAt = ThrIdmKey.class.getDeclaredField("createdAt");
@@ -186,7 +197,7 @@ class CollabThreadCreationServiceTest {
 
 		// 여기까지 예외 없이 도달하는 것 자체가 증거다 — 고쳐지기 전엔
 		// DataIntegrityViolationException으로 이 호출에서 테스트가 실패했다.
-		UUID retried = collabThreadCreationService.createBlocking(userId, title, key, null);
+		UUID retried = collabThreadCreationService.createBlocking(userId, title, key, workspace());
 
 		assertThat(retried).isNotEqualTo(first);
 	}

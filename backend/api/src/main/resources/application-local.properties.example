@@ -29,3 +29,8 @@ spring.ai.openai.base-url=http://<공용호스트주소>:4000/v1
 #    그 증상이 "401 에러"가 아니라 로그인 화면 무한 반복이라 원인을 알아보기 어렵다.
 #spring.security.oauth2.resourceserver.jwt.jwk-set-uri=http://<공용호스트주소>:8081/realms/app-realm/protocol/openid-connect/certs
 #app.security.public-issuer=http://<공용호스트주소>:8081/realms/app-realm
+
+# --- 새 대화가 놓일 고객사(Tenant) ---
+# 권한 기능을 쓰지 않아도 새 대화가 놓일 고객사가 하나 있어야 한다. 이 값이 없으면 새 대화 생성이 503이다.
+# bootRun의 작업 디렉터리 기준으로 상대경로가 어긋나므로 절대경로를 쓴다.
+app.rbac.workspace-setup-path=<저장소 절대경로>/infra/config/workspace-setup.default.yml

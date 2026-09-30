@@ -13,7 +13,7 @@ import java.util.UUID;
  *               app_user에 이름 컬럼을 두지 않고 Keycloak을 정본으로 삼아 요청 시점에 채운다(이슈 #128).
  *
  *               workspaceId·workspaceName은 방이 놓인 워크스페이스다. 화면이 목록을 워크스페이스별로 묶는 데 쓴다.
- *               워크스페이스 트리가 없는 배포의 방은 둘 다 null이다.
+ *               모든 방은 워크스페이스에 놓이지만, 놓인 노드를 찾지 못하면 둘 다 null일 수 있다.
  */
 public record CollabThreadSummary(
 		UUID id,
