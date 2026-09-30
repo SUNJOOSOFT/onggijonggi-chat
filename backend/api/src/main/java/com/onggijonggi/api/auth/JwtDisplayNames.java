@@ -18,10 +18,15 @@ public final class JwtDisplayNames {
 	}
 
 	/**
-	 * preferred_username이 없는 토큰(예: 매퍼 설정을 안 한 다른 클라이언트)에 대비해 name,
+	 * 성+이름(family_name·given_name, PersonNames)을 먼저 쓴다 — Keycloak Admin API로 푸는 이력·명단과 같은 이름이어야
+	 * 한다. 이름이 없는 계정은 preferred_username, 그것도 없는 토큰(예: 매퍼 설정을 안 한 다른 클라이언트)은 name,
 	 * 그마저 없으면 subject로 물러난다 — 화면에 빈 이름이 뜨는 것보다 subject라도 보이는 쪽이 낫다.
 	 */
 	public static String of(Jwt token) {
+		String fullName = PersonNames.fullName(token.getClaimAsString("family_name"), token.getClaimAsString("given_name"));
+		if (fullName != null) {
+			return fullName;
+		}
 		String preferredUsername = token.getClaimAsString("preferred_username");
 		if (preferredUsername != null) {
 			return preferredUsername;

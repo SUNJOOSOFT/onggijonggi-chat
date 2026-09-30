@@ -3,9 +3,12 @@ package com.onggijonggi.api.auth;
 import com.onggijonggi.api.chat.InvitationAcceptanceService;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
+import com.onggijonggi.common.user.AppUserStatus;
 import java.util.UUID;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
 
@@ -41,8 +44,15 @@ public class UserIdentityService {
 
 	private UUID resolveOrProvisionBlocking(String keycloakSubj) {
 		return appUserRepository.findByKeycloakSubj(keycloakSubj)
-				.map(AppUser::getId)
+				.map(this::activeUserId)
 				.orElseGet(() -> createOrFetchExisting(keycloakSubj));
+	}
+
+	private UUID activeUserId(AppUser user) {
+		if (user.getStatus() != AppUserStatus.ACTIVE) {
+			throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+		}
+		return user.getId();
 	}
 
 	/**
@@ -56,7 +66,7 @@ public class UserIdentityService {
 		UUID createdId = createOrNull(keycloakSubj);
 		if (createdId == null) {
 			return appUserRepository.findByKeycloakSubj(keycloakSubj)
-					.map(AppUser::getId)
+					.map(this::activeUserId)
 					.orElseThrow(() -> new IllegalStateException(
 							"keycloak_subj unique 위반인데 그 행이 없다: " + keycloakSubj));
 		}

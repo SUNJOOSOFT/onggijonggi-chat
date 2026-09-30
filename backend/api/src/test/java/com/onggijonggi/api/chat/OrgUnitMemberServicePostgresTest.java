@@ -143,6 +143,22 @@ class OrgUnitMemberServicePostgresTest extends PostgresSpringTestBase {
 		assertThat(members.findBySubject(kim)).isEmpty();
 	}
 
+	@Test
+	void crossTenantMembershipMoveIsRejectedWithoutChangingTheExistingAssignment() {
+		Tenant otherTenant = tenants.saveAndFlush(new Tenant("other-" + UUID.randomUUID().toString().substring(0, 8),
+				"Other", TenantStatus.ACTIVE));
+		OrgUnit otherUnit = orgUnits.saveAndFlush(new OrgUnit(otherTenant.getId(), "other", "Other", OrgUnitStatus.ACTIVE));
+		service.apply(Change.assign(kim, hr.getId(), Rank.K), Actor.system("import:initial"));
+
+		assertThatThrownBy(() -> service.apply(Change.assign(kim, otherUnit.getId(), Rank.K), Actor.system("import:move")))
+				.isInstanceOf(OrgUnitMemberService.InvalidChangeException.class)
+				.hasMessageContaining("다른 Tenant");
+
+		assertThat(members.findBySubject(kim)).singleElement()
+				.satisfies(member -> assertThat(member.getOrgUnitId()).isEqualTo(hr.getId()));
+		assertThat(memberAudits()).hasSize(1);
+	}
+
 	private List<AuthorizationAudit> memberAudits() {
 		return audits.findByTenantIdOrderByCreatedAtAscIdAsc(tenant.getId()).stream()
 				.filter(row -> row.getTargetKind() == AuthorizationAuditTargetKind.MEMBER)

@@ -37,7 +37,7 @@ public class RbacBootstrapConfigReader {
 	private static final Set<String> ORG_UNIT_KEYS = Set.of("key", "name", "status");
 	private static final Set<String> NODE_KEYS = Set.of("node_key", "kind", "parent", "name", "status");
 	private static final Set<String> GRANT_KEYS = Set.of("org_unit", "role", "node");
-	private static final Set<String> RANK_GRANT_KEYS = Set.of("org_unit", "rank", "node");
+	private static final Set<String> RANK_GRANT_KEYS = Set.of("org_unit", "rank", "role", "node");
 	private static final int MAX_DEPLOYMENT_ID_LENGTH = 128;
 	/** 설정 파일 크기 상한(1MiB). */
 	private static final long MAX_CONFIG_BYTES = 1024 * 1024;
@@ -142,6 +142,7 @@ public class RbacBootstrapConfigReader {
 			rankGrants.add(new RbacBootstrapSpec.RankGrantSpec(
 					grant.get("org_unit") == null ? null : string(scope + ".rank_grants[].org_unit", grant.get("org_unit")),
 					string(scope + ".rank_grants[].rank", grant.get("rank")),
+					stringOr(scope + ".rank_grants[].role", grant.get("role"), "VIEWER"),
 					string(scope + ".rank_grants[].node", grant.get("node"))));
 		}
 		return new RbacBootstrapSpec.TenantSpec(key, string(scope + ".name", source.get("name")),
@@ -205,11 +206,13 @@ public class RbacBootstrapConfigReader {
 			value.put("rank_grants", tenant.rankGrants().stream()
 					.sorted(Comparator.comparing((RbacBootstrapSpec.RankGrantSpec grant) -> String.valueOf(grant.orgUnit()))
 							.thenComparing(RbacBootstrapSpec.RankGrantSpec::rank)
+							.thenComparing(RbacBootstrapSpec.RankGrantSpec::role)
 							.thenComparing(RbacBootstrapSpec.RankGrantSpec::node))
 					.map(grant -> {
 						Map<String, Object> item = new TreeMap<>();
 						item.put("org_unit", grant.orgUnit());
 						item.put("rank", grant.rank());
+						item.put("role", grant.role());
 						item.put("node", grant.node());
 						return item;
 					}).toList());

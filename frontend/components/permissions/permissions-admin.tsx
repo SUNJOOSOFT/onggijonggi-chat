@@ -5,11 +5,16 @@
  설 명 : 권한 관리 화면(/admin/permissions). 사람마다 팀·직급을 고르면 바로 저장하고, 아래 "누가 무엇을 보나" 표를
  서버의 실제 판정으로 다시 그린다. CSV(email,team,rank)는 미리보기 뒤 저장한다. 판정은 흉내 내지 않는다 —
  표의 O/-는 bff가 Casbin에 물어본 결과 그대로다.
- bff의 casbin 프로필에서만 API가 있다. 꺼져 있으면 404라 안내만 보여준다. v0.3은 실제 사용자에게 나가지 않아
- 로그인한 누구나 바꿀 수 있다 — 실제 배포 전에 ADMIN만 쓰게 막는다.
+ bff의 casbin 프로필에서만 API가 있다. 꺼져 있으면 404, PLATFORM_ADMIN이 아니면 403을 반환한다.
  *********************************************************/
 
-import { type ChangeEvent, useCallback, useEffect, useState } from 'react';
+import {
+  type ChangeEvent,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+} from 'react';
 import { toast } from 'sonner';
 
 import { SidebarToggle } from '@/components/sidebar-toggle';
@@ -78,13 +83,13 @@ export function PermissionsAdmin() {
       <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-8 overflow-y-auto p-6">
         <p className="rounded-lg bg-muted px-4 py-3 text-sm">
           팀·직급을 바꾸면 바로 저장되고, 아래 표가 실제 권한 판정 결과로 다시
-          그려집니다. 개발·데모용이라 지금은 로그인한 누구나 바꿀 수 있습니다.
+          그려집니다. 변경과 CSV 적용은 PLATFORM_ADMIN만 할 수 있습니다.
         </p>
 
         {failed !== null && (
           <p className="rounded-lg bg-muted px-4 py-3 text-sm" role="alert">
-            불러오지 못했습니다. 권한 기능(casbin)이 켜져 있는지 확인해 주세요.{' '}
-            {failed}
+            불러오지 못했습니다. 권한 기능이 켜져 있고 PLATFORM_ADMIN 권한이
+            있는지 확인해 주세요. {failed}
           </p>
         )}
         {failed === null && overview === null && (
@@ -212,7 +217,8 @@ function VisibilityTable({ overview }: { overview: PermissionsOverview }) {
     <section className="flex flex-col gap-3">
       <h2 className="text-base font-semibold">누가 무엇을 보나</h2>
       <p className="text-xs text-muted-foreground">
-        모든 사람은 1:1 채팅 공간(common)을 봅니다. 표에서는 뺐습니다.
+        1:1 채팅 공간(common)은 소속·정책과 방 소유권으로 따로 판정하므로 표에서
+        제외했습니다.
       </p>
       <div className="overflow-x-auto">
         <table className="text-sm">
@@ -264,11 +270,13 @@ function CsvImport({ onApplied }: { onApplied: () => Promise<void> }) {
   const [fileName, setFileName] = useState('');
   const [report, setReport] = useState<ImportReport | null>(null);
   const [busy, setBusy] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
+  const selection = useRef(0);
 
-  async function run(text: string, apply: boolean) {
+  async function applyCsv(text: string) {
     setBusy(true);
     try {
-      const result = await importMembersCsv(text, apply);
+      const result = await importMembersCsv(text, true);
       setReport(result);
       if (result.applied) {
         await onApplied();
@@ -287,17 +295,34 @@ function CsvImport({ onApplied }: { onApplied: () => Promise<void> }) {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
-    const text = await file.text();
-    setCsv(text);
+    const selected = ++selection.current;
+    setCsv(null);
+    setReport(null);
     setFileName(file.name);
-    await run(text, false);
+    setPreviewing(true);
+    try {
+      const text = await file.text();
+      if (selected !== selection.current) return;
+      setCsv(text);
+      const result = await importMembersCsv(text, false);
+      if (selected === selection.current) setReport(result);
+    } catch (error) {
+      if (selected === selection.current) {
+        toast.error(
+          `CSV를 읽지 못했습니다. ${error instanceof Error ? error.message : ''}`,
+        );
+      }
+    } finally {
+      if (selected === selection.current) setPreviewing(false);
+    }
   }
 
   const canApply =
     csv !== null &&
     report !== null &&
     !report.applied &&
-    report.problems.length === 0;
+    report.problems.length === 0 &&
+    !previewing;
 
   return (
     <section className="flex flex-col gap-3">
@@ -323,7 +348,7 @@ function CsvImport({ onApplied }: { onApplied: () => Promise<void> }) {
         )}
         <Button
           disabled={!canApply || busy}
-          onClick={() => csv && run(csv, true)}
+          onClick={() => csv && applyCsv(csv)}
           size="sm"
         >
           저장

@@ -43,6 +43,7 @@ describe('routeFrame', () => {
       from: 'u1',
       fromDisplayName: '보낸 사람',
       content: '안녕하세요',
+      attachments: [],
     };
     const onChatMessage = vi.fn();
     routeFrame(frame, { onChatMessage });

@@ -15,6 +15,8 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.test.StepVerifier;
 
 /**
@@ -41,6 +43,21 @@ class UserIdentityServiceTest {
 				.expectNext(existing.getId())
 				.verifyComplete();
 
+		verify(appUserRepository, never()).save(any());
+	}
+
+	@Test
+	void rejectsInactiveUserEvenWithAValidSubject() {
+		AppUser existing = new AppUser("sub-inactive");
+		existing.deactivate();
+		when(appUserRepository.findByKeycloakSubj("sub-inactive")).thenReturn(Optional.of(existing));
+		UserIdentityService service = new UserIdentityService(appUserRepository, invitationAcceptanceService);
+
+		StepVerifier.create(service.resolveOrProvision("sub-inactive"))
+				.expectErrorSatisfies(error -> assertThat(error)
+						.isInstanceOfSatisfying(ResponseStatusException.class,
+								status -> assertThat(status.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN)))
+				.verify();
 		verify(appUserRepository, never()).save(any());
 	}
 

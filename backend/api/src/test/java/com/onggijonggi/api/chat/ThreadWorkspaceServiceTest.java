@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
@@ -9,6 +10,12 @@ import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.authz.RbacProperties;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
+import com.onggijonggi.common.authz.OrgUnit;
+import com.onggijonggi.common.authz.OrgUnitMember;
+import com.onggijonggi.common.authz.OrgUnitMemberRepository;
+import com.onggijonggi.common.authz.OrgUnitRepository;
+import com.onggijonggi.common.authz.OrgUnitStatus;
+import com.onggijonggi.common.authz.Rank;
 import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
@@ -17,6 +24,9 @@ import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeStatus;
 import com.onggijonggi.common.chat.domain.Thr;
+import com.onggijonggi.common.user.AppUser;
+import com.onggijonggi.common.user.AppUserRepository;
+import com.onggijonggi.common.user.AppUserStatus;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -40,7 +50,11 @@ class ThreadWorkspaceServiceTest {
 	private final WorkspaceAuthorizer authorizer = mock(WorkspaceAuthorizer.class);
 	private final WorkspaceNodeRepository nodes = mock(WorkspaceNodeRepository.class);
 	private final TenantRepository tenants = mock(TenantRepository.class);
-	private final ThreadWorkspaceService service = new ThreadWorkspaceService(rbac, authorizer, nodes, tenants);
+	private final AppUserRepository appUsers = mock(AppUserRepository.class);
+	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
+	private final ThreadWorkspaceService service = new ThreadWorkspaceService(rbac, authorizer, nodes, tenants, appUsers,
+			members, orgUnits);
 
 	private Tenant tenant;
 	private WorkspaceNode root;
@@ -62,15 +76,24 @@ class ThreadWorkspaceServiceTest {
 			when(nodes.findById(node.getId())).thenReturn(Optional.of(node));
 		}
 		when(authorizer.canView(any(), any())).thenReturn(Mono.just(false));
+		when(authorizer.canCreateThread(any(), any())).thenReturn(Mono.just(false));
 	}
 
 	// ------------------------------------------------------------------ 협업방
 
 	@Test
-	void collabThreadGoesIntoTheChosenVisibleWorkspace() {
-		visible(hr);
+	void collabThreadGoesIntoTheChosenWorkspaceWhereTheSubjectCanCreateThreads() {
+		creatable(hr);
 
 		assertThat(service.collabPlacement(SUBJECT, hr.getId()).block()).contains(hr);
+	}
+
+	/** 보기(VIEWER)만 있으면 방을 만들 수 없다 — 협업방 생성은 THREAD_CREATE다(#299). */
+	@Test
+	void seeingAWorkspaceIsNotEnoughToCreateAThreadInIt() {
+		visible(hr);
+
+		assertStatus(service.collabPlacement(SUBJECT, hr.getId()), HttpStatus.FORBIDDEN);
 	}
 
 	@Test
@@ -86,12 +109,12 @@ class ThreadWorkspaceServiceTest {
 	}
 
 	@Test
-	void invisibleRootInactiveAndUnknownNodesAreAllForbiddenAlike() {
-		visible(root);
+	void unauthorizedRootInactiveAndUnknownNodesAreAllForbiddenAlike() {
+		creatable(root);
 		WorkspaceNode retired = WorkspaceNode.child(tenant.getId(), root.getId(), root.getPath(), "old",
 				WorkspaceNodeKind.WORK, "옛 방", WorkspaceNodeStatus.INACTIVE);
 		when(nodes.findById(retired.getId())).thenReturn(Optional.of(retired));
-		visible(retired);
+		creatable(retired);
 
 		assertStatus(service.collabPlacement(SUBJECT, hrLead.getId()), HttpStatus.FORBIDDEN);
 		assertStatus(service.collabPlacement(SUBJECT, root.getId()), HttpStatus.FORBIDDEN);
@@ -101,22 +124,85 @@ class ThreadWorkspaceServiceTest {
 
 	// ------------------------------------------------------------------ 1:1
 
+	/** 판정이 켜져 있으면 1:1은 요청자의 배정 Tenant의 common에 둔다(#299). 다른 Tenant가 있어도 헷갈리지 않는다. */
 	@Test
-	void directThreadGoesIntoCommonOfTheOnlyActiveTenant() {
-		when(tenants.findAll()).thenReturn(List.of(tenant, new Tenant("old", "옛 고객사", TenantStatus.INACTIVE)));
+	void directThreadGoesIntoCommonOfTheRequestersAssignedTenant() {
+		UUID userId = assignedUser(tenant.getId(), OrgUnitStatus.ACTIVE);
+		when(tenants.findById(tenant.getId())).thenReturn(Optional.of(tenant));
 		when(nodes.findByTenantIdAndKey(tenant.getId(), "common")).thenReturn(Optional.of(common));
 
-		assertThat(service.directPlacementBlocking()).contains(common);
+		assertThat(service.directPlacementBlocking(userId)).contains(common);
 	}
 
-	/** Tenant가 여럿이면 사람이 어느 Tenant 소속인지 모른다(절체의 몫) — 추측하지 않고 비워 둔다. */
+	/** 배정이 없으면 1:1도 만들 수 없다 — common도 배정이 있어야 본다(#299). */
 	@Test
-	void directThreadStaysUnplacedWhenThereIsNoSingleActiveTenant() {
-		when(tenants.findAll()).thenReturn(List.of(tenant, new Tenant("acme", "다른 고객사", TenantStatus.ACTIVE)));
-		assertThat(service.directPlacementBlocking()).isEmpty();
+	void directThreadIsForbiddenWithoutAnAssignment() {
+		UUID userId = UUID.randomUUID();
+		AppUser user = loginUser();
+		when(appUsers.findById(userId)).thenReturn(Optional.of(user));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of());
 
-		when(tenants.findAll()).thenReturn(List.of());
-		assertThat(service.directPlacementBlocking()).isEmpty();
+		assertThatThrownBy(() -> service.directPlacementBlocking(userId))
+				.isInstanceOfSatisfying(ResponseStatusException.class,
+						error -> assertThat(error.getStatusCode()).isEqualTo(HttpStatus.FORBIDDEN));
+	}
+
+	@Test
+	void directThreadIsForbiddenWhenTheAssignedTenantOrTeamIsInactive() {
+		UUID userId = assignedUser(tenant.getId(), OrgUnitStatus.ACTIVE);
+		when(tenants.findById(tenant.getId())).thenReturn(Optional.of(new Tenant("ogjg", "ACME", TenantStatus.INACTIVE)));
+		when(nodes.findByTenantIdAndKey(tenant.getId(), "common")).thenReturn(Optional.of(common));
+		assertThatThrownBy(() -> service.directPlacementBlocking(userId)).isInstanceOf(ResponseStatusException.class);
+
+		UUID other = assignedUser(tenant.getId(), OrgUnitStatus.INACTIVE);
+		when(tenants.findById(tenant.getId())).thenReturn(Optional.of(tenant));
+		assertThatThrownBy(() -> service.directPlacementBlocking(other)).isInstanceOf(ResponseStatusException.class);
+	}
+
+	/** 판정이 꺼져 있으면 지금처럼 ACTIVE Tenant가 하나일 때만 그 common이고, 여럿이면 비워 둔다. */
+	@Test
+	void withEnforcementOffDirectThreadGoesIntoTheOnlyActiveTenantsCommonOrStaysUnplaced() {
+		rbac.setEnforce(false);
+		UUID userId = UUID.randomUUID();
+		AppUser user = mock(AppUser.class);
+		when(user.getStatus()).thenReturn(AppUserStatus.ACTIVE);
+		when(appUsers.findById(userId)).thenReturn(Optional.of(user));
+		when(tenants.findAll()).thenReturn(List.of(tenant, new Tenant("old", "옛 고객사", TenantStatus.INACTIVE)));
+		when(nodes.findByTenantIdAndKey(tenant.getId(), "common")).thenReturn(Optional.of(common));
+		assertThat(service.directPlacementBlocking(userId)).contains(common);
+
+		when(tenants.findAll()).thenReturn(List.of(tenant, new Tenant("acme", "다른 고객사", TenantStatus.ACTIVE)));
+		assertThat(service.directPlacementBlocking(userId)).isEmpty();
+		verifyNoInteractions(members);
+	}
+
+	@Test
+	void inactiveDirectOwnerCannotCreateATurnWithPreservedAssignment() {
+		UUID userId = assignedUser(tenant.getId(), OrgUnitStatus.ACTIVE);
+		AppUser inactive = new AppUser(SUBJECT);
+		inactive.deactivate();
+		when(appUsers.findById(userId)).thenReturn(Optional.of(inactive));
+
+		assertStatus(Mono.fromCallable(() -> service.directPlacementBlocking(userId)), HttpStatus.FORBIDDEN);
+		verifyNoInteractions(tenants);
+	}
+
+	/** SUBJECT로 로그인하는 사람을 만들고, 그 사람을 tenantId의 팀(상태 지정)에 배정한다. */
+	private UUID assignedUser(UUID tenantId, OrgUnitStatus teamStatus) {
+		UUID userId = UUID.randomUUID();
+		OrgUnit team = new OrgUnit(tenantId, "team-" + userId.toString().substring(0, 6), "팀", teamStatus);
+		AppUser user = loginUser();
+		when(appUsers.findById(userId)).thenReturn(Optional.of(user));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, team.getId(), SUBJECT, Rank.S)));
+		when(orgUnits.findById(team.getId())).thenReturn(Optional.of(team));
+		return userId;
+	}
+
+	private static AppUser loginUser() {
+		AppUser user = mock(AppUser.class);
+		when(user.getKeycloakSubj()).thenReturn(SUBJECT);
+		when(user.getStatus()).thenReturn(AppUserStatus.ACTIVE);
+		return user;
 	}
 
 	// ------------------------------------------------------------------ 목록
@@ -187,6 +273,12 @@ class ThreadWorkspaceServiceTest {
 
 		assertThat(service.filterVisible(threads, SUBJECT).block()).isEqualTo(threads);
 		verifyNoInteractions(authorizer);
+	}
+
+	private void creatable(WorkspaceNode... workspaces) {
+		for (WorkspaceNode node : workspaces) {
+			when(authorizer.canCreateThread(eq(SUBJECT), eq(node.getId()))).thenReturn(Mono.just(true));
+		}
 	}
 
 	private void visible(WorkspaceNode... workspaces) {

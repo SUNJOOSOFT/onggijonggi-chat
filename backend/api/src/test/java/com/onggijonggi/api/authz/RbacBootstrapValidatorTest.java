@@ -377,6 +377,10 @@ class RbacBootstrapValidatorTest {
 		return new RbacBootstrapSpec.RankGrantSpec(unit, rank, node);
 	}
 
+	private static RbacBootstrapSpec.RankGrantSpec rank(String unit, String rank, String role, String node) {
+		return new RbacBootstrapSpec.RankGrantSpec(unit, rank, role, node);
+	}
+
 	@Test
 	void rankGrantsWithOrWithoutATeamAreAccepted() {
 		assertThat(problemsOf(withRankGrants(List.of(node("sales-lead", "sales-hq", "Sales Lead")), List.of(),
@@ -399,6 +403,15 @@ class RbacBootstrapValidatorTest {
 		// 팀 부여가 있는데 ADMIN만 빠진 최상위 노드도 거부한다.
 		assertOne(problemsOf(withRankGrants(List.of(node("company", "root", "Company")),
 				List.of(grant("sales", "VIEWER", "company")), rank(null, "TL", "company"))),
+				"최상위 노드에 ADMIN 부여가 선언돼 있지 않다");
+	}
+
+	@Test
+	void rankAdminGrantSatisfiesTopLevelAdminRequirementAlongsideTeamViewerGrant() {
+		List<RbacBootstrapSpec.NodeSpec> nodes = List.of(node("company", "root", "Company"));
+		List<RbacBootstrapSpec.GrantSpec> grants = List.of(grant("sales", "VIEWER", "company"));
+		assertThat(problemsOf(withRankGrants(nodes, grants, rank("sales", "TL", "ADMIN", "company")))).isEmpty();
+		assertOne(problemsOf(withRankGrants(nodes, grants, rank("sales", "TL", "VIEWER", "company"))),
 				"최상위 노드에 ADMIN 부여가 선언돼 있지 않다");
 	}
 

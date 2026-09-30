@@ -1,6 +1,6 @@
 package com.onggijonggi.api.auth;
 
-import com.onggijonggi.api.authz.OrgUnitMemberService;
+import com.onggijonggi.api.chat.CollabAuthorizationRevoker;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrInv;
@@ -18,6 +18,8 @@ import com.onggijonggi.common.user.AppUserStatus;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -32,10 +34,8 @@ import reactor.core.scheduler.Schedulers;
  *               그 사람이 보낸 대기 초대도 같은 사유로 거둔다(#127) — 초대는 아직 참가가 아니라
  *               참여 정리에 걸리지 않기 때문이다.
  *
- *               팀·직급 배정(org_unit_mbr)도 해제한다. 배정은 Keycloak subject로 적혀 FK가 없어 계정 상태를
- *               따라오지 않는다 — 비활성 계정은 로그인을 못 해 권한이 새지는 않지만, 배정이 남으면 명단이 실제와
- *               어긋난다. 배정 서비스를 거쳐 SYSTEM 행위자 이력(MEMBER_UNASSIGNED)을 남긴다. 재활성화해도
- *               배정은 되살리지 않는다(참여와 같다) — 다시 필요하면 다시 배정한다.
+ *               조직·직급 배정(org_unit_mbr)은 지우지 않는다(#299) — 재활성화하면 그대로 다시 쓰인다. 대신 커밋 뒤
+ *               그 사람의 협업방 구독과 협업방 AI 턴을 바로 거둔다. 1:1 소유는 건드리지 않는다.
  *
  *               DIRECT의 유일 OWNER는 과거 1:1 이력의 접근 기준이므로 끝내거나 보관하지 않는다(#216).
  *               COLLAB OWNER인 방은 #20의 "위임 전엔 나갈 수 없다" 규칙을 그대로 따른다 — 다른 ACTIVE
@@ -58,28 +58,34 @@ public class AccountDeactivationService {
 
 	private final ThrInvRepository thrInvRepository;
 
-	private final OrgUnitMemberService orgUnitMemberService;
+	private final CollabAuthorizationRevoker collabAuthorizationRevoker;
+
+	private final TransactionTemplate transactions;
 
 	public AccountDeactivationService(AppUserRepository appUserRepository, ThrMbrRepository thrMbrRepository,
-			ThrRepository thrRepository, ThrInvRepository thrInvRepository, OrgUnitMemberService orgUnitMemberService) {
+			ThrRepository thrRepository, ThrInvRepository thrInvRepository,
+			CollabAuthorizationRevoker collabAuthorizationRevoker, PlatformTransactionManager transactionManager) {
 		this.appUserRepository = appUserRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
 		this.thrInvRepository = thrInvRepository;
-		this.orgUnitMemberService = orgUnitMemberService;
+		this.collabAuthorizationRevoker = collabAuthorizationRevoker;
+		this.transactions = new TransactionTemplate(transactionManager);
 	}
 
 	/** ACTIVE 계정만 비활성화할 수 있다. 이미 INACTIVE면 409. */
 	public Mono<Void> deactivate(UUID userId) {
 		return Mono.<Void>fromCallable(() -> {
-					AppUser user = requireActiveUser(userId);
-					thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
-							.forEach(this::endParticipation);
-					revokeSentInvitations(userId);
-					orgUnitMemberService.apply(OrgUnitMemberService.Change.unassign(user.getKeycloakSubj()),
-							OrgUnitMemberService.Actor.system("account-deactivation:" + userId));
-					user.deactivate();
-					appUserRepository.save(user);
+					String subject = transactions.execute(status -> {
+						AppUser user = requireActiveUser(userId);
+						thrMbrRepository.findByUserIdAndStatus(userId, ThrMbrStatus.ACTIVE)
+								.forEach(this::endParticipation);
+						revokeSentInvitations(userId);
+						user.deactivate();
+						appUserRepository.save(user);
+						return user.getKeycloakSubj();
+					});
+					collabAuthorizationRevoker.revoke(subject);
 					return null;
 				})
 				.subscribeOn(Schedulers.boundedElastic());

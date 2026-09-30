@@ -133,10 +133,11 @@ class CollabThreadCreationServiceTest {
 			List<Throwable> outcomes = results.stream().map(this::unwrap).toList();
 
 			assertThat(outcomes).hasSize(2);
-			assertThat(outcomes).filteredOn(java.util.Objects::isNull).hasSize(1);
+			// 두 호출이 정말 겹치면 한쪽이 유니크 위반으로 지고, 한쪽이 먼저 끝나면 뒤쪽은 저장된 키를 보고 같은 방을 돌려준다.
+			// 러너 속도에 따라 어느 쪽이든 나오므로 둘 다 허용하되, 실패는 반드시 DataIntegrityViolationException이어야 한다.
 			assertThat(outcomes).filteredOn(java.util.Objects::nonNull)
-					.singleElement()
-					.isInstanceOf(DataIntegrityViolationException.class);
+					.allSatisfy(thrown -> assertThat(thrown).isInstanceOf(DataIntegrityViolationException.class))
+					.hasSizeLessThanOrEqualTo(1);
 			assertThat(thrRepository.findAll()).extracting(Thr::getTitle).containsOnlyOnce(title);
 		} finally {
 			pool.shutdown();

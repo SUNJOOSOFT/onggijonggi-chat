@@ -5,12 +5,15 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakUserSummary;
+import com.onggijonggi.common.authz.OrgUnitMemberRepository;
+import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
@@ -69,13 +72,24 @@ class ThreadParticipantServiceTest {
 	@Mock
 	private ThreadMembershipService threadMembershipService;
 
+	@Mock
+	private OrgUnitMemberRepository orgUnitMemberRepository;
+
+	@Mock
+	private OrgUnitRepository orgUnitRepository;
+
+	@Mock
+	private OwnerTransferAuditService ownerTransferAuditService;
+
 	private ThreadParticipantService service;
 
 	@BeforeEach
 	void setUp() {
 		service = new ThreadParticipantService(thrMbrRepository, thrRepository, appUserRepository,
 				roomSessionRegistry, keycloakAdminClient, thrInvRepository, invitationAcceptanceService,
-				threadMembershipService);
+				threadMembershipService, new RankedDisplayNames(keycloakAdminClient, orgUnitMemberRepository),
+				new PeopleSearch(keycloakAdminClient, orgUnitMemberRepository, orgUnitRepository),
+				ownerTransferAuditService);
 		// 워크스페이스 판정은 따로 검증한다(아래 워크스페이스 테스트). 나머지 테스트는 늘 볼 수 있는 것으로 둔다.
 		lenient().when(threadMembershipService.canEnterWorkspace(any(), any())).thenReturn(Mono.just(true));
 		when(thrRepository.findById(any())).thenAnswer(ignored ->
@@ -148,7 +162,8 @@ class ThreadParticipantServiceTest {
 				ThrMbrStatus.ACTIVE))
 				.thenReturn(Optional.of(new ThrMbr(threadId, targetUserId, ThrMbrRole.MEMBER, actorUserId)));
 		// 사전 확인 시점엔 조건이 맞았지만, 그 사이 다른 위임이 끝나 실제 UPDATE는 한 행만 맞춘다.
-		when(thrMbrRepository.transferOwnership(threadId, actorUserId, targetUserId)).thenReturn(1);
+		doThrow(new ResponseStatusException(HttpStatus.CONFLICT)).when(ownerTransferAuditService)
+				.transfer(threadId, actorUserId, targetUserId);
 
 		StepVerifier.create(service.transferOwner(threadId, actorUserId, "race-target"))
 				.verifyErrorSatisfies(error -> assertThat(error)
@@ -355,7 +370,6 @@ class ThreadParticipantServiceTest {
 		when(thrMbrRepository.findByThrIdAndUserIdAndRoleAndStatus(threadId, targetUserId, ThrMbrRole.MEMBER,
 				ThrMbrStatus.ACTIVE))
 				.thenReturn(Optional.of(new ThrMbr(threadId, targetUserId, ThrMbrRole.MEMBER, actorUserId)));
-		when(thrMbrRepository.transferOwnership(threadId, actorUserId, targetUserId)).thenReturn(2);
 		when(keycloakAdminClient.displayName("new-owner-sub")).thenReturn(Mono.just(Optional.of("New Owner")));
 
 		StepVerifier.create(service.transferOwner(threadId, actorUserId, "new-owner-sub")).verifyComplete();

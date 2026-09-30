@@ -11,9 +11,15 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.common.authz.OrgUnit;
 import com.onggijonggi.common.authz.OrgUnitMember;
 import com.onggijonggi.common.authz.OrgUnitMemberRepository;
+import com.onggijonggi.common.authz.OrgUnitRepository;
+import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
+import com.onggijonggi.common.authz.Tenant;
+import com.onggijonggi.common.authz.TenantRepository;
+import com.onggijonggi.common.authz.TenantStatus;
 import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
@@ -27,22 +33,27 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Class Name : WorkspaceAuthorizerTest.java
- * Description : 판정 API가 Casbin에 묻기 전후에 지키는 규칙을 검증한다 — 스위치가 꺼지면 늘 허용, COMMON은 VIEW에
- *               한해 누구나(THREAD_CREATE·MANAGE는 COMMON이라도 예외 없이 판정을 탄다), 미배정자는 묻지 않고
- *               거부, 서열은 숫자 속성, 배정마다 묻기(겸직 대비), 규칙을 잃으면 한 번만 다시 넣고 재시도.
+ * Description : 판정 API가 Casbin에 묻기 전후에 지키는 규칙을 검증한다(#299) — 스위치가 꺼지면 늘 허용, COMMON도
+ *               예외 없이 판정을 탄다, 미배정자·다른 Tenant 배정·비활성 Tenant·비활성 org-unit은 묻지 않고 거부,
+ *               서열은 숫자 속성, 배정마다 묻기(겸직 대비), 규칙을 잃으면 한 번만 다시 넣고 재시도.
  *               Casbin 판정 자체는 CasbinServerContainerTest가 실제 서버로 확인한다.
  */
 class WorkspaceAuthorizerTest {
 
-	private static final UUID TENANT = UUID.randomUUID();
 	private static final String SUBJECT = "sub-kim";
 
+	private final Tenant acme = new Tenant("acme", "ACME", TenantStatus.ACTIVE);
+	private final UUID tenantId = acme.getId();
 	private final RbacProperties rbac = new RbacProperties();
 	private final WorkspaceNodeRepository nodes = mock(WorkspaceNodeRepository.class);
 	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final TenantRepository tenants = mock(TenantRepository.class);
+	private final OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
 	private final CasbinRuleLoader loader = mock(CasbinRuleLoader.class);
 	private final CasbinClient client = mock(CasbinClient.class);
-	private final WorkspaceAuthorizer authorizer = new WorkspaceAuthorizer(rbac, nodes, members, loader, client, new JsonMapper());
+	private final RbacPolicyRefresh policyRefresh = mock(RbacPolicyRefresh.class);
+	private final WorkspaceAuthorizer authorizer = new WorkspaceAuthorizer(rbac, nodes, members, tenants, orgUnits, loader, client,
+			new JsonMapper(), policyRefresh);
 
 	private WorkspaceNode root;
 	private WorkspaceNode hr;
@@ -50,9 +61,12 @@ class WorkspaceAuthorizerTest {
 	@BeforeEach
 	void setUp() {
 		rbac.setEnforce(true);
-		root = WorkspaceNode.root(TENANT, "Root");
-		hr = WorkspaceNode.child(TENANT, root.getId(), root.getPath(), "hr", WorkspaceNodeKind.ORG, "인사팀", WorkspaceNodeStatus.ACTIVE);
+		root = WorkspaceNode.root(tenantId, "Root");
+		hr = WorkspaceNode.child(tenantId, root.getId(), root.getPath(), "hr", WorkspaceNodeKind.ORG, "인사팀", WorkspaceNodeStatus.ACTIVE);
 		when(nodes.findById(hr.getId())).thenReturn(Optional.of(hr));
+		when(tenants.findById(tenantId)).thenReturn(Optional.of(acme));
+		// 배정된 팀은 기본으로 같은 Tenant의 ACTIVE 팀이다. 비활성·다른 Tenant 팀은 해당 테스트에서 바꾼다.
+		when(orgUnits.findById(any())).thenReturn(Optional.of(new OrgUnit(tenantId, "team", "Team", OrgUnitStatus.ACTIVE)));
 		when(client.isLoaded()).thenReturn(true);
 	}
 
@@ -61,33 +75,67 @@ class WorkspaceAuthorizerTest {
 		rbac.setEnforce(false);
 
 		assertThat(authorizer.canView(SUBJECT, hr.getId()).block()).isTrue();
-		verifyNoInteractions(nodes, members, loader, client);
+		verifyNoInteractions(nodes, members, tenants, orgUnits, loader, client);
 	}
 
 	@Test
-	void anyoneSeesTheCommonWorkspaceEvenWithoutAnAssignment() {
-		WorkspaceNode common = WorkspaceNode.common(TENANT, root.getId(), root.getPath(), "Common");
-		when(nodes.findById(common.getId())).thenReturn(Optional.of(common));
-
-		assertThat(authorizer.canView(SUBJECT, common.getId()).block()).isTrue();
-		verifyNoInteractions(members, client);
-	}
-
-	@Test
-	void commonWorkspaceDoesNotBypassThreadCreate() {
-		// VIEW만 COMMON 예외를 탄다 — THREAD_CREATE는 COMMON이라도 정상적으로 Casbin에 묻는다.
-		WorkspaceNode common = WorkspaceNode.common(TENANT, root.getId(), root.getPath(), "Common");
+	void theCommonWorkspaceIsNotOpenToPeopleWithoutAnAssignment() {
+		// COMMON도 예외가 없다. 소속이 없으면 1:1 채팅도 쓸 수 없다(#299).
+		WorkspaceNode common = WorkspaceNode.common(tenantId, root.getId(), root.getPath(), "Common");
 		when(nodes.findById(common.getId())).thenReturn(Optional.of(common));
 		when(members.findBySubject(SUBJECT)).thenReturn(List.of());
 
+		assertThat(authorizer.canView(SUBJECT, common.getId()).block()).isFalse();
 		assertThat(authorizer.canCreateThread(SUBJECT, common.getId()).block()).isFalse();
+		verifyNoInteractions(client);
+	}
+
+	@Test
+	void theCommonWorkspaceIsSeenThroughItsRequiredViewerGrant() {
+		// 소속이 있으면 COMMON도 Casbin에 묻는다 — 모든 ACTIVE 팀이 가진 COMMON VIEWER 부여가 통과시킨다.
+		WorkspaceNode common = WorkspaceNode.common(tenantId, root.getId(), root.getPath(), "Common");
+		when(nodes.findById(common.getId())).thenReturn(Optional.of(common));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.S)));
+		when(client.enforce(anyString(), eq(common.getId().toString()), eq(CasbinPolicy.VIEW))).thenReturn(true);
+
+		assertThat(authorizer.canView(SUBJECT, common.getId()).block()).isTrue();
+		verify(client).enforce(anyString(), eq(common.getId().toString()), eq(CasbinPolicy.VIEW));
+	}
+
+	@Test
+	void anAssignmentInAnotherTenantIsDeniedWithoutAskingCasbin() {
+		// Casbin model에는 Tenant 차원이 없다. 팀을 정하지 않은 직급 규칙이 다른 Tenant의 같은 직급을 통과시키지 않게
+		// 배정의 Tenant가 대상 노드의 Tenant와 다르면 묻지 않는다.
+		UUID otherTenant = UUID.randomUUID();
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(otherTenant, UUID.randomUUID(), SUBJECT, Rank.TL)));
+
+		assertThat(authorizer.canView(SUBJECT, hr.getId()).block()).isFalse();
+		verifyNoInteractions(client);
+	}
+
+	@Test
+	void anInactiveTenantIsDeniedWithoutAskingCasbin() {
+		Tenant closed = new Tenant("closed", "Closed", TenantStatus.INACTIVE);
+		when(tenants.findById(tenantId)).thenReturn(Optional.of(closed));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.TL)));
+
+		assertThat(authorizer.canView(SUBJECT, hr.getId()).block()).isFalse();
+		verifyNoInteractions(client);
+	}
+
+	@Test
+	void anAssignmentToAnInactiveOrgUnitIsDeniedWithoutAskingCasbin() {
+		when(orgUnits.findById(any())).thenReturn(Optional.of(new OrgUnit(tenantId, "retired", "Retired", OrgUnitStatus.INACTIVE)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.TL)));
+
+		assertThat(authorizer.canView(SUBJECT, hr.getId()).block()).isFalse();
 		verifyNoInteractions(client);
 	}
 
 	@Test
 	void canCreateThreadAsksCasbinForTheThreadCreateAction() {
 		UUID team = UUID.randomUUID();
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, team, SUBJECT, Rank.K)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, team, SUBJECT, Rank.K)));
 		when(client.enforce(anyString(), eq(hr.getId().toString()), eq(CasbinPolicy.THREAD_CREATE))).thenReturn(true);
 
 		assertThat(authorizer.canCreateThread(SUBJECT, hr.getId()).block()).isTrue();
@@ -96,7 +144,7 @@ class WorkspaceAuthorizerTest {
 	@Test
 	void canManageAsksCasbinForTheManageAction() {
 		UUID team = UUID.randomUUID();
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, team, SUBJECT, Rank.K)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, team, SUBJECT, Rank.K)));
 		when(client.enforce(anyString(), eq(hr.getId().toString()), eq(CasbinPolicy.MANAGE))).thenReturn(true);
 
 		assertThat(authorizer.canManage(SUBJECT, hr.getId()).block()).isTrue();
@@ -113,7 +161,7 @@ class WorkspaceAuthorizerTest {
 
 	@Test
 	void inactiveOrMissingWorkspacesAreDenied() {
-		WorkspaceNode retired = WorkspaceNode.child(TENANT, root.getId(), root.getPath(), "retired", WorkspaceNodeKind.ORG, "Retired",
+		WorkspaceNode retired = WorkspaceNode.child(tenantId, root.getId(), root.getPath(), "retired", WorkspaceNodeKind.ORG, "Retired",
 				WorkspaceNodeStatus.INACTIVE);
 		when(nodes.findById(retired.getId())).thenReturn(Optional.of(retired));
 		UUID missing = UUID.randomUUID();
@@ -127,7 +175,7 @@ class WorkspaceAuthorizerTest {
 	@Test
 	void theAssignmentIsSentAsTeamIdAndNumericRank() {
 		UUID team = UUID.randomUUID();
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, team, SUBJECT, Rank.K)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, team, SUBJECT, Rank.K)));
 		String expected = "{\"OrgUnit\":\"" + team + "\",\"Rank\":4}";
 		when(client.enforce(expected, hr.getId().toString(), "view")).thenReturn(true);
 
@@ -137,8 +185,8 @@ class WorkspaceAuthorizerTest {
 
 	@Test
 	void anyPassingAssignmentAllowsSoThatConcurrentPositionsNeedNoChangeHere() {
-		OrgUnitMember first = new OrgUnitMember(TENANT, UUID.randomUUID(), SUBJECT, Rank.S);
-		OrgUnitMember second = new OrgUnitMember(TENANT, UUID.randomUUID(), SUBJECT, Rank.TL);
+		OrgUnitMember first = new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.S);
+		OrgUnitMember second = new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.TL);
 		when(members.findBySubject(SUBJECT)).thenReturn(List.of(first, second));
 		when(client.enforce(anyString(), eq(hr.getId().toString()), eq("view"))).thenReturn(false, true);
 
@@ -149,7 +197,7 @@ class WorkspaceAuthorizerTest {
 	@Test
 	void lostRulesAreReloadedOnceAndAskedAgain() {
 		// Casbin 서버가 재시작하면 enforce가 false를 내고 적재 상태가 비워진다. 한 번만 다시 넣고 다시 묻는다.
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, UUID.randomUUID(), SUBJECT, Rank.B)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.B)));
 		when(client.enforce(anyString(), any(), any())).thenReturn(false, true);
 		when(client.isLoaded()).thenReturn(false);
 
@@ -160,7 +208,7 @@ class WorkspaceAuthorizerTest {
 
 	@Test
 	void aDenialWithRulesStillLoadedIsNotRetried() {
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(TENANT, UUID.randomUUID(), SUBJECT, Rank.S)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, UUID.randomUUID(), SUBJECT, Rank.S)));
 		when(client.enforce(anyString(), any(), any())).thenReturn(false);
 
 		assertThat(authorizer.canView(SUBJECT, hr.getId()).block()).isFalse();

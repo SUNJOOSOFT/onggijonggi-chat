@@ -80,6 +80,20 @@ class RbacPlatformControllerTest {
 	}
 
 	@Test
+	void membershipChangesAndCsvImportAreControlPlaneOnly() {
+		// 조직·직급 배정과 CSV 임포트는 control plane이다(#299). 일반 USER는 컨트롤러에 닿기 전에 막힌다.
+		client.post().uri("/api/platform/rbac/members/import")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken())
+				.exchange().expectStatus().isEqualTo(HttpStatus.FORBIDDEN);
+		client.get().uri("/api/platform/rbac/admin/status")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken())
+				.exchange().expectStatus().isEqualTo(HttpStatus.FORBIDDEN);
+		client.put().uri("/api/platform/rbac/admin/people/someone/assignment")
+				.header(HttpHeaders.AUTHORIZATION, "Bearer " + userToken())
+				.exchange().expectStatus().isEqualTo(HttpStatus.FORBIDDEN);
+	}
+
+	@Test
 	void theBoundaryCoversTheWholePlatformPrefixNotJustTheKnownEndpoints() {
 		// 없는 경로나 다른 메서드도 USER에게는 404·405가 아니라 403이다 — 존재 여부를 드러내지 않는다.
 		client.post().uri("/api/platform/rbac/anything-else")

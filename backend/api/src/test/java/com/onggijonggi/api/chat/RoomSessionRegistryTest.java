@@ -70,7 +70,7 @@ class RoomSessionRegistryTest {
 		Disposable otherSubscription = registry.join(otherRoomId, UUID.randomUUID(), anyone())
 				.frames().subscribe(other::add);
 
-		ChatMessageFrame expected = new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, sender.subject(), sender.displayName(), "hello");
+		ChatMessageFrame expected = new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, sender.subject(), sender.displayName(), "hello", List.of());
 		assertThat(registry.broadcastIfCurrent(roomId, firstMembership.generation(), expected)).isTrue();
 		// 먼저 들어와 있던 first만 두 번째 입장을 통보받는다 — second는 자기 입장을 받지 않는다.
 		assertThat(first).containsExactly(new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName()), expected);
@@ -168,7 +168,7 @@ class RoomSessionRegistryTest {
 
 		for (int i = 0; i < 257; i++) {
 			registry.broadcastIfCurrent(roomId, slowMembership.generation(),
-					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i));
+					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i, List.of()));
 		}
 
 		assertThat(slowOverflowed).isTrue();
@@ -196,7 +196,7 @@ class RoomSessionRegistryTest {
 				registry.join(roomId, newConnectionId, anyone());
 		Disposable newSubscription = newMembership.frames().subscribe(received::add);
 		assertThat(registry.broadcastIfCurrent(roomId, newMembership.generation(),
-				new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "new room"))).isTrue();
+				new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "new room", List.of()))).isTrue();
 
 		assertThat(received).hasSize(1);
 
@@ -471,7 +471,7 @@ class RoomSessionRegistryTest {
 		try {
 			assertThat(newMembership.generation()).isNotEqualTo(oldMembership.generation());
 			assertThat(registry.broadcastIfCurrent(roomId, oldMembership.generation(),
-					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale"))).isFalse();
+					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale", List.of()))).isFalse();
 			assertThat(received).isEmpty();
 		} finally {
 			newSubscription.dispose();
@@ -497,7 +497,7 @@ class RoomSessionRegistryTest {
 			Future<Boolean> broadcast = executor.submit(() -> {
 				await(start);
 				return registry.broadcastIfCurrent(roomId, oldMembership.generation(),
-						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "racing"));
+						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "racing", List.of()));
 			});
 			start.countDown();
 			leave.get(5, TimeUnit.SECONDS);
@@ -511,7 +511,7 @@ class RoomSessionRegistryTest {
 			Disposable newSubscription = newMembership.frames().subscribe(received::add);
 			try {
 				assertThat(registry.broadcastIfCurrent(roomId, oldMembership.generation(),
-						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale"))).isFalse();
+						new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "stale", List.of()))).isFalse();
 				assertThat(received).isEmpty();
 			} finally {
 				newSubscription.dispose();
@@ -629,6 +629,22 @@ class RoomSessionRegistryTest {
 		assertThat(registry.evict(roomId, "still-nobody")).isFalse();
 	}
 
+	@Test
+	void evictCollabSubscriptionsLeavesDirectSubscriptionsUntouched() {
+		String subject = "same-subject";
+		RoomSessionRegistry.RoomMembership collab = registry.join(UUID.randomUUID(), UUID.randomUUID(), participant(subject));
+		RoomSessionRegistry.RoomMembership direct = registry.join(UUID.randomUUID(), UUID.randomUUID(), participant(subject), false);
+		AtomicBoolean collabKicked = new AtomicBoolean();
+		AtomicBoolean directKicked = new AtomicBoolean();
+		collab.kicked().doOnSuccess(ignored -> collabKicked.set(true)).subscribe();
+		direct.kicked().doOnSuccess(ignored -> directKicked.set(true)).subscribe();
+
+		assertThat(registry.evictCollabSubscriptions(subject)).isTrue();
+
+		assertThat(collabKicked).isTrue();
+		assertThat(directKicked).isFalse();
+	}
+
 	/**
 	* RoomState.add/remove/evict는 각각 synchronized라 상호 배제는 걸려 있지만, 서로 다른
 	* public 메서드(evict·leave)가 같은 연결을 동시에 건드리는 조합은 별도로 검증된 적이 없었다
@@ -740,7 +756,7 @@ class RoomSessionRegistryTest {
 		await(start);
 		for (int i = 0; i < 100; i++) {
 			registry.broadcastIfCurrent(roomId, roomGeneration,
-					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", prefix + i));
+					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", prefix + i, List.of()));
 		}
 	}
 

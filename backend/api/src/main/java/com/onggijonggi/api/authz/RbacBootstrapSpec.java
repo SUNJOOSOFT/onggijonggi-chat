@@ -38,6 +38,10 @@ public record RbacBootstrapSpec(Reconcile reconcile, List<TenantSpec> tenants) {
 	}
 
 	/** orgUnit은 null일 수 있다(모든 팀). rank는 Rank 코드(TL·B·C·K·D·S)이고 "이 직급 이상"을 뜻한다. */
-	public record RankGrantSpec(String orgUnit, String rank, String node) {
+	public record RankGrantSpec(String orgUnit, String rank, String role, String node) {
+
+		public RankGrantSpec(String orgUnit, String rank, String node) {
+			this(orgUnit, rank, "VIEWER", node);
+		}
 	}
 }

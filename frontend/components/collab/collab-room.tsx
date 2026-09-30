@@ -29,6 +29,7 @@
 
 import { useEffect, useState } from 'react';
 
+import { MessageAttachments } from '@/components/attachments';
 import { CitationsPanel } from '@/components/citations-panel';
 import { Markdown } from '@/components/markdown';
 import { NoticeBanner } from '@/components/notice-banner';
@@ -95,7 +96,12 @@ function MessageRow({ message }: { message: RoomMessage }) {
           )}
         </>
       ) : (
-        <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+        <>
+          <MessageAttachments attachments={message.attachments} />
+          {message.content !== '' && (
+            <p className="whitespace-pre-wrap text-sm">{message.content}</p>
+          )}
+        </>
       )}
     </div>
   );
@@ -233,7 +239,9 @@ export function CollabRoom({ threadId }: { threadId: string }) {
           <div className="border-t p-4">
             <CollabInput
               canSend={connection === 'open'}
-              onSend={(content) => send(content) !== null}
+              onSend={(content, attachmentIds) =>
+                send(content, undefined, undefined, attachmentIds) !== null
+              }
               onCancel={
                 cancellableTurnId === null
                   ? undefined

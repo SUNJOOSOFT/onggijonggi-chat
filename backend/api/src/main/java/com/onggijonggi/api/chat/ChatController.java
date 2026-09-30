@@ -2,6 +2,8 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.auth.CurrentActorProvider;
+import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
@@ -9,6 +11,8 @@ import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import jakarta.validation.Valid;
+import java.util.List;
+import java.util.Map;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.DeleteMapping;
@@ -38,13 +42,15 @@ public class ChatController {
 	private final ThrMbrRepository thrMbrRepository;
 	private final MsgRepository msgRepository;
 	private final CurrentActorProvider currentActorProvider;
+	private final MsgFileService msgFileService;
 
 	public ChatController(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
-			CurrentActorProvider currentActorProvider) {
+			CurrentActorProvider currentActorProvider, MsgFileService msgFileService) {
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.currentActorProvider = currentActorProvider;
+		this.msgFileService = msgFileService;
 	}
 
 	@GetMapping("/api/chat/sessions")
@@ -62,10 +68,9 @@ public class ChatController {
 		return currentUserId()
 				.flatMap(userId -> findOwnedDirectThreadOrNotFound(sessionId, userId))
 				.flatMap(thread -> Mono
-						.fromCallable(() -> msgRepository.findByThrIdOrderBySeqAsc(thread.getId()))
+						.fromCallable(() -> withFiles(msgRepository.findByThrIdOrderBySeqAsc(thread.getId())))
 						.subscribeOn(Schedulers.boundedElastic()))
-				.flatMapMany(Flux::fromIterable)
-				.map(ChatMsgItem::from);
+				.flatMapMany(Flux::fromIterable);
 	}
 
 	/** DIRECT Thread 삭제는 thr_mbr/msg FK cascade로 이력까지 함께 제거한다. */
@@ -104,6 +109,16 @@ public class ChatController {
 				.flatMap(thread -> Mono.fromRunnable(() -> thrRepository.delete(thread))
 						.subscribeOn(Schedulers.boundedElastic()))
 				.then();
+	}
+
+	/** 첨부는 메시지마다 묻지 않고 한 번에 읽는다. */
+	private List<ChatMsgItem> withFiles(List<Msg> messages) {
+		Map<UUID, List<MsgFile>> filesByMsgId = msgFileService.byMessageBlocking(
+				messages.stream().map(Msg::getId).toList());
+		return messages.stream()
+				.map(msg -> ChatMsgItem.from(msg, filesByMsgId.getOrDefault(msg.getId(), List.of()).stream()
+						.map(MsgFileView::from).toList()))
+				.toList();
 	}
 
 	private Mono<Thr> renameOwnedDirectThread(UUID threadId, UUID userId, String title) {

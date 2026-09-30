@@ -2,8 +2,11 @@ package com.onggijonggi.api.authz;
 
 import com.onggijonggi.common.authz.OrgUnitMember;
 import com.onggijonggi.common.authz.OrgUnitMemberRepository;
+import com.onggijonggi.common.authz.OrgUnitRepository;
+import com.onggijonggi.common.authz.OrgUnitStatus;
+import com.onggijonggi.common.authz.TenantRepository;
+import com.onggijonggi.common.authz.TenantStatus;
 import com.onggijonggi.common.authz.WorkspaceNode;
-import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeStatus;
 import java.util.LinkedHashMap;
@@ -20,10 +23,13 @@ import tools.jackson.databind.ObjectMapper;
  * Class Name : WorkspaceAuthorizer.java
  * Description : 03·CORE "이 사람이 이 workspace에서 이 액션을 할 수 있나" 판정 API.
  *               권한 판정(app.rbac.enforce)이 꺼져 있으면 늘 true다 — 끄면 지금과 똑같이 동작해야 한다.
- *               켜져 있으면:
- *               - VIEW에 한해 ACTIVE COMMON은 누구나 본다(미배정자도 1:1 채팅을 쓴다). THREAD_CREATE·MANAGE는
- *                 COMMON이라도 이 예외를 타지 않고 정상적으로 Casbin에 묻는다.
+ *               켜져 있으면(#299):
+ *               - COMMON도 예외가 없다. 모든 ACTIVE org-unit이 COMMON VIEWER 부여를 가지므로 소속이 있는 사람은
+ *                 Casbin 판정으로 COMMON을 보고, 소속이 없는 사람은 COMMON도 못 본다.
  *               - 배정(org_unit_mbr)이 없으면 Casbin에 묻지 않고 거부한다 — 서열 0 같은 값으로 넘기면 서열 규칙이 열린다.
+ *               - Casbin에 묻기 전에 DB로 확인한다: 배정의 Tenant와 대상 노드의 Tenant가 같고, 그 Tenant와 배정된
+ *                 org-unit이 ACTIVE여야 한다. Casbin model에는 Tenant 차원이 없어서 이 검사가 Tenant 격리를 맡는다
+ *                 (팀을 정하지 않은 직급 규칙이 다른 Tenant의 같은 직급을 통과시키지 않게 한다).
  *               - 배정마다 팀·서열을 속성으로 넘겨 묻고 하나라도 통과하면 허용한다. 지금은 겸직이 없어 배정이 늘 하나지만,
  *                 겸직이 생겨도 이 모양 그대로 쓴다.
  *               - Casbin 오류·시간 초과·적재 실패는 모두 거부다.
@@ -35,18 +41,25 @@ public class WorkspaceAuthorizer {
 	private final RbacProperties rbacProperties;
 	private final WorkspaceNodeRepository nodes;
 	private final OrgUnitMemberRepository members;
+	private final TenantRepository tenants;
+	private final OrgUnitRepository orgUnits;
 	private final CasbinRuleLoader loader;
 	private final CasbinClient client;
 	private final ObjectMapper objectMapper;
+	private final RbacPolicyRefresh policyRefresh;
 
 	public WorkspaceAuthorizer(RbacProperties rbacProperties, WorkspaceNodeRepository nodes, OrgUnitMemberRepository members,
-			CasbinRuleLoader loader, CasbinClient client, ObjectMapper objectMapper) {
+			TenantRepository tenants, OrgUnitRepository orgUnits, CasbinRuleLoader loader, CasbinClient client,
+			ObjectMapper objectMapper, RbacPolicyRefresh policyRefresh) {
 		this.rbacProperties = rbacProperties;
 		this.nodes = nodes;
 		this.members = members;
+		this.tenants = tenants;
+		this.orgUnits = orgUnits;
 		this.loader = loader;
 		this.client = client;
 		this.objectMapper = objectMapper;
+		this.policyRefresh = policyRefresh;
 	}
 
 	public Mono<Boolean> canView(String subject, UUID workspaceNodeId) {
@@ -72,8 +85,12 @@ public class WorkspaceAuthorizer {
 	private boolean authorizeBlocking(String subject, UUID workspaceNodeId, String action) {
 		Optional<WorkspaceNode> node = nodes.findById(workspaceNodeId);
 		if (node.isEmpty() || node.get().getStatus() != WorkspaceNodeStatus.ACTIVE) return false;
-		if (action.equals(CasbinPolicy.VIEW) && node.get().getKind() == WorkspaceNodeKind.COMMON) return true;
-		List<OrgUnitMember> assignments = members.findBySubject(subject);
+		UUID tenantId = node.get().getTenantId();
+		if (policyRefresh.isBlocked(tenantId)) return false;
+		if (!isActiveTenant(tenantId)) return false;
+		List<OrgUnitMember> assignments = members.findBySubject(subject).stream()
+				.filter(assignment -> tenantId.equals(assignment.getTenantId()) && isActiveOrgUnit(assignment))
+				.toList();
 		if (assignments.isEmpty()) return false;
 		loader.ensureLoaded();
 		for (OrgUnitMember assignment : assignments) {
@@ -86,6 +103,17 @@ public class WorkspaceAuthorizer {
 			}
 		}
 		return false;
+	}
+
+	private boolean isActiveTenant(UUID tenantId) {
+		return tenants.findById(tenantId).filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).isPresent();
+	}
+
+	/** 배정된 org-unit이 배정과 같은 Tenant에 있고 ACTIVE인가. 비활성 org-unit의 배정은 판정에 쓰지 않는다. */
+	private boolean isActiveOrgUnit(OrgUnitMember assignment) {
+		return orgUnits.findById(assignment.getOrgUnitId())
+				.filter(unit -> unit.getTenantId().equals(assignment.getTenantId()) && unit.getStatus() == OrgUnitStatus.ACTIVE)
+				.isPresent();
 	}
 
 	/** r.sub JSON. 서열은 숫자로 넘긴다 — 문자열이면 casbin-server가 비교에서 오류를 낸다. */

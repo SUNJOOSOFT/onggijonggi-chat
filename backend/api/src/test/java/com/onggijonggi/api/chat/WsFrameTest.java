@@ -99,7 +99,7 @@ class WsFrameTest {
 	void serializesChatMessageWithMsgIdAndSeq() throws Exception {
 		UUID threadId = UUID.randomUUID();
 		UUID msgId = UUID.randomUUID();
-		WsFrame frame = new ChatMessageFrame(threadId, msgId, null, null, 12L, "kc-1", "주성민", "안녕하세요");
+		WsFrame frame = new ChatMessageFrame(threadId, msgId, null, null, 12L, "kc-1", "주성민", "안녕하세요", List.of());
 
 		String json = objectMapper.writeValueAsString(frame);
 
@@ -118,7 +118,8 @@ class WsFrameTest {
 				new PresenceJoinFrame(threadId, participant.subject(), participant.displayName()),
 				new PresenceLeaveFrame(threadId, participant.subject(), participant.displayName()),
 				new PresenceSnapshotFrame(threadId, List.of(participant)),
-				new ChatMessageFrame(threadId, UUID.randomUUID(), null, null, 3L, participant.subject(), participant.displayName(), "content"),
+				new ChatMessageFrame(threadId, UUID.randomUUID(), null, null, 3L, participant.subject(),
+						participant.displayName(), "content", List.of(new MsgFileView(UUID.randomUUID(), "보고서.pdf"))),
 				new SystemNoticeFrame(threadId, "warning", "RISKY_CONTENT", "위험 감지", "trace-2"),
 				new ErrorFrame(threadId, "FORBIDDEN", "권한이 없습니다.", "trace-1"),
 				new ChatQueuedFrame(threadId, UUID.randomUUID(), ChatQueuedStatus.QUEUED),
@@ -138,7 +139,7 @@ class WsFrameTest {
 		String clientMsgId = "Fup9Wytbi2B7C9A0";
 		UUID turnId = UUID.randomUUID();
 		String message = objectMapper.writeValueAsString(new ChatMessageFrame(UUID.randomUUID(), UUID.randomUUID(),
-				clientMsgId, turnId, 1L, "kc-1", "주성민", "@AI 질문"));
+				clientMsgId, turnId, 1L, "kc-1", "주성민", "@AI 질문", List.of()));
 		String answer = objectMapper.writeValueAsString(new ChatAnswerFrame(UUID.randomUUID(), UUID.randomUUID(),
 				turnId, "gemini", 2L, "답", List.of(), false, ChatAnswerStatus.STREAMING));
 
@@ -167,9 +168,9 @@ class WsFrameTest {
 		assertThat(objectMapper.readValue("""
 				{"type":"chat.message","threadId":"%s","content":"@AI 질문","model":"gpt","clientMsgId":"%s","turnId":"%s"}"""
 				.formatted(threadId, clientMsgId, turnId), InboundFrame.class))
-				.isEqualTo(new InboundChatMessage(threadId, "@AI 질문", "gpt", clientMsgId, turnId));
+				.isEqualTo(new InboundChatMessage(threadId, "@AI 질문", "gpt", clientMsgId, turnId, null));
 		assertThat(objectMapper.readValue("{\"type\":\"chat.message\",\"content\":\"hi\"}", InboundFrame.class))
-				.isEqualTo(new InboundChatMessage(null, "hi", null, null, null));
+				.isEqualTo(new InboundChatMessage(null, "hi", null, null, null, null));
 		assertThat(objectMapper.readValue("{\"type\":\"chat.cancel\",\"threadId\":\"%s\",\"turnId\":\"%s\"}"
 				.formatted(threadId, turnId), InboundFrame.class)).isEqualTo(new InboundChatCancel(threadId, turnId));
 		assertThat(objectMapper.readValue("{\"type\":\"room.subscribe\",\"threadId\":\"%s\"}".formatted(threadId),

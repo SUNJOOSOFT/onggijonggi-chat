@@ -2,7 +2,6 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.auth.CurrentActorProvider;
-import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
@@ -66,7 +65,7 @@ public class CollabThreadController {
 	private final ThreadMembershipService threadMembershipService;
 	private final ThreadParticipantService threadParticipantService;
 	private final ThreadLifecycleService threadLifecycleService;
-	private final KeycloakAdminClient keycloakAdminClient;
+	private final RankedDisplayNames rankedDisplayNames;
 	private final CollabThreadCreationService collabThreadCreationService;
 	private final ThreadMessageQueryService threadMessageQueryService;
 	private final ThreadWorkspaceService threadWorkspaceService;
@@ -74,7 +73,7 @@ public class CollabThreadController {
 	public CollabThreadController(CurrentActorProvider currentActorProvider, ThrRepository thrRepository,
 			ThrMbrRepository thrMbrRepository, ThreadMembershipService threadMembershipService,
 			ThreadParticipantService threadParticipantService, ThreadLifecycleService threadLifecycleService,
-			KeycloakAdminClient keycloakAdminClient, CollabThreadCreationService collabThreadCreationService,
+			RankedDisplayNames rankedDisplayNames, CollabThreadCreationService collabThreadCreationService,
 			ThreadMessageQueryService threadMessageQueryService, ThreadWorkspaceService threadWorkspaceService) {
 		this.currentActorProvider = currentActorProvider;
 		this.thrRepository = thrRepository;
@@ -82,7 +81,7 @@ public class CollabThreadController {
 		this.threadMembershipService = threadMembershipService;
 		this.threadParticipantService = threadParticipantService;
 		this.threadLifecycleService = threadLifecycleService;
-		this.keycloakAdminClient = keycloakAdminClient;
+		this.rankedDisplayNames = rankedDisplayNames;
 		this.collabThreadCreationService = collabThreadCreationService;
 		this.threadMessageQueryService = threadMessageQueryService;
 		this.threadWorkspaceService = threadWorkspaceService;
@@ -120,7 +119,7 @@ public class CollabThreadController {
 
 	/**
 	* 인증된 사용자는 제목과 워크스페이스로 방을 만들며, 생성 서비스가 최초 OWNER 참가를 함께 만든다.
-	* 워크스페이스는 볼 수 있는 곳이어야 한다(ThreadWorkspaceService.collabPlacement).
+	* 워크스페이스에 THREAD_CREATE 권한이 있어야 한다(ThreadWorkspaceService.collabPlacement).
 	* Idempotency-Key 헤더가 있으면(이슈 #149) 응답 유실 뒤 재시도에도 같은 방을 그대로 돌려준다 —
 	* 헤더가 없는 호출은 이 계약을 요구하지 않은 것으로 보고 기존과 동일하게 매번 새로 만든다.
 	*/
@@ -295,7 +294,7 @@ public class CollabThreadController {
 				.flatMap(thread -> thread.subjects().stream())
 				.collect(Collectors.toSet());
 		return Flux.fromIterable(subjects)
-				.flatMap(subject -> keycloakAdminClient.displayName(subject)
+				.flatMap(subject -> rankedDisplayNames.displayName(subject)
 						.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
 						DISPLAY_NAME_LOOKUP_CONCURRENCY)
 				.collectMap(Map.Entry::getKey, Map.Entry::getValue)
@@ -320,7 +319,7 @@ public class CollabThreadController {
 	private Mono<List<ParticipantView>> withParticipantDisplayNames(List<ThreadParticipant> participants) {
 		Set<String> subjects = participants.stream().map(ThreadParticipant::subject).collect(Collectors.toSet());
 		return Flux.fromIterable(subjects)
-				.flatMap(subject -> keycloakAdminClient.displayName(subject)
+				.flatMap(subject -> rankedDisplayNames.displayName(subject)
 						.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
 						DISPLAY_NAME_LOOKUP_CONCURRENCY)
 				.collectMap(Map.Entry::getKey, Map.Entry::getValue)

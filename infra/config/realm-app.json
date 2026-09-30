@@ -6,6 +6,10 @@
       {
         "name": "USER",
         "description": "채팅 이용 권한. BFF가 이 역할을 요구한다."
+      },
+      {
+        "name": "PLATFORM_ADMIN",
+        "description": "control plane 운영 권한. 조직·직급 배정, CSV 임포트, bootstrap 재시도, 절체 사전 검증(/api/platform/**)을 부른다. 채팅·워크스페이스 데이터 접근권은 주지 않는다."
       }
     ]
   },
@@ -24,7 +28,7 @@
           "temporary": false
         }
       ],
-      "realmRoles": ["USER"]
+      "realmRoles": ["USER", "PLATFORM_ADMIN"]
     },
     {
       "username": "service-account-${KEYCLOAK_CLIENT_ID}",

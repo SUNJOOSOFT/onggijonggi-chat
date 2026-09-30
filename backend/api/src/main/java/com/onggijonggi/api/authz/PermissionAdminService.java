@@ -12,6 +12,8 @@ import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeStatus;
+import com.onggijonggi.common.user.AppUserRepository;
+import com.onggijonggi.common.user.AppUserStatus;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.HashMap;
@@ -43,15 +45,18 @@ public class PermissionAdminService {
 	private final WorkspaceNodeRepository nodes;
 	private final WorkspaceAuthorizer authorizer;
 	private final OrgUnitMemberService memberService;
+	private final AppUserRepository appUsers;
 
 	public PermissionAdminService(KeycloakAdminClient keycloak, OrgUnitRepository orgUnits, OrgUnitMemberRepository members,
-			WorkspaceNodeRepository nodes, WorkspaceAuthorizer authorizer, OrgUnitMemberService memberService) {
+			WorkspaceNodeRepository nodes, WorkspaceAuthorizer authorizer, OrgUnitMemberService memberService,
+			AppUserRepository appUsers) {
 		this.keycloak = keycloak;
 		this.orgUnits = orgUnits;
 		this.members = members;
 		this.nodes = nodes;
 		this.authorizer = authorizer;
 		this.memberService = memberService;
+		this.appUsers = appUsers;
 	}
 
 	public record Team(UUID id, String key, String name) {
@@ -81,7 +86,7 @@ public class PermissionAdminService {
 			List<KeycloakPerson> people = tuple.getT2().stream()
 					.sorted(Comparator.comparing(KeycloakPerson::username)).toList();
 			return Flux.fromIterable(people)
-					.concatMap(person -> visibleOf(person.subject(), data.workspaces())
+					.concatMap(person -> visibleOfActivePerson(person, data.workspaces())
 							.map(visible -> toPerson(person, data.membersBySubject().get(person.subject()), visible)))
 					.collectList()
 					.map(list -> new Overview(data.teams(), rankOptions(), data.workspaces(), list));
@@ -102,7 +107,7 @@ public class PermissionAdminService {
 				.sorted(Comparator.comparing(OrgUnit::getKey))
 				.map(unit -> new Team(unit.getId(), unit.getKey(), unit.getName()))
 				.toList();
-		// 트리 순서(부모 다음에 자식)로 늘어놓는다. COMMON은 누구나 봐서 표에서 뺀다.
+		// 트리 순서(부모 다음에 자식)로 늘어놓는다. COMMON은 이 권한 표의 표시 대상에서 제외한다.
 		List<WorkspaceNode> active = nodes.findAll().stream()
 				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
 				.filter(node -> node.getKind() != WorkspaceNodeKind.ROOT && node.getKind() != WorkspaceNodeKind.COMMON)
@@ -127,6 +132,14 @@ public class PermissionAdminService {
 		return Flux.fromIterable(workspaces)
 				.concatMap(workspace -> authorizer.canView(subject, workspace.id()).filter(Boolean::booleanValue).map(ignored -> workspace.id()))
 				.collectList();
+	}
+
+	private Mono<List<UUID>> visibleOfActivePerson(KeycloakPerson person, List<Workspace> workspaces) {
+		if (!person.enabled()) return Mono.just(List.of());
+		return Mono.fromCallable(() -> appUsers.findByKeycloakSubj(person.subject())
+				.map(user -> user.getStatus() == AppUserStatus.ACTIVE).orElse(true))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(active -> active ? visibleOf(person.subject(), workspaces) : Mono.just(List.of()));
 	}
 
 	private static Person toPerson(KeycloakPerson person, OrgUnitMember member, List<UUID> visible) {

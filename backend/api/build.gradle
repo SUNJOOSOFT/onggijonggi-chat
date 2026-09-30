@@ -12,6 +12,8 @@ dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-webflux'
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.ai:spring-ai-starter-model-openai'
+	// 03·CORE — 채팅 첨부 파일(txt·md·csv·PDF·DOCX)에서 텍스트를 뽑는다. Apache Tika를 감싼 리더다.
+	implementation 'org.springframework.ai:spring-ai-tika-document-reader'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'

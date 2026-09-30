@@ -18,8 +18,14 @@ export type BffErrorCode =
   | 'RATE_LIMITED' // 429 EDGE — 요청 한도 초과
   | 'IDEMPOTENCY_KEY_CONFLICT' // 409 CORE — 같은 Idempotency-Key에 이전과 다른 요청 내용
   | 'INVITEE_NO_WORKSPACE_ACCESS' // 409 CORE — 초대 대상이 그 방의 워크스페이스를 볼 수 없음
+  | 'RBAC_STATE_CONFLICT' // 409 CORE — Workspace·부여 관리가 현재 권한 구성 때문에 거부됨(선언 리소스, 마지막 ADMIN 등)
   | 'MODEL_UNAVAILABLE' // 502 CORE — 게이트웨이가 모델 호출을 거절
-  | 'MESSAGE_DELIVERY_FAILED'; // WS — 협업방 메시지 방송 실패
+  | 'MESSAGE_DELIVERY_FAILED' // WS — 협업방 메시지 방송 실패
+  | 'UNSUPPORTED_FILE' // 400 CORE — 첨부 형식이 txt·md·csv·pdf·docx가 아님
+  | 'FILE_TOO_LARGE' // 413 CORE — 첨부가 크기 상한을 넘음
+  | 'EMPTY_FILE_TEXT' // 422 CORE — 첨부에서 글자를 못 찾음(스캔 PDF 등)
+  | 'UNREADABLE_FILE' // 422 CORE — 첨부가 손상됐거나 암호가 걸림
+  | 'INVALID_ATTACHMENT'; // 400·WS CORE — 발화에 실은 첨부가 없거나 이미 쓰였거나 개수 초과
 
 export interface BffErrorEnvelope {
   error: { code: string; message?: string; traceId?: string };
@@ -49,6 +55,9 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
   // 다시 시도해도 같다 — 그 사람의 팀·직급 배정이 바뀌어야 풀린다.
   INVITEE_NO_WORKSPACE_ACCESS:
     '이 사람은 이 방의 워크스페이스를 볼 수 없어 초대할 수 없어요.',
+  // 다시 시도해도 같다 — 배포 설정이 정한 리소스이거나, 마지막 관리자·남은 방·남은 배정을 먼저 정리해야 풀린다.
+  RBAC_STATE_CONFLICT:
+    '지금 권한 구성으로는 바꿀 수 없어요. 먼저 정리해야 할 항목이 있는지 확인해 주세요.',
   MESSAGE_DELIVERY_FAILED:
     '메시지를 전달하지 못했어요. 연결을 확인하고 다시 보내 주세요.',
   // 모델 목록에는 API 키를 채우지 않은 모델도 뜬다 — 어떤 키가 설정됐는지는 게이트웨이만 알기
@@ -59,6 +68,15 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
   // 그 사이 보낸 메시지는 들어가지 않았을 수 있다.
   NOT_SUBSCRIBED:
     '방 연결이 잠시 끊겨 다시 연결했어요. 방금 보낸 메시지가 보이지 않으면 다시 보내 주세요.',
+  UNSUPPORTED_FILE: 'txt·md·csv·pdf·docx 파일만 첨부할 수 있어요.',
+  FILE_TOO_LARGE: '파일은 10MB까지 첨부할 수 있어요.',
+  EMPTY_FILE_TEXT:
+    '파일에서 글자를 찾지 못했어요. 스캔한 PDF처럼 이미지로만 된 파일은 읽을 수 없어요.',
+  UNREADABLE_FILE:
+    '파일을 읽지 못했어요. 손상되었거나 암호가 걸린 파일인지 확인해 주세요.',
+  // 이미 보낸 첨부를 다시 실었거나(재시도 등), 한 번에 5개를 넘겼다.
+  INVALID_ATTACHMENT:
+    '첨부 파일을 보낼 수 없어요. 파일을 다시 올린 뒤 보내 주세요(한 번에 5개까지).',
 };
 
 const GENERIC_MESSAGE =

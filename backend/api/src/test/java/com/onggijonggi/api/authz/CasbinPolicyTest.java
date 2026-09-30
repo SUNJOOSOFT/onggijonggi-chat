@@ -51,6 +51,29 @@ class CasbinPolicyTest {
 	}
 
 	@Test
+	void rankGrantExpandsItsRoleIntoTheSameActionsAsADirectGrant() {
+		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(List.of(), List.of(
+				new RankGrant(TENANT, EXEC_NODE, HR, Rank.K, WorkspaceRole.ADMIN)));
+
+		assertThat(rules).containsExactlyInAnyOrder(
+				new CasbinPolicy.Rule("r.sub.OrgUnit == '" + HR + "' && r.sub.Rank <= 4", EXEC_NODE.toString(), "view"),
+				new CasbinPolicy.Rule("r.sub.OrgUnit == '" + HR + "' && r.sub.Rank <= 4", EXEC_NODE.toString(), "thread_create"),
+				new CasbinPolicy.Rule("r.sub.OrgUnit == '" + HR + "' && r.sub.Rank <= 4", EXEC_NODE.toString(), "manage"));
+	}
+
+	/** 같은 조건에 역할이 다른 행이 함께 있으면 허용을 합친다(#299) — 겹치는 액션은 한 행으로 합친다. */
+	@Test
+	void rankGrantsWithTheSameConditionButDifferentRolesAreUnioned() {
+		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(List.of(), List.of(
+				new RankGrant(TENANT, EXEC_NODE, null, Rank.C, WorkspaceRole.VIEWER),
+				new RankGrant(TENANT, EXEC_NODE, null, Rank.C, WorkspaceRole.CONTRIBUTOR)));
+
+		assertThat(rules).containsExactlyInAnyOrder(
+				new CasbinPolicy.Rule("r.sub.Rank <= 3", EXEC_NODE.toString(), "view"),
+				new CasbinPolicy.Rule("r.sub.Rank <= 3", EXEC_NODE.toString(), "thread_create"));
+	}
+
+	@Test
 	void viewerGrantOnlyProducesTheViewAction() {
 		List<CasbinPolicy.Rule> rules = CasbinPolicy.rules(
 				List.of(new WorkspaceGrant(TENANT, HR, HR_NODE, WorkspaceRole.VIEWER)), List.of());

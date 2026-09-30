@@ -11,8 +11,12 @@
  필요한 것"이다. 사람과 AI를 RoomMessage는 보낸 사람 유무로, 이쪽은 role로 가른다.
  *********************************************************/
 
+import type { MessageAttachment } from '@/lib/transport/frames';
+
 export interface RenderedMessage {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  /** 사람 메시지에 실린 첨부. AI 답변은 빈 배열이다. */
+  attachments: MessageAttachment[];
 }

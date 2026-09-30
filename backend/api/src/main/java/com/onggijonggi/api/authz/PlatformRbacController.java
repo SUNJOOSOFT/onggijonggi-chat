@@ -43,8 +43,9 @@ public class PlatformRbacController {
 
 	@PostMapping("/api/platform/rbac/cutover-validation")
 	public Mono<CutoverValidationResult> validateCutover() {
-		return keycloakAdminClient.listEnabledTenantUsers()
-				.flatMap(users -> Mono.fromCallable(() -> cutoverValidationService.validate(users))
+		// Keycloak에서는 누가 로그인할 수 있는지(활성 계정)만 쓴다. 현재 Tenant는 DB 배정에서 구한다(#299).
+		return keycloakAdminClient.listEnabledUserSubjects()
+				.flatMap(subjects -> Mono.fromCallable(() -> cutoverValidationService.validate(subjects))
 						.subscribeOn(Schedulers.boundedElastic()));
 	}
 }

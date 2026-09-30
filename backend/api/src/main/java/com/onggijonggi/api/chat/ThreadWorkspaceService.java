@@ -2,6 +2,10 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.authz.RbacProperties;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
+import com.onggijonggi.common.authz.OrgUnitMember;
+import com.onggijonggi.common.authz.OrgUnitMemberRepository;
+import com.onggijonggi.common.authz.OrgUnitRepository;
+import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
@@ -10,6 +14,9 @@ import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeStatus;
 import com.onggijonggi.common.chat.domain.Thr;
+import com.onggijonggi.common.user.AppUser;
+import com.onggijonggi.common.user.AppUserRepository;
+import com.onggijonggi.common.user.AppUserStatus;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Comparator;
@@ -38,8 +45,9 @@ import reactor.core.scheduler.Schedulers;
  *               워크스페이스 트리는 bootstrap이 만든다. 설정이 없는 배포(casbin 꺼짐)에는 트리가 없으므로 방은 워크스페이스
  *               없이(null) 만들어지고 지금과 똑같이 동작한다. 판정이 켜진 배포에서는 협업방이 워크스페이스를 반드시 가진다.
  *
- *               1:1의 common은 ACTIVE Tenant가 하나일 때만 정한다. 여럿이면 사람이 어느 Tenant에 속하는지 알 길이 아직 없어
- *               (Tenant 절체의 몫) 비워 둔다 — 1:1 입장은 워크스페이스를 보지 않으므로 비워 둬도 막히지 않는다.
+ *               1:1의 common은 판정이 켜져 있으면 요청자의 조직 배정(org_unit_mbr)이 속한 Tenant의 것이다(#299). 배정이
+ *               없거나 그 Tenant·팀이 비활성이면 1:1을 만들 수 없다. 판정이 꺼져 있으면 지금처럼 ACTIVE Tenant가 하나일
+ *               때만 그 common에 두고, 여럿이면 비워 둔다.
  */
 @Service
 public class ThreadWorkspaceService {
@@ -51,13 +59,20 @@ public class ThreadWorkspaceService {
 	private final WorkspaceAuthorizer authorizer;
 	private final WorkspaceNodeRepository nodes;
 	private final TenantRepository tenants;
+	private final AppUserRepository appUsers;
+	private final OrgUnitMemberRepository members;
+	private final OrgUnitRepository orgUnits;
 
 	public ThreadWorkspaceService(RbacProperties rbacProperties, WorkspaceAuthorizer authorizer,
-			WorkspaceNodeRepository nodes, TenantRepository tenants) {
+			WorkspaceNodeRepository nodes, TenantRepository tenants, AppUserRepository appUsers,
+			OrgUnitMemberRepository members, OrgUnitRepository orgUnits) {
 		this.rbacProperties = rbacProperties;
 		this.authorizer = authorizer;
 		this.nodes = nodes;
 		this.tenants = tenants;
+		this.appUsers = appUsers;
+		this.members = members;
+		this.orgUnits = orgUnits;
 	}
 
 	/**
@@ -70,7 +85,8 @@ public class ThreadWorkspaceService {
 
 	/**
 	* 협업방을 둘 노드를 고른다. workspaceId가 없으면 판정이 켜져 있을 때 400, 꺼져 있으면 워크스페이스 없이 만든다.
-	* 없는 노드·비활성 노드·ROOT·볼 수 없는 노드는 모두 403이다 — 어느 노드가 있는지 떠보지 못하게 이유를 나누지 않는다.
+	* 방을 만들려면 그 노드의 THREAD_CREATE가 필요하다(#299) — 보기(VIEWER)만으로는 만들 수 없다.
+	* 없는 노드·비활성 노드·ROOT·권한 없는 노드는 모두 403이다 — 어느 노드가 있는지 떠보지 못하게 이유를 나누지 않는다.
 	*/
 	public Mono<Optional<WorkspaceNode>> collabPlacement(String subject, UUID workspaceId) {
 		if (workspaceId == null) {
@@ -82,13 +98,48 @@ public class ThreadWorkspaceService {
 				.subscribeOn(Schedulers.boundedElastic())
 				.flatMap(node -> node.isEmpty()
 						? Mono.<Optional<WorkspaceNode>>error(new ResponseStatusException(HttpStatus.FORBIDDEN))
-						: authorizer.canView(subject, workspaceId).flatMap(visible -> visible
+						: authorizer.canCreateThread(subject, workspaceId).flatMap(allowed -> allowed
 								? Mono.just(node)
 								: Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN))));
 	}
 
-	/** 1:1을 둘 common. 호출자의 트랜잭션 안에서 부르므로 블로킹이다. */
-	public Optional<WorkspaceNode> directPlacementBlocking() {
+	/**
+	* 1:1을 둘 common. 호출자의 트랜잭션 안에서 부르므로 블로킹이다.
+	*
+	* 판정이 켜져 있으면 요청자의 배정 Tenant의 ACTIVE common이고, 못 정하면 403을 던진다(#299) — 배정이 없거나,
+	* 그 Tenant·팀이 비활성이거나, common이 없을 때다. 여기서는 Casbin에 묻지 않는다. 모든 ACTIVE 팀은 common VIEWER
+	* 부여를 가지며 DB가 그 부여의 삭제를 거부하므로, 배정·Tenant·팀이 ACTIVE면 common을 볼 수 있다. 뒤이은 구독·발화는
+	* {@link ThreadMembershipService#canEnterWorkspace}가 실제 판정으로 다시 확인한다.
+	* 판정이 꺼져 있으면 지금처럼 ACTIVE Tenant가 하나일 때만 그 common이고, 아니면 비워 둔다.
+	*/
+	public Optional<WorkspaceNode> directPlacementBlocking(UUID userId) {
+		AppUser user = appUsers.findById(userId)
+				.filter(found -> found.getStatus() == AppUserStatus.ACTIVE)
+				.orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN));
+		if (!rbacProperties.isEnforce()) {
+			return onlyActiveTenantCommon();
+		}
+		Optional<WorkspaceNode> common = members.findBySubject(user.getKeycloakSubj()).stream().findFirst()
+				.filter(this::isUsableAssignment)
+				.flatMap(assignment -> nodes.findByTenantIdAndKey(assignment.getTenantId(), COMMON_KEY))
+				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE);
+		if (common.isEmpty()) {
+			throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+		}
+		return common;
+	}
+
+	/** 배정의 Tenant와 팀이 모두 ACTIVE이고 팀이 그 Tenant에 있는가. */
+	private boolean isUsableAssignment(OrgUnitMember assignment) {
+		boolean tenantActive = tenants.findById(assignment.getTenantId())
+				.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).isPresent();
+		boolean unitActive = orgUnits.findById(assignment.getOrgUnitId())
+				.filter(unit -> unit.getTenantId().equals(assignment.getTenantId()) && unit.getStatus() == OrgUnitStatus.ACTIVE)
+				.isPresent();
+		return tenantActive && unitActive;
+	}
+
+	private Optional<WorkspaceNode> onlyActiveTenantCommon() {
 		List<Tenant> active = tenants.findAll().stream()
 				.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE)
 				.toList();

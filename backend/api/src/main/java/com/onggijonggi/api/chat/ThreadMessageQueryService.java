@@ -1,7 +1,7 @@
 package com.onggijonggi.api.chat;
 
-import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
@@ -41,14 +41,17 @@ public class ThreadMessageQueryService {
 	private final MsgRepository msgRepository;
 	private final ThrMbrRepository thrMbrRepository;
 	private final AppUserRepository appUserRepository;
-	private final KeycloakAdminClient keycloakAdminClient;
+	private final RankedDisplayNames rankedDisplayNames;
+	private final MsgFileService msgFileService;
 
 	public ThreadMessageQueryService(MsgRepository msgRepository, ThrMbrRepository thrMbrRepository,
-			AppUserRepository appUserRepository, KeycloakAdminClient keycloakAdminClient) {
+			AppUserRepository appUserRepository, RankedDisplayNames rankedDisplayNames,
+			MsgFileService msgFileService) {
 		this.msgRepository = msgRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.appUserRepository = appUserRepository;
-		this.keycloakAdminClient = keycloakAdminClient;
+		this.rankedDisplayNames = rankedDisplayNames;
+		this.msgFileService = msgFileService;
 	}
 
 	/**
@@ -77,21 +80,27 @@ public class ThreadMessageQueryService {
 	* HUMAN 메시지의 thrMbrId → userId → keycloakSubj를 한 번에 모아 조회하고, subject도 중복
 	* 없이 조회한다(#128의 CollabThreadController.summariesFor와 같은 이유) — 같은 사람이 여러
 	* 메시지를 썼다고 Keycloak Admin API를 그만큼 부르면 안 된다. AGENT·SYSTEM은 thrMbrId가 없어
-	* 표시 이름도 null이다.
+	* 표시 이름도 null이다. 첨부도 메시지마다 묻지 않고 한 번에 읽는다.
 	*/
 	private Mono<List<MsgItem>> withAuthorDisplayNames(List<Msg> messages) {
 		return Mono.fromCallable(() -> resolveThrMbrIdToSubject(messages))
+				.zipWith(Mono.fromCallable(() -> msgFileService.byMessageBlocking(
+						messages.stream().map(Msg::getId).toList())))
 				.subscribeOn(Schedulers.boundedElastic())
-				.flatMap(subjectByThrMbrId -> {
+				.flatMap(lookups -> {
+					Map<UUID, String> subjectByThrMbrId = lookups.getT1();
+					Map<UUID, List<MsgFile>> filesByMsgId = lookups.getT2();
 					Set<String> subjects = Set.copyOf(subjectByThrMbrId.values());
 					return Flux.fromIterable(subjects)
-							.flatMap(subject -> keycloakAdminClient.displayName(subject)
+							.flatMap(subject -> rankedDisplayNames.displayName(subject)
 									.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
 									DISPLAY_NAME_LOOKUP_CONCURRENCY)
 							.collectMap(Map.Entry::getKey, Map.Entry::getValue)
 							.map(displayNameBySubject -> messages.stream()
 									.map(msg -> MsgItem.from(msg, subjectByThrMbrId.get(msg.getThrMbrId()),
-											displayNameFor(msg, subjectByThrMbrId, displayNameBySubject)))
+											displayNameFor(msg, subjectByThrMbrId, displayNameBySubject),
+											filesByMsgId.getOrDefault(msg.getId(), List.of()).stream()
+													.map(MsgFileView::from).toList()))
 									.toList());
 				});
 	}

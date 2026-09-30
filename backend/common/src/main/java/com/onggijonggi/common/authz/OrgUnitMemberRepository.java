@@ -12,4 +12,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 public interface OrgUnitMemberRepository extends JpaRepository<OrgUnitMember, UUID> {
 
 	List<OrgUnitMember> findBySubject(String subject);
+
+	/** 한 org-unit에 배정된 사람들. org-unit 비활성화 전에 남은 배정을 확인한다(#260). */
+	List<OrgUnitMember> findByOrgUnitId(UUID orgUnitId);
 }

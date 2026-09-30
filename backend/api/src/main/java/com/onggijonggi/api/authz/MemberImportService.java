@@ -157,8 +157,13 @@ public class MemberImportService {
 		for (Parsed row : parsed) {
 			String subject = subjects.get(row.line());
 			if (subject == null || subject.isEmpty()) continue;
+			Optional<OrgUnitMember> current = members.findBySubject(subject).stream().findFirst();
+			if (current.isPresent() && !current.get().getTenantId().equals(row.orgUnit().getTenantId())) {
+				problems.add(new Problem(row.line(), "다른 Tenant의 팀으로는 옮길 수 없다: " + row.email()));
+				continue;
+			}
 			changes.add(OrgUnitMemberService.Change.assign(subject, row.orgUnit().getId(), row.rank()));
-			rows.add(new Row(row.line(), row.email(), row.team(), row.rankText(), preview(subject, row).name()));
+			rows.add(new Row(row.line(), row.email(), row.team(), row.rankText(), preview(current, row).name()));
 		}
 		problems.sort((left, right) -> Integer.compare(left.line(), right.line()));
 		boolean applied = false;
@@ -179,8 +184,7 @@ public class MemberImportService {
 	}
 
 	/** 저장하지 않고 결과만 본다. 배정 서비스의 판단과 같은 규칙이다. */
-	private OrgUnitMemberService.Outcome preview(String subject, Parsed row) {
-		Optional<OrgUnitMember> current = members.findBySubject(subject).stream().findFirst();
+	private OrgUnitMemberService.Outcome preview(Optional<OrgUnitMember> current, Parsed row) {
 		if (current.isEmpty()) return OrgUnitMemberService.Outcome.ASSIGNED;
 		OrgUnitMember member = current.get();
 		return member.getOrgUnitId().equals(row.orgUnit().getId()) && member.getRank() == row.rank()

@@ -84,8 +84,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // accessToken은 세션까지, refreshToken은 JWT(httpOnly 쿠키)에만 두고 만료 임박 시
     // 여기서 선제 로테이션한다. 매 요청(authFetch의 getSession())이 이 콜백을 거치므로
     // 별도 배치/타이머 없이 "다음 요청 전 선제 리프레시"가 된다.
-    async jwt({ token, account }) {
+    async jwt({ token, account, profile }) {
       if (account) {
+        // 사이드바의 내 이름. Keycloak 기본 name은 "이름 성" 순서라 성+이름으로 붙인다 — 서버의 표시 이름
+        // (PersonNames)과 같은 규칙이다. 둘 다 없으면 NextAuth가 채운 name(없으면 username)을 그대로 둔다.
+        const fullName = `${profile?.family_name ?? ''}${profile?.given_name ?? ''}`.trim();
+        if (fullName) token.name = fullName;
         token.idToken = account.id_token;
         token.accessToken = account.access_token;
         token.refreshToken = account.refresh_token;

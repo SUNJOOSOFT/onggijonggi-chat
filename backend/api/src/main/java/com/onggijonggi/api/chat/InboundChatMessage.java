@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -26,13 +27,18 @@ import java.util.UUID;
  *               threadId는 커넥션이 여러 방을 나르게 되면서 더했다(이슈 #161) — 경로가 방을 고정하던
  *               때는 필요 없었다. 이 커넥션이 구독한 방이어야 한다.
  *
+ *               attachmentIds는 POST /api/attachments로 미리 올린 첨부다. 본인이 올렸고 아직 다른
+ *               발화에 실리지 않은 것만 받는다. 첨부가 있으면 content가 비어도 된다.
+ *
  * @param threadId 발화할 방
  * @param content 발화 원문
  * @param model 이 턴에 쓸 게이트웨이 모델 별칭. null이면 서버 기본값
  * @param clientMsgId 클라이언트가 만든 임시 메시지 id. 서버는 형식을 가리지 않는다(이슈 #224)
  * @param turnId 클라이언트가 만든 턴 식별자
+ * @param attachmentIds 이 발화에 실을 첨부 id. 없으면 null이나 빈 배열
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
-public record InboundChatMessage(UUID threadId, String content, String model, String clientMsgId, UUID turnId)
+public record InboundChatMessage(UUID threadId, String content, String model, String clientMsgId, UUID turnId,
+		List<UUID> attachmentIds)
 		implements InboundFrame {
 }

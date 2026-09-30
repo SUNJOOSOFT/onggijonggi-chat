@@ -41,6 +41,8 @@ class KeycloakAdminClientTest {
 
 	/** 캐시가 실제로 HTTP를 아꼈는지 보려면 조회 횟수를 세야 한다(이슈 #200). */
 	private final AtomicInteger userRequests = new AtomicInteger();
+	/** 사용자 조회 응답에 덧붙일 이름 필드(JSON 조각). 비어 있으면 이름 없는 계정이다. */
+	private String userNames = "";
 
 	private KeycloakAdminClient clientReturning(String username, long expiresInSeconds) {
 		return clientRespondingWith(HttpStatus.NOT_FOUND, username, expiresInSeconds);
@@ -66,8 +68,8 @@ class KeycloakAdminClientTest {
 				return Mono.just(ClientResponse.create(userLookupFailureStatus).build());
 			}
 			return Mono.just(jsonResponse("""
-					{ "id": "%s", "username": "%s", "firstName": "무시됨" }
-					""".formatted(SUBJECT, username)));
+					{ "id": "%s", "username": "%s"%s }
+					""".formatted(SUBJECT, username, userNames)));
 		});
 		return new KeycloakAdminClient(builder, INTERNAL_URL, REALM, CLIENT_ID, CLIENT_SECRET,
 				displayNameTtl);
@@ -130,6 +132,18 @@ class KeycloakAdminClientTest {
 		assertThat(userRequests.get()).isEqualTo(1);
 	}
 
+	/** 성+이름이 있으면 붙여서 쓴다(PersonNames) — 토큰의 family_name·given_name과 같은 규칙이다. */
+	@Test
+	void resolvesDisplayNameFromFamilyAndGivenName() {
+		userNames = ", \"lastName\": \"황\", \"firstName\": \"정민\"";
+		KeycloakAdminClient client = clientReturning("demo3", 60);
+
+		StepVerifier.create(client.displayName(SUBJECT))
+				.expectNext(Optional.of("황정민"))
+				.verifyComplete();
+	}
+
+	/** 이름이 없는 계정은 username으로 물러난다. */
 	@Test
 	void resolvesDisplayNameFromUsername() {
 		KeycloakAdminClient client = clientReturning("sujin", 60);
@@ -189,17 +203,77 @@ class KeycloakAdminClientTest {
 		assertThat(tokenRequests.get()).isEqualTo(2);
 	}
 
+	// ------------------------------------------------------------------ 초대 후보 검색
+
+	private static final String HWANG = """
+			{ "id": "sub-hwang", "username": "demo3", "lastName": "황", "firstName": "정민" }""";
+	private static final String KIM = """
+			{ "id": "sub-kim", "username": "kimjm", "lastName": "김", "firstName": "정민" }""";
+	private static final String LEE = """
+			{ "id": "sub-lee", "username": "leems", "lastName": "이", "firstName": "민수" }""";
+
+	/** 검색어(디코드된 search 값) → Keycloak이 돌려줄 사람들(JSON 객체). 없는 검색어는 빈 목록이다. */
+	private KeycloakAdminClient clientSearching(java.util.Map<String, List<String>> resultsByQuery, List<String> asked) {
+		WebClient.Builder builder = WebClient.builder().exchangeFunction(request -> {
+			if (request.url().toString().endsWith("/protocol/openid-connect/token")) {
+				return Mono.just(jsonResponse("""
+						{ "access_token": "admin-token", "expires_in": 60, "token_type": "Bearer" }
+						"""));
+			}
+			String query = org.springframework.web.util.UriComponentsBuilder.fromUri(request.url()).build()
+					.getQueryParams().getFirst("search");
+			String decoded = java.net.URLDecoder.decode(query, java.nio.charset.StandardCharsets.UTF_8);
+			asked.add(decoded);
+			return Mono.just(jsonResponse("[" + String.join(",", resultsByQuery.getOrDefault(decoded, List.of())) + "]"));
+		});
+		return new KeycloakAdminClient(builder, INTERNAL_URL, REALM, CLIENT_ID, CLIENT_SECRET, Duration.ofMinutes(5));
+	}
+
+	/** 화면에 보이는 대로 붙여 쓴 "황정민"은 Keycloak의 어느 칸에도 맞지 않는다 — 성을 뗀 "정민"으로 다시 물어 찾는다. */
+	@Test
+	void findsSomeoneByTheirJoinedFamilyAndGivenName() {
+		List<String> asked = new ArrayList<>();
+		KeycloakAdminClient client = clientSearching(java.util.Map.of(
+				"정민", List.of(HWANG, KIM),
+				"민", List.of(HWANG, KIM, LEE)), asked);
+
+		StepVerifier.create(client.search("황정민", 20))
+				.expectNext(List.of(new KeycloakUserSummary("sub-hwang", "황정민")))
+				.verifyComplete();
+		assertThat(asked).containsExactly("황정민", "정민", "민");
+	}
+
+	/** 검색어 그대로 찾은 사람은 이름이 달라도 남긴다(아이디·이메일로 찾은 경우). 같은 사람은 한 번만 나온다. */
+	@Test
+	void keepsDirectMatchesAndListsEachPersonOnce() {
+		KeycloakAdminClient client = clientSearching(java.util.Map.of(
+				"demo3", List.of(HWANG),
+				"emo3", List.of(HWANG, KIM)), new ArrayList<>());
+
+		StepVerifier.create(client.search("demo3", 20))
+				.expectNext(List.of(new KeycloakUserSummary("sub-hwang", "황정민")))
+				.verifyComplete();
+	}
+
+	@Test
+	void triesDroppingOneOrTwoLeadingCharactersAsTheFamilyName() {
+		assertThat(KeycloakAdminClient.fullNameRemainders("정민")).containsExactly("민");
+		assertThat(KeycloakAdminClient.fullNameRemainders("남궁민수")).containsExactly("궁민수", "민수");
+		assertThat(KeycloakAdminClient.fullNameRemainders("황 정민")).isEmpty();
+		assertThat(KeycloakAdminClient.fullNameRemainders("황")).isEmpty();
+	}
+
 	/** 절체 검증은 활성 사용자를 100건씩 끝까지 읽는다 — 첫 페이지에서 멈추면 뒤 사용자가 대조에서 조용히 빠진다. */
 	@Test
-	void listsEnabledTenantUsersAcrossPagesUntilAShortPage() {
+	void listsEnabledUserSubjectsAcrossPagesUntilAShortPage() {
 		List<String> firstValues = new ArrayList<>();
 		KeycloakAdminClient client = clientServingUserPages(130, firstValues);
 
-		List<KeycloakTenantUser> users = client.listEnabledTenantUsers().block();
+		List<String> users = client.listEnabledUserSubjects().block();
 
 		assertThat(users).hasSize(130);
-		assertThat(users.get(0).subject()).isEqualTo("user-0");
-		assertThat(users.get(129).subject()).isEqualTo("user-129");
+		assertThat(users.get(0)).isEqualTo("user-0");
+		assertThat(users.get(129)).isEqualTo("user-129");
 		assertThat(firstValues).containsExactly("0", "100");
 		assertThat(tokenRequests.get()).as("페이지마다 토큰을 새로 받지 않는다").isEqualTo(1);
 	}
@@ -210,7 +284,7 @@ class KeycloakAdminClientTest {
 		List<String> firstValues = new ArrayList<>();
 		KeycloakAdminClient client = clientServingUserPages(100, firstValues);
 
-		assertThat(client.listEnabledTenantUsers().block()).hasSize(100);
+		assertThat(client.listEnabledUserSubjects().block()).hasSize(100);
 		assertThat(firstValues).containsExactly("0", "100");
 	}
 
@@ -219,24 +293,24 @@ class KeycloakAdminClientTest {
 		List<String> firstValues = new ArrayList<>();
 		KeycloakAdminClient client = clientServingUserPages(0, firstValues);
 
-		assertThat(client.listEnabledTenantUsers().block()).isEmpty();
+		assertThat(client.listEnabledUserSubjects().block()).isEmpty();
 		assertThat(firstValues).containsExactly("0");
 	}
 
-	/** 활성 사용자만, 전체(brief 아님) 표현으로 요청한다 — brief는 사용자 속성을 빼서 tenant를 읽을 수 없다. */
+	/** 절체 검증에는 활성 사용자 subject만 필요하므로 간략 표현을 요청한다. */
 	@Test
-	void requestsOnlyEnabledUsersWithFullRepresentation() {
+	void requestsOnlyEnabledUsersWithBriefRepresentation() {
 		KeycloakAdminClient client = clientServingUserPages(1, new ArrayList<>());
 
-		client.listEnabledTenantUsers().block();
+		client.listEnabledUserSubjects().block();
 
 		String query = lastUserRequest.get().url().getRawQuery();
-		assertThat(query).contains("enabled=true").contains("briefRepresentation=false").contains("max=100");
+		assertThat(query).contains("enabled=true").contains("briefRepresentation=true").contains("max=100");
 	}
 
-	/** tenant 속성이 없거나 복수값·빈 값이면 추측하지 않고 비운다 — 호출부가 그 사용자를 속성 불량으로 보고한다. */
+	/** 예전 tenant 속성이 있거나 잘못되어도 활성 사용자 subject 목록은 영향을 받지 않는다. */
 	@Test
-	void mapsTheTenantAttributeOnlyWhenItIsASingleNonBlankValue() {
+	void listsSubjectsRegardlessOfUnusedTenantAttributes() {
 		String page = """
 				[
 				  { "id": "single", "attributes": { "tenant": ["acme"] } },
@@ -249,15 +323,9 @@ class KeycloakAdminClientTest {
 				""";
 		KeycloakAdminClient client = clientServingRawUserPages(page);
 
-		List<KeycloakTenantUser> users = client.listEnabledTenantUsers().block();
+		List<String> subjects = client.listEnabledUserSubjects().block();
 
-		assertThat(users).extracting(KeycloakTenantUser::subject, KeycloakTenantUser::tenant).containsExactly(
-				org.assertj.core.groups.Tuple.tuple("single", Optional.of("acme")),
-				org.assertj.core.groups.Tuple.tuple("none", Optional.empty()),
-				org.assertj.core.groups.Tuple.tuple("no-attributes", Optional.empty()),
-				org.assertj.core.groups.Tuple.tuple("multiple", Optional.empty()),
-				org.assertj.core.groups.Tuple.tuple("blank", Optional.empty()),
-				org.assertj.core.groups.Tuple.tuple("empty-list", Optional.empty()));
+		assertThat(subjects).containsExactly("single", "none", "no-attributes", "multiple", "blank", "empty-list");
 	}
 
 	/** 두 번째 페이지가 실패하면 앞 페이지만 돌려주지 않고 오류를 전파한다 — 일부만 대조한 결과를 통과로 오해하지 않게 한다. */
@@ -274,7 +342,7 @@ class KeycloakAdminClientTest {
 		KeycloakAdminClient client = new KeycloakAdminClient(builder, INTERNAL_URL, REALM, CLIENT_ID, CLIENT_SECRET,
 				Duration.ofMinutes(5));
 
-		StepVerifier.create(client.listEnabledTenantUsers()).expectError().verify();
+		StepVerifier.create(client.listEnabledUserSubjects()).expectError().verify();
 	}
 
 	/** total명의 사용자를 100건 단위로 나눠 주는 Keycloak을 흉내 낸다. 요청마다 `first` 값을 기록한다. */

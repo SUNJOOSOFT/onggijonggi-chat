@@ -1,6 +1,8 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.ThrKind;
+import java.util.List;
 import java.util.UUID;
 
 /**
@@ -16,6 +18,7 @@ import java.util.UUID;
  * @param from 작성자의 내부 app_user.id. 저장 경로에서만 쓰고 밖으로 내보내지 않는다
  * @param fromSubject 작성자의 Keycloak subject. 프레임이 사람을 가리키는 값
  * @param fromDisplayName 작성자의 표시 이름
+ * @param files 이 발화에 실린 첨부. WS 핸들러가 본인 것인지 확인을 마친 것이다. 없으면 빈 리스트
  * @param model {@code @AI} 턴에 쓸 게이트웨이 모델 별칭. null이면 서버 기본값(이슈 #160)
  * @param clientMsgId 클라이언트가 만든 임시 메시지 id. 에코에 돌려준다(이슈 #160). 서버는 해석하지
  *                     않는 불투명 문자열로 다룬다 — UUID로 좁히지 않는다(이슈 #224)
@@ -25,8 +28,17 @@ import java.util.UUID;
  *                      msgId·seq — dispatcher가 새로 만들지 않고 그대로 재사용한다(이슈 #162)
  */
 record ChatMessageCommand(UUID threadId, ThrKind kind, UUID from, String fromSubject, String fromDisplayName,
-		String content, String model, String clientMsgId, UUID turnId, UUID connectionId, String traceId,
-		ReservedTurn reservedTurn) {
+		String content, List<MsgFile> files, String model, String clientMsgId, UUID turnId, UUID connectionId,
+		String traceId, ReservedTurn reservedTurn) {
+
+	List<UUID> fileIds() {
+		return files.stream().map(MsgFile::getId).toList();
+	}
+
+	/** 방송 프레임에 싣는 모양 — 추출한 텍스트는 빼고 이름만 보인다. */
+	List<MsgFileView> fileViews() {
+		return files.stream().map(MsgFileView::from).toList();
+	}
 
 	/** bootstrap 또는 기존 DIRECT 이어쓰기가 이미 예약한 HUMAN·AGENT 자리(이슈 #162). */
 	record ReservedTurn(UUID humanMsgId, long humanSeq, UUID agentMsgId, long agentSeq) {

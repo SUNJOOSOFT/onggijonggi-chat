@@ -469,7 +469,13 @@ class ThreadWebSocketHandlerTest {
 			outbound.tryEmitNext(WsTestExchange.subscribeFrame(keptRoom));
 			assertThat(subscribed.await(5, TimeUnit.SECONDS)).isTrue();
 
+			UUID observerConnection = UUID.randomUUID();
+			RoomSessionRegistry.RoomMembership observer = roomSessionRegistry.join(evictedRoom, observerConnection,
+					new PresenceParticipant("observer", "Observer"));
 			roomSessionRegistry.evict(evictedRoom, "evicted-ws-user");
+			roomSessionRegistry.broadcastIfCurrent(evictedRoom, observer.generation(),
+					new ChatMessageFrame(evictedRoom, UUID.randomUUID(), null, null, 0L,
+							"observer", "Observer", "after revocation", List.of()));
 			outbound.tryEmitNext(WsTestExchange.chatMessageFrame(keptRoom, "after eviction"));
 
 			assertThat(echoed.await(5, TimeUnit.SECONDS)).isTrue();
@@ -483,6 +489,8 @@ class ThreadWebSocketHandlerTest {
 					}));
 			assertThat(frames).anySatisfy(frame -> assertThat(frame).isInstanceOfSatisfying(ChatMessageFrame.class,
 					echo -> assertThat(echo.threadId()).isEqualTo(keptRoom)));
+			assertThat(frames).noneMatch(frame -> frame instanceof ChatMessageFrame echo
+					&& echo.threadId().equals(evictedRoom));
 			// 구독이 실제로 풀려 방에서 빠졌다 — 다시 evict해도 찾을 연결이 없다.
 			assertThat(roomSessionRegistry.evict(evictedRoom, "evicted-ws-user")).isFalse();
 		} finally {

@@ -15,6 +15,9 @@ import { memo, useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { useLocalStorage, useWindowSize } from 'usehooks-ts';
 
+import { useAttachments } from '@/lib/chat/use-attachments';
+import type { MessageAttachment } from '@/lib/transport/frames';
+import { AttachButton, PendingAttachments } from './attachments';
 import { ArrowUpIcon, StopIcon } from './icons';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
@@ -47,11 +50,12 @@ function PureMultimodalInput({
   chatId: string;
   isLoading: boolean;
   stop: () => void;
-  /** 완성된 발화 하나. 어떻게 보낼지는 바깥이 정한다. */
-  onSend: (content: string) => void;
+  /** 완성된 발화 하나와 거기 실을 첨부. 어떻게 보낼지는 바깥이 정한다. */
+  onSend: (content: string, attachments: MessageAttachment[]) => void;
   className?: string;
 }) {
   const [input, setInput] = useState('');
+  const attachments = useAttachments();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const { width } = useWindowSize();
 
@@ -86,24 +90,43 @@ function PureMultimodalInput({
     adjustHeight(textareaRef);
   };
 
+  const { uploaded, uploading, clear: clearAttachments } = attachments;
+  // 첨부만 있어도 보낼 수 있다. 올라가는 중인 첨부가 있으면 기다린다 — 지금 보내면 그 파일이 빠진다.
+  const canSubmit = (input.length > 0 || uploaded.length > 0) && !uploading;
+
   const submitForm = useCallback(() => {
-    // 빈 발화는 보내지 않는다. 버튼은 disabled라 여기 오지 않지만 Enter는 막는 곳이 없다.
-    if (input.length === 0) return;
+    // 버튼은 disabled라 여기 오지 않지만 Enter는 막는 곳이 없다.
+    if (!canSubmit) return;
     window.history.replaceState({}, '', `/chat/${chatId}`);
 
-    onSend(input);
+    onSend(input, uploaded);
 
     setInput('');
     setLocalStorageInput('');
+    clearAttachments();
     resetHeight(textareaRef);
 
     if (width && width > 768) {
       textareaRef.current?.focus();
     }
-  }, [input, onSend, setLocalStorageInput, width, chatId]);
+  }, [
+    canSubmit,
+    input,
+    uploaded,
+    onSend,
+    setLocalStorageInput,
+    clearAttachments,
+    width,
+    chatId,
+  ]);
 
   return (
     <div className="relative w-full flex flex-col gap-4">
+      <PendingAttachments
+        items={attachments.items}
+        onRemove={attachments.remove}
+      />
+
       <Textarea
         ref={textareaRef}
         aria-label="메시지 입력"
@@ -133,11 +156,15 @@ function PureMultimodalInput({
         }}
       />
 
+      <div className="absolute bottom-0 left-0 p-2 w-fit flex flex-row justify-start">
+        <AttachButton onPick={attachments.add} />
+      </div>
+
       <div className="absolute bottom-0 right-0 p-2 w-fit flex flex-row justify-end">
         {isLoading ? (
           <StopButton stop={stop} />
         ) : (
-          <SendButton input={input} submitForm={submitForm} />
+          <SendButton canSubmit={canSubmit} submitForm={submitForm} />
         )}
       </div>
     </div>
@@ -184,10 +211,11 @@ const StopButton = memo(PureStopButton);
 
 function PureSendButton({
   submitForm,
-  input,
+  canSubmit,
 }: {
   submitForm: () => void;
-  input: string;
+  /** 본문이나 다 올라간 첨부가 있어야 보낼 수 있다. */
+  canSubmit: boolean;
 }) {
   return (
     <Button
@@ -197,7 +225,7 @@ function PureSendButton({
         event.preventDefault();
         submitForm();
       }}
-      disabled={input.length === 0}
+      disabled={!canSubmit}
     >
       <ArrowUpIcon size={14} />
     </Button>
@@ -205,7 +233,7 @@ function PureSendButton({
 }
 
 const SendButton = memo(PureSendButton, (prevProps, nextProps) => {
-  if (prevProps.input !== nextProps.input) return false;
+  if (prevProps.canSubmit !== nextProps.canSubmit) return false;
   // submitForm은 handleSubmit에 묶여 있다 — 위와 같은 이유로 함께 본다(이슈 #94).
   if (prevProps.submitForm !== nextProps.submitForm) return false;
   return true;

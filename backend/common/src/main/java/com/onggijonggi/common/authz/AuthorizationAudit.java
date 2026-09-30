@@ -122,6 +122,18 @@ public class AuthorizationAudit {
 		return audit;
 	}
 
+	public static AuthorizationAudit managed(UUID tenantId, UUID actorUserId, String actorRoleJson,
+			AuthorizationAuditEventKind eventKind, AuthorizationAuditTargetKind targetKind, String targetRefJson,
+			UUID workspaceNodeId, String beforeJson, String afterJson, String requestId, String traceId) {
+		AuthorizationAudit audit = new AuthorizationAudit(tenantId, eventKind, targetKind, targetRefJson,
+				workspaceNodeId, beforeJson, afterJson, requestId, null, null);
+		audit.actorKind = AuthorizationActorKind.USER;
+		audit.actorUserId = actorUserId;
+		audit.actorRoleJson = actorRoleJson;
+		audit.traceId = traceId;
+		return audit;
+	}
+
 	public UUID getId() { return id; }
 	public UUID getTenantId() { return tenantId; }
 	public AuthorizationActorKind getActorKind() { return actorKind; }

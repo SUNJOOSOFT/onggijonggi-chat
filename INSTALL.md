@@ -211,7 +211,9 @@ docker compose up -d --build
 
 ## 권한 기능 켜기
 
-팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 개발·데모용이라 지금은 로그인한 누구나 팀·직급을 바꿀 수 있다.
+팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 팀·직급 배정과 CSV 임포트는 Keycloak `PLATFORM_ADMIN` 역할이 있는 계정만 할 수 있고, `.env`의 `APP_USER` 계정이 이 역할을 가진다.
+
+> 이 저장소를 이미 한 번 띄웠다면 Keycloak realm은 처음 만들 때만 가져오므로 `PLATFORM_ADMIN` 역할이 없다. Keycloak 관리 콘솔에서 realm 역할 `PLATFORM_ADMIN`을 만들어 `APP_USER`에 붙이거나, 계정·대화가 지워져도 되면 `docker compose down -v` 뒤 다시 띄운다.
 
 **1. `infra/.env`에 두 줄을 넣고 다시 띄운다.**
 
@@ -233,9 +235,9 @@ node scripts/casbin-demo-accounts.mjs
 node scripts/import-members.mjs infra/config/demo-members.csv --apply
 ```
 
-첫 줄은 `demo1`~`demo7` 계정(비밀번호는 계정 이름과 같다)을 Keycloak에 만들고, 둘째 줄은 `demo1`~`demo6`의 팀·직급을 넣는다. `demo7`은 배정하지 않은 사람을 확인하는 계정이다. 임포트는 `--apply`를 빼면 미리보기만 한다.
+첫 줄은 `demo1`~`demo7` 계정(비밀번호는 계정 이름과 같다)을 Keycloak에 만들고, 둘째 줄은 `APP_USER`로 로그인해 `demo1`~`demo6`의 팀·직급을 넣는다. `demo7`은 배정하지 않은 사람을 확인하는 계정이다 — 권한 기능이 켜져 있으면 조직 배정이 없는 사람은 1:1 채팅도 쓸 수 없다. 임포트는 `--apply`를 빼면 미리보기만 한다.
 
-**3. 화면에서 확인한다.** 로그인하면 사이드바에 **권한 관리**가 생긴다(<http://localhost:3010/admin/permissions>). 사람마다 팀·직급을 바꾸면 "누가 무엇을 보나" 표가 실제 판정 결과로 바뀐다.
+**3. 화면에서 확인한다.** `APP_USER`로 로그인하면 사이드바에 **권한 관리**가 생긴다(`demo` 계정은 일반 사용자라 메뉴가 없다)(<http://localhost:3010/admin/permissions>). 사람마다 팀·직급을 바꾸면 "누가 무엇을 보나" 표가 실제 판정 결과로 바뀐다.
 
 끄려면 두 줄을 지우고 `docker compose --profile casbin down` 뒤 다시 띄운다. 넣어둔 팀·직급은 DB에 남는다.
 

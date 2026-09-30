@@ -6,7 +6,8 @@
 //
 // bff의 casbin 프로필이 켜져 있어야 한다(infra/.env에 SPRING_PROFILE=prod,casbin). 꺼져 있으면 임포트 주소가 없다(404).
 // 한 줄이라도 틀리면 아무것도 저장하지 않고 틀린 줄을 모두 보여준다. CSV에 없는 사람의 배정은 지우지 않는다.
-// 이력에는 이 스크립트로 로그인한 사람이 행위자로 남는다. 기본은 infra/.env의 APP_USER이고
+// 로그인하는 계정에 Keycloak PLATFORM_ADMIN 역할이 있어야 한다(없으면 403). 이력에는 그 사람이 행위자로 남는다.
+// 기본은 infra/.env의 APP_USER(이 역할을 가진다)이고
 // IMPORT_USER·IMPORT_PASSWORD로 바꿀 수 있다. 주소는 BFF_URL(기본 http://localhost:8090)과
 // KEYCLOAK_URL(기본 http://localhost:8081)로 바꿀 수 있다.
 //
@@ -57,12 +58,13 @@ async function main() {
 	const bff = (process.env.BFF_URL || 'http://localhost:8090').replace(/\/$/, '');
 	const token = await login((process.env.KEYCLOAK_URL || 'http://localhost:8081').replace(/\/$/, ''), env);
 
-	const response = await fetch(`${bff}/api/authz/members/import?apply=${apply}`, {
+	const response = await fetch(`${bff}/api/platform/rbac/members/import?apply=${apply}`, {
 		method: 'POST',
 		headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'text/csv; charset=utf-8' },
 		body: csv,
 	});
 	if (response.status === 404) throw new Error('임포트 주소가 없다 — bff의 casbin 프로필이 켜져 있는지 확인한다(SPRING_PROFILE=prod,casbin)');
+	if (response.status === 403) throw new Error('권한이 없다 — 로그인한 계정에 Keycloak PLATFORM_ADMIN 역할이 필요하다(IMPORT_USER 확인)');
 	if (!response.ok) throw new Error(`임포트 실패 → ${response.status} ${await response.text()}`);
 	const report = await response.json();
 

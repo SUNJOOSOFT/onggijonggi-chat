@@ -7,9 +7,7 @@ import static org.mockito.Mockito.when;
 import com.onggijonggi.api.auth.UserIdentityService;
 import com.onggijonggi.api.authz.RbacBootstrapService;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
-import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
-import com.onggijonggi.common.authz.TenantStatus;
 import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.chat.domain.Thr;
@@ -35,8 +33,6 @@ import org.springframework.http.MediaType;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.client.RestTestClient;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 import reactor.core.publisher.Mono;
 
 /**
@@ -69,8 +65,6 @@ class ThreadWorkspacePostgresTest extends PostgresSpringTestBase {
 	private UserIdentityService users;
 	@Autowired
 	private CollabRoomFixture.CollabRooms rooms;
-	@Autowired
-	private PlatformTransactionManager transactionManager;
 
 	private RestTestClient client;
 	private String tenantKey;
@@ -109,8 +103,11 @@ class ThreadWorkspacePostgresTest extends PostgresSpringTestBase {
 		common = nodes.findByTenantIdAndKey(tenantId, "common").orElseThrow();
 		hr = nodes.findByTenantIdAndKey(tenantId, "hr").orElseThrow();
 		hrLead = nodes.findByTenantIdAndKey(tenantId, "hr-lead").orElseThrow();
-		// 실제 판정처럼 워크스페이스가 없으면(null) 거부한다.
+		// 실제 판정처럼 워크스페이스가 없으면(null) 거부한다. 이 테스트의 사람들은 볼 수 있는 곳에 방도 만들 수 있다고
+		// 둔다(CONTRIBUTOR 이상) — 보기만 되고 못 만드는 경우는 ThreadWorkspaceServiceTest가 따로 본다(#299).
 		when(authorizer.canView(any(), any())).thenAnswer(call -> Mono.just(call.getArgument(1) != null
+				&& visible.getOrDefault(call.<String>getArgument(0), Set.of()).contains(call.<UUID>getArgument(1))));
+		when(authorizer.canCreateThread(any(), any())).thenAnswer(call -> Mono.just(call.getArgument(1) != null
 				&& visible.getOrDefault(call.<String>getArgument(0), Set.of()).contains(call.<UUID>getArgument(1))));
 	}
 
@@ -252,18 +249,15 @@ class ThreadWorkspacePostgresTest extends PostgresSpringTestBase {
 				.contains("{\"id\":\"" + root.getId() + "\",\"parentId\":null,\"name\":\"워크스페이스 시험\",\"kind\":\"ROOT\"");
 	}
 
-	/** 다른 Tenant에 이미 정해진 방은 건드리지 않는다. 테스트끼리 DB를 나눠 쓰므로 Tenant 수와 무관한 저장소 쿼리를 직접 본다. */
+	/** bootstrap은 staging 검증 없이 기존 방의 Tenant를 추정해 배치하지 않는다. */
 	@Test
-	void placeUnassignedMovesOnlyUnplacedThreadsOfThatTenant() {
+	void bootstrapLeavesUnassignedThreadsForValidatedCutover() {
 		UUID unplaced = rooms.openRoom("move-a-" + suffix);
-		UUID otherTenant = saveThread("move-b-" + suffix, new Tenant("other-" + suffix, "다른 곳", TenantStatus.ACTIVE));
 
-		new TransactionTemplate(transactionManager)
-				.executeWithoutResult(status -> threads.placeUnassigned(common.getTenantId(), common.getId()));
+		bootstrap.runCurrentConfiguration();
 
-		assertThat(threads.findById(unplaced).orElseThrow().getWorkspaceNodeId()).isEqualTo(common.getId());
-		assertThat(threads.findById(unplaced).orElseThrow().getTenantId()).isEqualTo(common.getTenantId());
-		assertThat(threads.findById(otherTenant).orElseThrow().getWorkspaceNodeId()).isNull();
+		assertThat(threads.findById(unplaced).orElseThrow().getWorkspaceNodeId()).isNull();
+		assertThat(threads.findById(unplaced).orElseThrow().getTenantId()).isNull();
 	}
 
 	// ------------------------------------------------------------------ 도우미
@@ -287,16 +281,6 @@ class ThreadWorkspacePostgresTest extends PostgresSpringTestBase {
 			UUID memberId = users.resolveOrProvision(member).block();
 			members.save(new ThrMbr(thread.getId(), memberId, ThrMbrRole.MEMBER, ownerId));
 		}
-		return thread.getId();
-	}
-
-	/** 다른 Tenant 값만 가진 방. Tenant 행이 있어야 나중에 걸릴 FK와 어긋나지 않는다. */
-	private UUID saveThread(String owner, Tenant tenant) {
-		tenants.save(tenant);
-		UUID ownerId = users.resolveOrProvision(owner).block();
-		Thr thread = Thr.collab(ownerId, "다른 Tenant 방");
-		thread.placeIn(tenant.getId(), null);
-		threads.save(thread);
 		return thread.getId();
 	}
 

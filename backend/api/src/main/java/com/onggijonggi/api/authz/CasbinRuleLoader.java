@@ -53,6 +53,11 @@ public class CasbinRuleLoader {
 		if (!client.isLoaded()) loadQuietly();
 	}
 
+	/** 관리 변경이 커밋된 뒤 DB 규칙 전체로 Casbin 규칙을 갈아 끼운다. 실패는 호출자(RbacPolicyRefresh)에게 던진다. */
+	public synchronized void reload() {
+		client.load(modelText, CasbinPolicy.rules(workspaceGrants.findAll(), rankGrants.findAll()));
+	}
+
 	/** 동시에 여러 판정이 적재를 요청해도 한 번만 넣는다. 실패는 로그만 남긴다 — 적재되지 않은 동안 판정은 모두 거부다. */
 	private synchronized void loadQuietly() {
 		if (client.isLoaded()) return;

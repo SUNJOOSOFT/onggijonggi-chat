@@ -5,8 +5,9 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.doThrow;
 
-import com.onggijonggi.api.authz.OrgUnitMemberService;
+import com.onggijonggi.api.chat.CollabAuthorizationRevoker;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
@@ -26,8 +27,11 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
 import org.springframework.web.server.ResponseStatusException;
 import reactor.test.StepVerifier;
 
@@ -52,14 +56,18 @@ class AccountDeactivationServiceTest {
 	private ThrInvRepository thrInvRepository;
 
 	@Mock
-	private OrgUnitMemberService orgUnitMemberService;
+	private CollabAuthorizationRevoker collabAuthorizationRevoker;
+
+	@Mock
+	private PlatformTransactionManager transactionManager;
 
 	private AccountDeactivationService service;
 
 	@BeforeEach
 	void setUp() {
+		Mockito.lenient().when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
 		service = new AccountDeactivationService(appUserRepository, thrMbrRepository, thrRepository,
-				thrInvRepository, orgUnitMemberService);
+				thrInvRepository, collabAuthorizationRevoker, transactionManager);
 	}
 
 	@Test
@@ -80,16 +88,31 @@ class AccountDeactivationServiceTest {
 		verify(appUserRepository).save(user);
 	}
 
-	/** 배정은 subject로 적혀 FK가 없어 계정 상태를 따라오지 않는다. 배정 서비스를 거쳐 SYSTEM 이력으로 해제한다. */
+	/** 비활성화는 조직·직급 배정을 보존하고, DB 커밋 뒤 협업 구독을 회수한다. */
 	@Test
-	void deactivateUnassignsTheTeamAndRankOfTheAccount() {
+	void deactivateKeepsTheTeamAndRankOfTheAccountAndRevokesCollabAccess() {
 		AppUser user = new AppUser("assigned-sub");
 		when(appUserRepository.findById(user.getId())).thenReturn(Optional.of(user));
 
 		StepVerifier.create(service.deactivate(user.getId())).verifyComplete();
 
-		verify(orgUnitMemberService).apply(OrgUnitMemberService.Change.unassign("assigned-sub"),
-				OrgUnitMemberService.Actor.system("account-deactivation:" + user.getId()));
+		verify(collabAuthorizationRevoker).revoke("assigned-sub");
+		var order = Mockito.inOrder(transactionManager, collabAuthorizationRevoker);
+		order.verify(transactionManager).commit(any());
+		order.verify(collabAuthorizationRevoker).revoke("assigned-sub");
+	}
+
+	@Test
+	void failedDeactivationRollsBackWithoutRevokingCollabAccess() {
+		AppUser user = new AppUser("failing-sub");
+		when(appUserRepository.findById(user.getId())).thenReturn(Optional.of(user));
+		doThrow(new IllegalStateException("save failed")).when(appUserRepository).save(user);
+
+		StepVerifier.create(service.deactivate(user.getId()))
+				.expectError(IllegalStateException.class).verify();
+
+		verify(transactionManager).rollback(any());
+		verify(collabAuthorizationRevoker, never()).revoke(any());
 	}
 
 	/**

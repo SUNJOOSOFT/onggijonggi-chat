@@ -5,6 +5,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
@@ -19,7 +20,10 @@ import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeStatus;
+import com.onggijonggi.common.user.AppUser;
+import com.onggijonggi.common.user.AppUserRepository;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import reactor.core.publisher.Mono;
@@ -39,7 +43,9 @@ class PermissionAdminServiceTest {
 	private final WorkspaceNodeRepository nodes = mock(WorkspaceNodeRepository.class);
 	private final WorkspaceAuthorizer authorizer = mock(WorkspaceAuthorizer.class);
 	private final OrgUnitMemberService memberService = mock(OrgUnitMemberService.class);
-	private final PermissionAdminService service = new PermissionAdminService(keycloak, orgUnits, members, nodes, authorizer, memberService);
+	private final AppUserRepository appUsers = mock(AppUserRepository.class);
+	private final PermissionAdminService service = new PermissionAdminService(keycloak, orgUnits, members, nodes, authorizer,
+			memberService, appUsers);
 
 	@Test
 	void theOverviewListsEveryoneAndAsksTheAuthorizerForEachWorkspace() {
@@ -59,6 +65,7 @@ class PermissionAdminServiceTest {
 		when(keycloak.listPeople(any(Integer.class))).thenReturn(Mono.just(List.of(
 				new KeycloakPerson("sub-park", "demo7", "박", "p@example.com", true),
 				new KeycloakPerson("sub-kim", "demo1", "김", "k@example.com", true))));
+		when(appUsers.findByKeycloakSubj("sub-kim")).thenReturn(Optional.of(new AppUser("sub-kim")));
 		when(authorizer.canView(any(), any())).thenReturn(Mono.just(false));
 		when(authorizer.canView("sub-kim", hrNode.getId())).thenReturn(Mono.just(true));
 
@@ -76,6 +83,44 @@ class PermissionAdminServiceTest {
 		PermissionAdminService.Person park = overview.people().get(1);
 		assertThat(park.teamId()).isNull();
 		assertThat(park.visible()).isEmpty();
+	}
+
+	@Test
+	void disabledOrLocallyInactivePeopleAreNotShownAsAbleToViewWorkspaces() {
+		WorkspaceNode root = WorkspaceNode.root(TENANT, "Root");
+		WorkspaceNode node = WorkspaceNode.child(TENANT, root.getId(), root.getPath(), "team", WorkspaceNodeKind.ORG,
+				"Team", WorkspaceNodeStatus.ACTIVE);
+		when(orgUnits.findAll()).thenReturn(List.of());
+		when(nodes.findAll()).thenReturn(List.of(node));
+		when(members.findAll()).thenReturn(List.of());
+		when(keycloak.listPeople(any(Integer.class))).thenReturn(Mono.just(List.of(
+				new KeycloakPerson("disabled", "demo1", "Disabled", "d@example.com", false),
+				new KeycloakPerson("inactive", "demo2", "Inactive", "i@example.com", true))));
+		AppUser inactive = new AppUser("inactive");
+		inactive.deactivate();
+		when(appUsers.findByKeycloakSubj("inactive")).thenReturn(Optional.of(inactive));
+
+		PermissionAdminService.Overview overview = service.overview().block();
+
+		assertThat(overview.people()).allSatisfy(person -> assertThat(person.visible()).isEmpty());
+		verifyNoInteractions(authorizer);
+	}
+
+	@Test
+	void enabledNotYetProvisionedPersonKeepsWorkspaceEligibility() {
+		WorkspaceNode root = WorkspaceNode.root(TENANT, "Root");
+		WorkspaceNode node = WorkspaceNode.child(TENANT, root.getId(), root.getPath(), "team", WorkspaceNodeKind.ORG,
+				"Team", WorkspaceNodeStatus.ACTIVE);
+		when(orgUnits.findAll()).thenReturn(List.of());
+		when(nodes.findAll()).thenReturn(List.of(node));
+		when(members.findAll()).thenReturn(List.of());
+		when(keycloak.listPeople(any(Integer.class))).thenReturn(Mono.just(List.of(
+				new KeycloakPerson("new-user", "demo", "New", "n@example.com", true))));
+		when(authorizer.canView("new-user", node.getId())).thenReturn(Mono.just(true));
+
+		PermissionAdminService.Overview overview = service.overview().block();
+
+		assertThat(overview.people().get(0).visible()).containsExactly(node.getId());
 	}
 
 	@Test

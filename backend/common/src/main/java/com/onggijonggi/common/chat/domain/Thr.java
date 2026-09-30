@@ -107,6 +107,13 @@ public class Thr {
 		this.workspaceNodeId = workspaceNodeId;
 	}
 
+	/** 협업방을 다른 Workspace로 옮긴다. Tenant는 바뀌지 않고 참여 행도 그대로 둔다. 1:1은 옮길 수 없다. */
+	public void moveToWorkspace(UUID workspaceNodeId) {
+		if (kind != ThrKind.COLLAB) throw new IllegalStateException("협업방만 옮길 수 있다");
+		this.workspaceNodeId = workspaceNodeId;
+		this.updatedAt = Instant.now();
+	}
+
 	public UUID getId() {
 		return id;
 	}

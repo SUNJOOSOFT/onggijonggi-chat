@@ -6,6 +6,7 @@ import com.onggijonggi.api.auth.JwtDisplayNames;
 import com.onggijonggi.api.auth.WsSubProtocolBearerTokenConverter;
 import com.onggijonggi.api.auth.UserIdentityService;
 import com.onggijonggi.common.chat.domain.Msg;
+import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import java.security.Principal;
 import java.time.Duration;
@@ -72,11 +73,16 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 
 	private final ThreadMessageDispatcher threadMessageDispatcher;
 
+	private final CollabAuthorizationRevoker collabAuthorizationRevoker;
+
 	private final UserIdentityService userIdentityService;
 
 	private final ThreadMembershipService threadMembershipService;
 
 	private final DirectChatTurnService directChatTurnService;
+	private final RankedDisplayNames rankedDisplayNames;
+
+	private final MsgFileService msgFileService;
 
 	/**
 	 * 이 핸들러만 쓰는 버킷이다(이슈 #74). 핸드셰이크 한도(WsSecurityConfig)와 나누는 이유는
@@ -88,17 +94,21 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	private final FixedWindowRateLimiter messageRateLimiter;
 
 	public ThreadWebSocketHandler(ObjectMapper objectMapper, RoomSessionRegistry roomSessionRegistry,
-			ThreadMessageDispatcher threadMessageDispatcher, UserIdentityService userIdentityService,
+			ThreadMessageDispatcher threadMessageDispatcher, CollabAuthorizationRevoker collabAuthorizationRevoker,
+			UserIdentityService userIdentityService,
 			ThreadMembershipService threadMembershipService, DirectChatTurnService directChatTurnService,
-			Clock rateLimitClock,
+			RankedDisplayNames rankedDisplayNames, MsgFileService msgFileService, Clock rateLimitClock,
 			@Value("${app.ratelimit.window-seconds:60}") long rateLimitWindowSeconds,
 			@Value("${app.ratelimit.ws-message-per-minute:60}") int wsMessagePerMinute) {
 		this.objectMapper = objectMapper;
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.threadMessageDispatcher = threadMessageDispatcher;
+		this.collabAuthorizationRevoker = collabAuthorizationRevoker;
 		this.userIdentityService = userIdentityService;
 		this.threadMembershipService = threadMembershipService;
 		this.directChatTurnService = directChatTurnService;
+		this.rankedDisplayNames = rankedDisplayNames;
+		this.msgFileService = msgFileService;
 		this.messageRateLimiter =
 				new FixedWindowRateLimiter(rateLimitClock, rateLimitWindowSeconds, wsMessagePerMinute);
 	}
@@ -115,10 +125,19 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.defaultIfEmpty(new SessionInfo("EMPTY", "EMPTY", null))
 				.flatMap(info -> userIdentityService.resolveOrProvision(info.subject())
 						.onErrorMap(UserProvisioningFailure::new)
-						.flatMap(userId -> handleConnection(session, new Connection(UUID.randomUUID(), userId,
-								new PresenceParticipant(info.subject(), info.displayName())), info.tokenExpiresAt()))
+						// 말풍선·접속 중에 보일 이름은 연결할 때 한 번 정한다(직급이 바뀌면 다시 연결해야 반영된다).
+						// 직급을 못 읽으면 이름만 쓴다 — 표시 이름 때문에 연결이 끊기면 안 된다.
+						.flatMap(userId -> rankedDisplayNames.withRank(info.subject(), info.displayName())
+								.onErrorReturn(info.displayName())
+								.flatMap(displayName -> handleConnection(session, new Connection(UUID.randomUUID(), userId,
+										new PresenceParticipant(info.subject(), displayName)), info.tokenExpiresAt())))
 						.onErrorResume(UserProvisioningFailure.class, error -> {
 							String traceId = newTraceId();
+					if (error.getCause() instanceof ResponseStatusException status
+							&& status.getStatusCode().value() == 403) {
+						return sendErrorAndClose(session, "FORBIDDEN",
+								"이 연결을 사용할 권한이 없습니다.", traceId);
+					}
 							log.error("WebSocket user provisioning failed traceId={}", traceId, error.getCause());
 							return sendErrorAndClose(session, "INTERNAL_ERROR",
 									"WebSocket 세션을 초기화하지 못했습니다.", traceId);
@@ -246,7 +265,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 
 	private Mono<WsFrame> handleChatMessage(InboundChatMessage inbound, Connection connection, String traceId) {
 		UUID threadId = inbound.threadId();
-		if (threadId == null || inbound.content() == null || inbound.content().isBlank()) {
+		boolean hasAttachments = inbound.attachmentIds() != null && !inbound.attachmentIds().isEmpty();
+		if (threadId == null || inbound.content() == null || (inbound.content().isBlank() && !hasAttachments)) {
 			return Mono.just(malformed(threadId, traceId));
 		}
 
@@ -259,6 +279,19 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 					"메시지를 너무 빠르게 보내고 있습니다. 잠시 후 다시 시도해 주세요.", traceId));
 		}
 
+		// 첨부는 방송 프레임에 이름을 실어야 해서 저장 전에 확인한다. 본인이 올렸고 아직 다른 발화에
+		// 실리지 않은 것만 받는다 — 아니면 이 프레임만 거절하고 연결은 유지한다.
+		return Mono.fromCallable(() -> msgFileService.resolveForMessageBlocking(connection.userId(),
+						inbound.attachmentIds()))
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMap(files -> routeChatMessage(inbound, files, connection, actor, traceId))
+				.onErrorResume(MsgFileRejectedException.class,
+						error -> Mono.just(new ErrorFrame(threadId, error.getCode(), error.getMessage(), traceId)));
+	}
+
+	private Mono<WsFrame> routeChatMessage(InboundChatMessage inbound, List<MsgFile> files, Connection connection,
+			PresenceParticipant actor, String traceId) {
+		UUID threadId = inbound.threadId();
 		// 구독하지 않은 방에는 원래 말할 수 없다(이슈 #161). 단, 구독되지 않은 첫 발화는 DIRECT
 		// bootstrap 후보다(이슈 #162) — 그 경로로 넘긴다.
 		Optional<UUID> roomGeneration = roomSessionRegistry.generationFor(threadId, connection.id());
@@ -266,8 +299,9 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 			if (inbound.clientMsgId() == null || inbound.turnId() == null) {
 				return Mono.just(malformed(threadId, traceId));
 			}
-			return bootstrapDirect(threadId, connection, actor, inbound, traceId);
+			return bootstrapDirect(threadId, connection, actor, inbound, files, traceId);
 		}
+		long authorizationEpoch = collabAuthorizationRevoker.epoch(actor.subject());
 
 		// kind는 dispatcher가 DIRECT·COLLAB을 가르는 데 필요하다(이슈 #162) — 참가자 재확인과
 		// 함께 조회해 왕복을 하나 더 늘리지 않는다.
@@ -288,18 +322,19 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 						if (inbound.clientMsgId() == null || inbound.turnId() == null) {
 							return Mono.just(malformed(threadId, traceId));
 						}
-						return threadMembershipService.isActiveDirectOwner(threadId, connection.userId())
+						return threadMembershipService.canUseDirect(threadId, connection.userId(), actor.subject())
 								.flatMap(owner -> owner
 										? prepareDirectTurn(threadId, connection.userId(), inbound.content(),
-												inbound.clientMsgId())
+												fileIdsOf(files), inbound.clientMsgId())
 								.flatMap(stored -> stored.replay()
 										? handleDirectReplay(threadId, roomGeneration.get(), connection, actor,
-												inbound, traceId, stored)
+												inbound, files, traceId, stored)
 										: rejectIfLocked(
 												new ChatMessageCommand(threadId, kind.get(), connection.userId(),
 														actor.subject(), actor.displayName(), inbound.content(),
-														inbound.model(), inbound.clientMsgId(), inbound.turnId(),
-														connection.id(), traceId, toReservedTurn(stored)),
+														files, inbound.model(), inbound.clientMsgId(),
+														inbound.turnId(), connection.id(), traceId,
+														toReservedTurn(stored)),
 												roomGeneration.get(), traceId))
 								.onErrorResume(IdempotencyKeyConflictException.class,
 										error -> Mono.just(idempotencyConflict(threadId, traceId)))
@@ -309,12 +344,12 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 												"이 방에 메시지를 보낼 권한이 없습니다.", traceId)));
 					}
 					ChatMessageCommand command = new ChatMessageCommand(threadId, kind.get(), connection.userId(),
-							actor.subject(), actor.displayName(), inbound.content(), inbound.model(),
+							actor.subject(), actor.displayName(), inbound.content(), files, inbound.model(),
 							inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, null);
 					// 구독 뒤에 워크스페이스를 못 보게 된 사람(인사이동 등)도 참가자 재확인과 같은 이유로 여기서 막는다.
 					return threadMembershipService.canEnterWorkspace(threadId, actor.subject())
 							.flatMap(inWorkspace -> inWorkspace
-									? rejectIfLocked(command, roomGeneration.get(), traceId)
+									? rejectIfLocked(command, roomGeneration.get(), traceId, authorizationEpoch)
 									: Mono.just(new ErrorFrame(threadId, "FORBIDDEN",
 											"이 방에 메시지를 보낼 권한이 없습니다.", traceId)));
 				})
@@ -335,10 +370,14 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 기존 값을 그대로 돌려준다 — 호출부가 그 경우를 보고 별도로 분기한다.
 	*/
 	private Mono<DirectChatTurnService.StoredTurn> prepareDirectTurn(UUID threadId, UUID userId, String content,
-			String idempotencyKey) {
+			List<UUID> fileIds, String idempotencyKey) {
 		return Mono.fromCallable(() -> directChatTurnService.prepareExistingWithPendingAgentBlocking(threadId,
-						userId, content, idempotencyKey))
+						userId, content, fileIds, idempotencyKey))
 				.subscribeOn(Schedulers.boundedElastic());
+	}
+
+	private static List<UUID> fileIdsOf(List<MsgFile> files) {
+		return files.stream().map(MsgFile::getId).toList();
 	}
 
 	private static ChatMessageCommand.ReservedTurn toReservedTurn(DirectChatTurnService.StoredTurn stored) {
@@ -365,12 +404,13 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 새 발화로 복구한다.
 	*/
 	private Mono<WsFrame> handleDirectReplay(UUID threadId, UUID roomGeneration, Connection connection,
-			PresenceParticipant actor, InboundChatMessage inbound, String traceId,
+			PresenceParticipant actor, InboundChatMessage inbound, List<MsgFile> files, String traceId,
 			DirectChatTurnService.StoredTurn stored) {
 		try {
 			roomSessionRegistry.broadcastIfCurrent(threadId, roomGeneration,
 					new ChatMessageFrame(threadId, stored.humanMessageId(), inbound.clientMsgId(), inbound.turnId(),
-							stored.humanSeq(), actor.subject(), actor.displayName(), inbound.content()));
+							stored.humanSeq(), actor.subject(), actor.displayName(), inbound.content(),
+							files.stream().map(MsgFileView::from).toList()));
 		} catch (RuntimeException ignored) {
 			// echo 재방송 실패는 무시한다 — 낙관적 렌더링이 이미 화면에 있어 치명적이지 않다.
 		}
@@ -398,8 +438,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 					List.of(), false, ChatAnswerStatus.DENIED));
 			case FAILED -> Mono.<WsFrame>just(new ErrorFrame(threadId, "MODEL_UNAVAILABLE",
 					"이전 시도에서 응답을 만들지 못했습니다.", traceId));
-			case PENDING -> recoverOrphanedDirect(threadId, roomGeneration, connection, actor, inbound, traceId,
-					stored);
+			case PENDING -> recoverOrphanedDirect(threadId, roomGeneration, connection, actor, inbound, files,
+					traceId, stored);
 		};
 	}
 
@@ -410,14 +450,15 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 필요가 없다.
 	*/
 	private Mono<WsFrame> recoverOrphanedDirect(UUID threadId, UUID roomGeneration, Connection connection,
-			PresenceParticipant actor, InboundChatMessage inbound, String traceId,
+			PresenceParticipant actor, InboundChatMessage inbound, List<MsgFile> files, String traceId,
 			DirectChatTurnService.StoredTurn orphaned) {
 		return Mono.fromCallable(() -> directChatTurnService.recoverOrphanedTurnBlocking(threadId,
-						connection.userId(), inbound.content(), inbound.clientMsgId(), orphaned.agentMessageId()))
+						connection.userId(), inbound.content(), fileIdsOf(files), inbound.clientMsgId(),
+						orphaned.agentMessageId()))
 				.subscribeOn(Schedulers.boundedElastic())
 				.flatMap(fresh -> rejectIfLocked(
 						new ChatMessageCommand(threadId, ThrKind.DIRECT, connection.userId(), actor.subject(),
-								actor.displayName(), inbound.content(), inbound.model(), inbound.clientMsgId(),
+								actor.displayName(), inbound.content(), files, inbound.model(), inbound.clientMsgId(),
 								inbound.turnId(), connection.id(), traceId, toReservedTurn(fresh)),
 						roomGeneration, traceId))
 				.onErrorResume(error -> reportDirectReserveFailure(threadId, roomGeneration, inbound.turnId(),
@@ -454,18 +495,21 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 마무리한다 — 새 오류 의미를 만들지 않는다.
 	*/
 	private Mono<WsFrame> bootstrapDirect(UUID threadId, Connection connection, PresenceParticipant actor,
-			InboundChatMessage inbound, String traceId) {
-		String title = titleFor(inbound.content());
+			InboundChatMessage inbound, List<MsgFile> files, String traceId) {
+		// 첨부만 보낸 첫 발화는 본문이 비어 있어 첫 파일 이름을 제목으로 쓴다.
+		String title = titleFor(inbound.content().isBlank() && !files.isEmpty()
+				? files.get(0).getFileName() : inbound.content());
+		List<UUID> fileIds = fileIdsOf(files);
 		return Mono
 				.fromCallable(() -> directChatTurnService.prepareOrCreateWithPendingAgentBlocking(threadId,
-						connection.userId(), inbound.content(), title, inbound.clientMsgId()))
+						connection.userId(), inbound.content(), fileIds, title, inbound.clientMsgId()))
 				.subscribeOn(Schedulers.boundedElastic())
 				.onErrorResume(DataIntegrityViolationException.class,
 						error -> Mono.fromCallable(() -> directChatTurnService
 										.prepareExistingWithPendingAgentBlocking(threadId, connection.userId(),
-												inbound.content(), inbound.clientMsgId()))
+												inbound.content(), fileIds, inbound.clientMsgId()))
 								.subscribeOn(Schedulers.boundedElastic()))
-				.flatMap(stored -> completeBootstrap(threadId, connection, actor, inbound, traceId, stored))
+				.flatMap(stored -> completeBootstrap(threadId, connection, actor, inbound, files, traceId, stored))
 				.onErrorResume(IdempotencyKeyConflictException.class,
 						error -> Mono.just(idempotencyConflict(threadId, traceId)))
 				.onErrorResume(ResponseStatusException.class, error -> Mono.just(notSubscribed(threadId, traceId)))
@@ -477,7 +521,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 
 	/** bootstrap 트랜잭션 성공 뒤 자동 구독하고 같은 발화를 dispatch로 흘려보낸다(이슈 #162). */
 	private Mono<WsFrame> completeBootstrap(UUID threadId, Connection connection, PresenceParticipant actor,
-			InboundChatMessage inbound, String traceId, DirectChatTurnService.StoredTurn stored) {
+			InboundChatMessage inbound, List<MsgFile> files, String traceId,
+			DirectChatTurnService.StoredTurn stored) {
 		subscribe(connection, threadId, false);
 		Optional<UUID> generation = roomSessionRegistry.generationFor(threadId, connection.id());
 		if (generation.isEmpty()) {
@@ -485,11 +530,12 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 			return Mono.empty();
 		}
 		if (stored.replay()) {
-			return handleDirectReplay(threadId, generation.get(), connection, actor, inbound, traceId, stored);
+			return handleDirectReplay(threadId, generation.get(), connection, actor, inbound, files, traceId,
+					stored);
 		}
 		ChatMessageCommand command = new ChatMessageCommand(threadId, ThrKind.DIRECT, connection.userId(),
-				actor.subject(), actor.displayName(), inbound.content(), inbound.model(), inbound.clientMsgId(),
-				inbound.turnId(), connection.id(), traceId, toReservedTurn(stored));
+				actor.subject(), actor.displayName(), inbound.content(), files, inbound.model(),
+				inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, toReservedTurn(stored));
 		return rejectIfLocked(command, generation.get(), traceId);
 	}
 
@@ -549,11 +595,13 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		if (roomSessionRegistry.generationFor(threadId, connection.id()).isPresent()) {
 			return Mono.empty();
 		}
+		long authorizationEpoch = collabAuthorizationRevoker.epoch(connection.actor().subject());
 		return threadMembershipService.isActiveParticipant(threadId, connection.userId())
 				.flatMap(participant -> participant
 						? threadMembershipService.kindOf(threadId).flatMap(kind -> {
 							if (kind.filter(value -> value == ThrKind.DIRECT).isPresent()) {
-								return threadMembershipService.isActiveDirectOwner(threadId, connection.userId())
+								return threadMembershipService.canUseDirect(threadId, connection.userId(),
+												connection.actor().subject())
 										.flatMap(owner -> owner
 												? Mono.<WsFrame>fromRunnable(() -> subscribe(connection, threadId, false))
 												: Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.", traceId)));
@@ -563,7 +611,16 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 							}
 							return threadMembershipService.canEnterWorkspace(threadId, connection.actor().subject())
 									.flatMap(inWorkspace -> inWorkspace
-											? Mono.<WsFrame>fromRunnable(() -> subscribe(connection, threadId))
+											? Mono.<WsFrame>defer(() -> {
+												boolean current = collabAuthorizationRevoker.ifCurrent(
+														connection.actor().subject(), authorizationEpoch, () -> {
+															subscribe(connection, threadId);
+															return null;
+														}).current();
+												return current ? Mono.empty()
+														: Mono.just(new ErrorFrame(threadId, "FORBIDDEN",
+																"이 방에 들어갈 권한이 없습니다.", traceId));
+											})
 											: Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 들어갈 권한이 없습니다.",
 													traceId)));
 						})
@@ -599,7 +656,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		}
 
 		Sinks.One<Void> overflow = Sinks.one();
-		Flux<WsFrame> roomFrames = bufferForRoom(membership.frames(), overflow).takeUntilOther(membership.left());
+		Flux<WsFrame> roomFrames = bufferForRoom(membership.frames(), overflow)
+				.takeUntilOther(Mono.firstWithSignal(membership.left(), membership.kicked()));
 		connection.attach(presenceEnabled ? roomFrames.startWith(membership.snapshot()) : roomFrames);
 
 		membership.kicked()
@@ -649,9 +707,14 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 구독으로 방송이 계속 가는 것(받기)은 이슈 #135가 다룬다.
 	*/
 	private Mono<WsFrame> rejectIfLocked(ChatMessageCommand command, UUID roomGeneration, String traceId) {
+		return rejectIfLocked(command, roomGeneration, traceId, -1);
+	}
+
+	private Mono<WsFrame> rejectIfLocked(ChatMessageCommand command, UUID roomGeneration, String traceId,
+			long authorizationEpoch) {
 		return threadMembershipService.isOpenForWriting(command.threadId())
 				.flatMap(open -> open
-						? dispatch(command, roomGeneration, traceId)
+						? dispatch(command, roomGeneration, traceId, authorizationEpoch)
 						: Mono.just(new ErrorFrame(command.threadId(), "THREAD_LOCKED",
 								"잠기거나 보관된 방에는 메시지를 보낼 수 없습니다.", traceId)));
 	}
@@ -662,8 +725,19 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 흘려보내면 이 Mono가 합쳐지는 인바운드 처리 전체가 에러로 끝나 연결이 비정상 종료된다 —
 	* "형식 오류는 연결을 유지한다"는 위 설계 의도와 반대가 된다.
 	*/
-	private Mono<WsFrame> dispatch(ChatMessageCommand command, UUID roomGeneration, String traceId) {
+	private Mono<WsFrame> dispatch(ChatMessageCommand command, UUID roomGeneration, String traceId,
+			long authorizationEpoch) {
 		try {
+			if (command.kind() == ThrKind.COLLAB) {
+				CollabAuthorizationRevoker.GuardedResult<Optional<ErrorFrame>> result = collabAuthorizationRevoker.ifCurrent(
+						command.fromSubject(), authorizationEpoch,
+						() -> threadMessageDispatcher.dispatch(command, roomGeneration));
+				if (!result.current()) {
+					return Mono.just(new ErrorFrame(command.threadId(), "FORBIDDEN",
+							"이 방에 메시지를 보낼 권한이 없습니다.", traceId));
+				}
+				return Mono.justOrEmpty(result.value());
+			}
 			return Mono.justOrEmpty(threadMessageDispatcher.dispatch(command, roomGeneration));
 		} catch (RuntimeException error) {
 			log.error("WebSocket room broadcast failed threadId={} traceId={}",

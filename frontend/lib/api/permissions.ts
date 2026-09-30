@@ -6,6 +6,7 @@
  *********************************************************/
 
 import { MEMBERS_IMPORT_PATH, PERMISSIONS_ADMIN_PATH, bffUrl } from './config';
+import { friendlyMessageForCode, parseErrorEnvelope } from './errors';
 import { authFetch } from './http';
 
 export interface PermissionTeam {
@@ -59,7 +60,9 @@ export interface ImportReport {
 }
 
 async function failWith(res: Response): Promise<never> {
-  throw new Error((await res.text()) || `HTTP ${res.status}`);
+  const envelope = parseErrorEnvelope(await res.text());
+  const trace = envelope?.traceId ? ` (추적 ID: ${envelope.traceId})` : '';
+  throw new Error(`${friendlyMessageForCode(envelope?.code)}${trace}`);
 }
 
 /** 권한 기능(casbin 프로필)이 켜져 있는지. 404면 꺼진 것이고, 그 밖의 실패도 메뉴를 숨기는 쪽으로 본다. */

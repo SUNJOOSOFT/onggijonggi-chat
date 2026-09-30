@@ -199,12 +199,11 @@ class RbacBootstrapConfigReaderTest {
 	@Test
 	void rankGrantsAreParsedWithAnOptionalTeam() throws IOException {
 		RbacBootstrapSpec.TenantSpec tenant = load(VALID + "    rank_grants:\n"
-				+ "      - { org_unit: sales, rank: K, node: team }\n"
+				+ "      - { org_unit: sales, rank: K, role: ADMIN, node: team }\n"
 				+ "      - { rank: TL, node: team }\n").spec().tenants().get(0);
 
-		assertThat(tenant.rankGrants()).containsExactly(new RbacBootstrapSpec.RankGrantSpec("sales", "K", "team"),
+		assertThat(tenant.rankGrants()).containsExactly(new RbacBootstrapSpec.RankGrantSpec("sales", "K", "ADMIN", "team"),
 				new RbacBootstrapSpec.RankGrantSpec(null, "TL", "team"));
-		assertRejected(VALID + "    rank_grants:\n      - { rank: K, node: team, role: ADMIN }\n", "알 수 없는 키");
 	}
 
 	@Test

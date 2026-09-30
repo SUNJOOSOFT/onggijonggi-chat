@@ -13,6 +13,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { memo, useState } from 'react';
 
 import { cn } from '@/lib/utils';
+import { MessageAttachments } from './attachments';
 import { CitationsPanel, type CitationsState } from './citations-panel';
 import { PencilEditIcon, SparklesIcon } from './icons';
 import { Markdown } from './markdown';
@@ -76,6 +77,13 @@ const PurePreviewMessage = ({
           )}
 
           <div className="flex flex-col gap-2 w-full">
+            {message.role === 'user' && (
+              <MessageAttachments
+                attachments={message.attachments}
+                className="justify-end"
+              />
+            )}
+
             {message.content && mode === 'view' && (
               <div className="flex flex-row gap-2 items-start">
                 {message.role === 'user' && (

@@ -1,5 +1,6 @@
 package com.onggijonggi.api.authz;
 
+import com.onggijonggi.api.chat.CollabAuthorizationRevoker;
 import com.onggijonggi.common.authz.AuthorizationAudit;
 import com.onggijonggi.common.authz.AuthorizationAuditEventKind;
 import com.onggijonggi.common.authz.AuthorizationAuditRepository;
@@ -17,6 +18,8 @@ import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -32,20 +35,24 @@ import tools.jackson.databind.ObjectMapper;
  */
 @Service
 public class OrgUnitMemberService {
+	private static final Logger log = LoggerFactory.getLogger(OrgUnitMemberService.class);
 
 	private final OrgUnitMemberRepository members;
 	private final OrgUnitRepository orgUnits;
 	private final AuthorizationAuditRepository audits;
 	private final ObjectMapper objectMapper;
 	private final TransactionTemplate transactions;
+	private final CollabAuthorizationRevoker collabAuthorizationRevoker;
 
 	public OrgUnitMemberService(OrgUnitMemberRepository members, OrgUnitRepository orgUnits, AuthorizationAuditRepository audits,
-			ObjectMapper objectMapper, PlatformTransactionManager transactionManager) {
+			ObjectMapper objectMapper, PlatformTransactionManager transactionManager,
+			CollabAuthorizationRevoker collabAuthorizationRevoker) {
 		this.members = members;
 		this.orgUnits = orgUnits;
 		this.audits = audits;
 		this.objectMapper = objectMapper;
 		this.transactions = new TransactionTemplate(transactionManager);
+		this.collabAuthorizationRevoker = collabAuthorizationRevoker;
 	}
 
 	/** 누가 바꾸는가. userId가 null이면 SYSTEM(CSV 임포트)이다. requestId는 한 번의 실행을 묶는다(CSV 파일 해시 등). */
@@ -99,11 +106,30 @@ public class OrgUnitMemberService {
 			if (!subjects.add(change.subject())) throw new InvalidChangeException("같은 사람이 두 번 있다: " + change.subject());
 			if (change.orgUnitId() != null && change.rank() == null) throw new InvalidChangeException("직급이 없다: " + change.subject());
 		}
-		return transactions.execute(status -> {
-			List<Result> results = new ArrayList<>();
-			for (Change change : changes) results.add(applyOne(change, actor));
-			return results;
+		List<Result> results = transactions.execute(status -> {
+			List<Result> applied = new ArrayList<>();
+			for (Change change : changes) applied.add(applyOne(change, actor));
+			return applied;
 		});
+		List<String> failedSubjects = new ArrayList<>();
+		List<RuntimeException> failures = new ArrayList<>();
+		for (Result result : results) {
+			if (result.outcome() != Outcome.CHANGED && result.outcome() != Outcome.UNASSIGNED) continue;
+			try {
+				collabAuthorizationRevoker.revoke(result.subject());
+			} catch (RuntimeException error) {
+				failedSubjects.add(result.subject());
+				failures.add(error);
+				log.error("커밋된 소속 변경의 협업 권한 회수 실패: subject={}", result.subject(), error);
+			}
+		}
+		if (!failures.isEmpty()) {
+			IllegalStateException error = new IllegalStateException("소속 변경은 저장됐지만 협업 권한 회수에 실패했습니다: "
+					+ String.join(", ", failedSubjects), failures.get(0));
+			for (int index = 1; index < failures.size(); index++) error.addSuppressed(failures.get(index));
+			throw error;
+		}
+		return results;
 	}
 
 	private Result applyOne(Change change, Actor actor) {
@@ -127,6 +153,9 @@ public class OrgUnitMemberService {
 			return new Result(change.subject(), Outcome.ASSIGNED);
 		}
 		OrgUnitMember member = current.get();
+		if (!member.getTenantId().equals(unit.getTenantId())) {
+			throw new InvalidChangeException("다른 Tenant의 팀으로는 옮길 수 없다: " + change.subject());
+		}
 		if (member.getOrgUnitId().equals(unit.getId()) && member.getRank() == change.rank()) {
 			return new Result(change.subject(), Outcome.UNCHANGED);
 		}

@@ -111,6 +111,23 @@ class MemberImportServiceTest {
 	}
 
 	@Test
+	void crossTenantMoveIsReportedAsAProblemBeforeApply() {
+		when(members.findBySubject("sub-lee@example.com"))
+				.thenReturn(List.of(new OrgUnitMember(UUID.randomUUID(), hr.getId(), "sub-lee@example.com", Rank.K)));
+		String csv = "email,team,rank\nkim@example.com,hr,TL\nlee@example.com,fin,B";
+
+		for (boolean apply : List.of(false, true)) {
+			MemberImportService.Report report = run(csv, apply);
+			assertThat(report.applied()).isFalse();
+			assertThat(report.problems()).singleElement().satisfies(problem -> {
+				assertThat(problem.line()).isEqualTo(3);
+				assertThat(problem.message()).contains("다른 Tenant");
+			});
+		}
+		verify(memberService, never()).applyAll(anyList(), any());
+	}
+
+	@Test
 	@SuppressWarnings("unchecked")
 	void applySavesEverythingAtOnceAsTheCallingUser() {
 		when(memberService.applyAll(anyList(), any())).thenReturn(List.of(
@@ -128,5 +145,20 @@ class MemberImportServiceTest {
 				OrgUnitMemberService.Change.assign("sub-lee@example.com", fin.getId(), Rank.B));
 		assertThat(actor.getValue().userId()).isEqualTo(ACTOR);
 		assertThat(actor.getValue().requestId()).startsWith("import:");
+	}
+
+	@Test
+	@SuppressWarnings("unchecked")
+	void omittedCsvRowsDoNotCreateAnUnassignment() {
+		when(memberService.applyAll(anyList(), any())).thenReturn(List.of(
+				new OrgUnitMemberService.Result("sub-kim@example.com", OrgUnitMemberService.Outcome.UNCHANGED)));
+
+		run("email,team,rank\nkim@example.com,hr,K", true);
+
+		ArgumentCaptor<List<OrgUnitMemberService.Change>> changes = ArgumentCaptor.forClass(List.class);
+		verify(memberService).applyAll(changes.capture(), any());
+		assertThat(changes.getValue()).containsExactly(
+				OrgUnitMemberService.Change.assign("sub-kim@example.com", hr.getId(), Rank.K));
+		assertThat(changes.getValue()).noneMatch(change -> change.orgUnitId() == null);
 	}
 }

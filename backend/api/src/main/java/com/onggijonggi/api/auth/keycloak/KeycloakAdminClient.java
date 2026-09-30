@@ -1,6 +1,7 @@
 package com.onggijonggi.api.auth.keycloak;
 
 import com.fasterxml.jackson.annotation.JsonProperty;
+import com.onggijonggi.api.auth.PersonNames;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -16,6 +17,7 @@ import org.springframework.web.reactive.function.BodyInserters;
 import org.springframework.web.reactive.function.client.WebClient;
 import org.springframework.web.reactive.function.client.WebClientException;
 import org.springframework.web.reactive.function.client.WebClientResponseException;
+import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 
 /**
@@ -176,8 +178,8 @@ public class KeycloakAdminClient {
 	}
 
 	private static String personName(PersonRepresentation user) {
-		String name = (user.lastName() == null ? "" : user.lastName()) + (user.firstName() == null ? "" : user.firstName());
-		return name.isBlank() ? user.username() : name;
+		String name = PersonNames.fullName(user.lastName(), user.firstName());
+		return name == null ? user.username() : name;
 	}
 
 	/**
@@ -186,36 +188,62 @@ public class KeycloakAdminClient {
 	 * 초대창이 subject(UUID)를 손으로 받던 것을 대체한다 — 사람이 그 값을 알 방법이 앱 안에
 	 * 없었다. 결과의 subject는 화면이 그대로 초대 API에 넘기고, 사람은 표시 이름만 본다.
 	 *
-	 * 표시 이름은 displayName()과 같은 규약(username = OIDC preferred_username)을 쓴다.
+	 * 표시 이름은 displayName()과 같은 규약(성+이름, 둘 다 없으면 username — PersonNames)을 쓴다.
 	 *
 	 * 오류는 displayName()처럼 삼키지 않고 전파한다. 검색이 빈 결과와 장애를 구분하지 못하면
 	 * "그런 사람 없음"으로 보여 초대자가 헛물을 켠다 — exists()와 같은 판단이다.
+	 *
+	 * 화면은 이름을 성+이름으로 붙여 보여주는데(황정민), Keycloak은 칸마다 따로 부분 일치로 찾아 붙여 쓴 검색어가
+	 * 어느 칸에도 맞지 않는다. 그래서 검색어 그대로 한 번 묻고, 앞 한 글자·두 글자(복성)를 성으로 보고 뗀 나머지로
+	 * 더 묻는다(fullNameRemainders). 더 물어 찾은 사람은 성+이름에 검색어가 들어 있을 때만 남긴다 — "정민"으로
+	 * 물으면 김정민도 오기 때문이다. 같은 사람은 한 번만, 먼저 찾은 순서로 max개까지 돌려준다.
 	 *
 	 * @param query 부분 일치 검색어. Keycloak이 username·email·firstName·lastName을 함께 본다
 	 * @param max 최대 결과 수. 상한은 호출부가 정한다
 	 */
 	public Mono<List<KeycloakUserSummary>> search(String query, int max) {
 		return adminToken()
-				.flatMapMany(token -> webClient.get()
-						.uri(builder -> builder.path("/admin/realms/{realm}/users")
-								.queryParam("search", query)
-								.queryParam("max", max)
-								.queryParam("briefRepresentation", true)
-								.build(realm))
-						.headers(headers -> headers.setBearerAuth(token))
-						.retrieve()
-						.bodyToFlux(SearchedUser.class))
-				.map(user -> new KeycloakUserSummary(user.id(), user.username()))
+				.flatMapMany(token -> Flux.concat(
+						searchOnce(token, query, max),
+						Flux.fromIterable(fullNameRemainders(query))
+								.concatMap(remainder -> searchOnce(token, remainder, max))
+								.filter(user -> {
+									String fullName = PersonNames.fullName(user.lastName(), user.firstName());
+									return fullName != null && fullName.contains(query);
+								})))
+				.distinct(PersonRepresentation::id)
+				.take(max)
+				.map(user -> new KeycloakUserSummary(user.id(), personName(user)))
 				.collectList();
 	}
 
+	private Flux<PersonRepresentation> searchOnce(String token, String query, int max) {
+		return webClient.get()
+				.uri(builder -> builder.path("/admin/realms/{realm}/users")
+						.queryParam("search", query)
+						.queryParam("max", max)
+						.queryParam("briefRepresentation", true)
+						.build(realm))
+				.headers(headers -> headers.setBearerAuth(token))
+				.retrieve()
+				.bodyToFlux(PersonRepresentation.class);
+	}
+
+	/** 붙여 쓴 성+이름에서 성(앞 한 글자, 복성이면 두 글자)을 뗀 나머지. 띄어 쓴 검색어는 성+이름이 아니라 보고 비워 둔다. */
+	static List<String> fullNameRemainders(String query) {
+		if (query.length() < 2 || query.chars().anyMatch(Character::isWhitespace)) {
+			return List.of();
+		}
+		return query.length() < 3 ? List.of(query.substring(1)) : List.of(query.substring(1), query.substring(2));
+	}
+
 	/**
-	 * 절체 사전 검증용으로, Keycloak에서 **활성인** 사용자와 그 tenant 사용자 속성을 페이지 단위로 모두 읽는다(v0.3 일회성).
-	 * 로컬 사용자를 만들거나 token claim을 바꾸지 않는다. tenant 속성이 없거나 복수값이면 비어 있는 값으로 돌려준다(추측하지 않는다).
+	 * 절체 사전 검증용으로 Keycloak에서 활성 사용자 subject를 페이지 단위로 모두 읽는다.
+	 * Tenant는 DB 소속에서 판정하며, 로컬 사용자를 만들거나 token claim을 바꾸지 않는다.
 	 */
-	public Mono<List<KeycloakTenantUser>> listEnabledTenantUsers() {
+	public Mono<List<String>> listEnabledUserSubjects() {
 		return adminToken().flatMapMany(token -> enabledUsers(token, 0))
-				.map(user -> new KeycloakTenantUser(user.id(), tenantAttribute(user.attributes())))
+				.map(AdminUserRepresentation::id)
 				.collectList();
 	}
 
@@ -223,7 +251,7 @@ public class KeycloakAdminClient {
 		return webClient.get()
 				.uri(builder -> builder.path("/admin/realms/{realm}/users")
 						.queryParam("enabled", true)
-						.queryParam("briefRepresentation", false)
+						.queryParam("briefRepresentation", true)
 						.queryParam("first", first)
 						.queryParam("max", 100)
 						.build(realm))
@@ -236,22 +264,13 @@ public class KeycloakAdminClient {
 						: reactor.core.publisher.Flux.fromIterable(page));
 	}
 
-	private Optional<String> tenantAttribute(Map<String, List<String>> attributes) {
-		if (attributes == null) return Optional.empty();
-		List<String> values = attributes.get("tenant");
-		if (values == null || values.size() != 1 || values.get(0) == null || values.get(0).isBlank()) {
-			return Optional.empty();
-		}
-		return Optional.of(values.get(0));
-	}
-
 	private Mono<Optional<String>> lookupUser(String subject, String token) {
 		return webClient.get()
 				.uri("/admin/realms/{realm}/users/{id}", realm, subject)
 				.headers(headers -> headers.setBearerAuth(token))
 				.retrieve()
-				.bodyToMono(UserRepresentation.class)
-				.map(user -> Optional.ofNullable(user.username()));
+				.bodyToMono(PersonRepresentation.class)
+				.map(user -> Optional.ofNullable(personName(user)));
 	}
 
 	private Mono<String> adminToken() {
@@ -293,11 +312,7 @@ public class KeycloakAdminClient {
 			@JsonProperty("expires_in") long expiresIn) {
 	}
 
-	/** username을 표시 이름으로 쓴다 — OIDC의 preferred_username과 같은 값이다. */
-	private record UserRepresentation(String username) {
-	}
-
-	/** 검색 응답 항목. briefRepresentation이라 id·username 외에는 오지 않는다. */
+	/** 사람 계정 응답. briefRepresentation이어도 id·username·이름·이메일은 온다. 표시 이름은 personName()으로 만든다. */
 	private record PersonRepresentation(String id, String username, String firstName, String lastName, String email,
 			Boolean enabled) {
 	}
@@ -305,8 +320,8 @@ public class KeycloakAdminClient {
 	private record SearchedUser(String id, String username) {
 	}
 
-	/** PLATFORM_ADMIN 절체 사전 검증만 쓰는 전체 표현(사용자 속성이 필요해서 brief가 아닌 표현을 조회한다). */
-	private record AdminUserRepresentation(String id, Map<String, List<String>> attributes) {
+	/** PLATFORM_ADMIN 절체 사전 검증에서 활성 사용자 subject만 읽는 간략 표현. */
+	private record AdminUserRepresentation(String id) {
 	}
 
 }

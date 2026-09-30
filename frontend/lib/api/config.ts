@@ -69,9 +69,12 @@ export const collabThreadMessagesPath = (
 /** 볼 수 있는 워크스페이스 목록. 협업방을 만들 때 고르고 목록을 묶는 기준이다. 트리가 없는 배포에서는 빈 목록이다. */
 export const WORKSPACES_PATH = '/api/workspaces';
 
-/** 권한 관리 화면(/admin/permissions) API. bff의 casbin 프로필에서만 있고, 꺼져 있으면 404다. */
-export const PERMISSIONS_ADMIN_PATH = '/api/authz/admin';
-export const MEMBERS_IMPORT_PATH = '/api/authz/members/import';
+/** 권한 관리 화면(/admin/permissions) API. bff의 casbin 프로필에서만 있고(꺼져 있으면 404), PLATFORM_ADMIN만 부른다(아니면 403). */
+export const PERMISSIONS_ADMIN_PATH = '/api/platform/rbac/admin';
+export const MEMBERS_IMPORT_PATH = '/api/platform/rbac/members/import';
+
+/** 채팅 첨부 업로드. 방과 묶지 않는다 — 1:1 첫 발화는 방이 아직 없어서다(MsgFileController). */
+export const ATTACHMENTS_PATH = '/api/attachments';
 
 /** 협업채팅 WS 핸드셰이크 경로 — 서버 WsHandlerMappingConfig의 매핑과 같아야 한다(이슈 #3).
  * 경로에 방이 없다 — 커넥션 하나가 여러 방을 나르고, 방은 room.subscribe 프레임으로 건다(이슈 #161). */

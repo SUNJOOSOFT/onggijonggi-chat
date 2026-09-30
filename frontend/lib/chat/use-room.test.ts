@@ -64,6 +64,7 @@ function echo(clientMsgId: string | null, msgId: string): WsFrame {
     from: 'someone',
     fromDisplayName: '누군가',
     content: '안녕',
+    attachments: [],
   };
 }
 
