@@ -21,6 +21,7 @@ import java.util.function.Function;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.oauth2.server.resource.authentication.JwtAuthenticationToken;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -512,7 +513,15 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.flatMap(stored -> completeBootstrap(threadId, connection, actor, inbound, files, traceId, stored))
 				.onErrorResume(IdempotencyKeyConflictException.class,
 						error -> Mono.just(idempotencyConflict(threadId, traceId)))
-				.onErrorResume(ResponseStatusException.class, error -> Mono.just(notSubscribed(threadId, traceId)))
+				.onErrorResume(ResponseStatusException.class, error -> {
+					int status = error.getStatusCode().value();
+					if (status == HttpStatus.NOT_FOUND.value()) return Mono.just(notSubscribed(threadId, traceId));
+					if (status == HttpStatus.FORBIDDEN.value())
+						return Mono.just(new ErrorFrame(threadId, "FORBIDDEN", "이 방에 메시지를 보낼 권한이 없습니다.", traceId));
+					if (status == HttpStatus.SERVICE_UNAVAILABLE.value())
+						return Mono.just(new ErrorFrame(threadId, "SERVICE_UNAVAILABLE", "대화 서비스를 사용할 수 없습니다.", traceId));
+					return Mono.error(error);
+				})
 				.onErrorResume(error -> {
 					log.error("DIRECT bootstrap 실패 threadId={} traceId={}", threadId, traceId, error);
 					return Mono.just(new ErrorFrame(threadId, "INTERNAL_ERROR", "방을 시작하지 못했습니다.", traceId));

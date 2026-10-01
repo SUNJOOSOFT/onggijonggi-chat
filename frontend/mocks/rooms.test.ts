@@ -355,3 +355,16 @@ describe('MockAiQueue', () => {
     expect(active.kind === 'active' && active.job.cancelled).toBe(true);
   });
 });
+
+describe('bootstrapRejection', () => {
+  it('예약된 threadId만 거부 코드를 돌려주고 나머지는 통과시킨다', async () => {
+    const rooms = await import('./rooms');
+    expect(
+      rooms.bootstrapRejection(rooms.BOOTSTRAP_FORBIDDEN_THREAD_ID)?.code,
+    ).toBe('FORBIDDEN');
+    expect(
+      rooms.bootstrapRejection(rooms.BOOTSTRAP_UNAVAILABLE_THREAD_ID)?.code,
+    ).toBe('SERVICE_UNAVAILABLE');
+    expect(rooms.bootstrapRejection(rooms.NORMAL_THREAD_ID)).toBeNull();
+  });
+});

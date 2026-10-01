@@ -5,7 +5,6 @@ import com.onggijonggi.api.authz.WorkspaceAuthorizer;
 import com.onggijonggi.common.authz.OrgUnitMember;
 import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
-import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
@@ -24,7 +23,6 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
-import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Function;
@@ -38,16 +36,16 @@ import reactor.core.scheduler.Schedulers;
 
 /**
  * Class Name : ThreadWorkspaceService.java
- * Description : 03·CORE 방이 어느 워크스페이스에 놓이는지를 정한다. 협업방은 만드는 사람이 고르고(볼 수 있는 곳만),
+ * Description : 03·CORE 방이 어느 워크스페이스에 놓이는지를 정한다. 협업방은 만드는 사람이 고르고(THREAD_CREATE가 있는 곳만),
  *               1:1은 common에 둔다. 사람이 볼 수 있는 워크스페이스 목록과 협업방 목록 거르기도 여기서 한다.
- *               판정은 모두 {@link WorkspaceAuthorizer#canView}에 맡기고 흉내 내지 않는다.
+ *               조회는 {@link WorkspaceAuthorizer#canView}, 생성은 THREAD_CREATE 판정에 맡긴다.
  *
- *               워크스페이스 트리는 bootstrap이 만든다. 설정이 없는 배포(casbin 꺼짐)에는 트리가 없으므로 방은 워크스페이스
- *               없이(null) 만들어지고 지금과 똑같이 동작한다. 판정이 켜진 배포에서는 협업방이 워크스페이스를 반드시 가진다.
+ *               워크스페이스 트리는 bootstrap이 만든다. 모든 Thread는 Tenant·워크스페이스에 놓이므로(절체 뒤 NOT NULL) 방을
+ *               워크스페이스 없이 만들지 않는다. 설정이 없는 기본 배포도 bootstrap이 Tenant 하나와 그 common을 만든다.
  *
  *               1:1의 common은 판정이 켜져 있으면 요청자의 조직 배정(org_unit_mbr)이 속한 Tenant의 것이다(#299). 배정이
- *               없거나 그 Tenant·팀이 비활성이면 1:1을 만들 수 없다. 판정이 꺼져 있으면 지금처럼 ACTIVE Tenant가 하나일
- *               때만 그 common에 두고, 여럿이면 비워 둔다.
+ *               없거나 그 Tenant·팀이 비활성이면 1:1을 만들 수 없다. 판정이 꺼져 있으면 ACTIVE Tenant가 하나일 때 그
+ *               common에 두고, 정할 수 없으면(Tenant가 없거나 여럿) 503이다.
  */
 @Service
 public class ThreadWorkspaceService {
@@ -84,22 +82,24 @@ public class ThreadWorkspaceService {
 	}
 
 	/**
-	* 협업방을 둘 노드를 고른다. workspaceId가 없으면 판정이 켜져 있을 때 400, 꺼져 있으면 워크스페이스 없이 만든다.
+	* 협업방을 둘 노드를 고른다. workspaceId가 없으면 판정이 켜져 있을 때 400이다. 꺼져 있으면 유일한 ACTIVE Tenant의 common에 둔다
+	* — 모든 Thread는 Tenant·워크스페이스에 놓여야 하므로(절체 뒤 NOT NULL) 워크스페이스 없이 만들지 않는다. common을 정할 수
+	* 없으면(Tenant가 없거나 둘 이상) 제약 위반(500) 대신 503이다.
 	* 방을 만들려면 그 노드의 THREAD_CREATE가 필요하다(#299) — 보기(VIEWER)만으로는 만들 수 없다.
 	* 없는 노드·비활성 노드·ROOT·권한 없는 노드는 모두 403이다 — 어느 노드가 있는지 떠보지 못하게 이유를 나누지 않는다.
 	*/
-	public Mono<Optional<WorkspaceNode>> collabPlacement(String subject, UUID workspaceId) {
+	public Mono<WorkspaceNode> collabPlacement(String subject, UUID workspaceId) {
 		if (workspaceId == null) {
 			return rbacProperties.isEnforce()
 					? Mono.error(new ResponseStatusException(HttpStatus.BAD_REQUEST))
-					: Mono.just(Optional.empty());
+					: Mono.fromCallable(this::defaultCommonOrUnavailable).subscribeOn(Schedulers.boundedElastic());
 		}
 		return Mono.fromCallable(() -> nodes.findById(workspaceId).filter(ThreadWorkspaceService::canHoldThreads))
 				.subscribeOn(Schedulers.boundedElastic())
 				.flatMap(node -> node.isEmpty()
-						? Mono.<Optional<WorkspaceNode>>error(new ResponseStatusException(HttpStatus.FORBIDDEN))
+						? Mono.<WorkspaceNode>error(new ResponseStatusException(HttpStatus.FORBIDDEN))
 						: authorizer.canCreateThread(subject, workspaceId).flatMap(allowed -> allowed
-								? Mono.just(node)
+								? Mono.just(node.get())
 								: Mono.error(new ResponseStatusException(HttpStatus.FORBIDDEN))));
 	}
 
@@ -110,23 +110,21 @@ public class ThreadWorkspaceService {
 	* 그 Tenant·팀이 비활성이거나, common이 없을 때다. 여기서는 Casbin에 묻지 않는다. 모든 ACTIVE 팀은 common VIEWER
 	* 부여를 가지며 DB가 그 부여의 삭제를 거부하므로, 배정·Tenant·팀이 ACTIVE면 common을 볼 수 있다. 뒤이은 구독·발화는
 	* {@link ThreadMembershipService#canEnterWorkspace}가 실제 판정으로 다시 확인한다.
-	* 판정이 꺼져 있으면 지금처럼 ACTIVE Tenant가 하나일 때만 그 common이고, 아니면 비워 둔다.
+	* 판정이 꺼져 있으면 유일한 ACTIVE Tenant의 common이다. 정할 수 없으면(Tenant가 없거나 둘 이상) 503을 던진다 — 대화는
+	* 워크스페이스 없이 만들 수 없다(절체 뒤 NOT NULL).
 	*/
-	public Optional<WorkspaceNode> directPlacementBlocking(UUID userId) {
+	public WorkspaceNode directPlacementBlocking(UUID userId) {
 		AppUser user = appUsers.findById(userId)
 				.filter(found -> found.getStatus() == AppUserStatus.ACTIVE)
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN));
 		if (!rbacProperties.isEnforce()) {
-			return onlyActiveTenantCommon();
+			return defaultCommonOrUnavailable();
 		}
-		Optional<WorkspaceNode> common = members.findBySubject(user.getKeycloakSubj()).stream().findFirst()
+		return members.findBySubject(user.getKeycloakSubj()).stream().findFirst()
 				.filter(this::isUsableAssignment)
 				.flatMap(assignment -> nodes.findByTenantIdAndKey(assignment.getTenantId(), COMMON_KEY))
-				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE);
-		if (common.isEmpty()) {
-			throw new ResponseStatusException(HttpStatus.FORBIDDEN);
-		}
-		return common;
+				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
+				.orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN));
 	}
 
 	/** 배정의 Tenant와 팀이 모두 ACTIVE이고 팀이 그 Tenant에 있는가. */
@@ -134,20 +132,23 @@ public class ThreadWorkspaceService {
 		boolean tenantActive = tenants.findById(assignment.getTenantId())
 				.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).isPresent();
 		boolean unitActive = orgUnits.findById(assignment.getOrgUnitId())
-				.filter(unit -> unit.getTenantId().equals(assignment.getTenantId()) && unit.getStatus() == OrgUnitStatus.ACTIVE)
+				.filter(unit -> unit.isActiveIn(assignment.getTenantId()))
 				.isPresent();
 		return tenantActive && unitActive;
 	}
 
-	private Optional<WorkspaceNode> onlyActiveTenantCommon() {
+	/** 판정이 꺼진 배포에서 새 Thread를 둘 곳. 유일한 ACTIVE Tenant의 common이 없으면 서버가 준비되지 않은 것이라 503이다. */
+	private WorkspaceNode defaultCommonOrUnavailable() {
 		List<Tenant> active = tenants.findAll().stream()
 				.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE)
 				.toList();
 		if (active.size() != 1) {
-			return Optional.empty();
+			throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
 		}
+		// 사전 검증(CutoverValidationService)은 같은 노드를 kind=COMMON·부모 ROOT로 찾는다. 예약 key 'common'은 bootstrap만 만든다.
 		return nodes.findByTenantIdAndKey(active.get(0).getId(), COMMON_KEY)
-				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE);
+				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
+				.orElseThrow(() -> new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE));
 	}
 
 	/**

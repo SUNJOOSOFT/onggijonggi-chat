@@ -57,6 +57,14 @@ public class OrgUnit {
 	public OrgUnitStatus getStatus() { return status; }
 	public Instant getInactiveAt() { return inactiveAt; }
 
+	/**
+	 * 이 팀이 그 Tenant에 속하고 ACTIVE인가. 배정이 가리키는 팀을 판정에 쓸 수 있는지 볼 때의 공통 조건이다 —
+	 * 다른 Tenant의 팀이거나 비활성 팀이면 그 배정은 판정에 쓰지 않는다.
+	 */
+	public boolean isActiveIn(UUID tenantId) {
+		return this.tenantId.equals(tenantId) && status == OrgUnitStatus.ACTIVE;
+	}
+
 	public void rename(String name) {
 		this.name = name;
 		this.updatedAt = Instant.now();

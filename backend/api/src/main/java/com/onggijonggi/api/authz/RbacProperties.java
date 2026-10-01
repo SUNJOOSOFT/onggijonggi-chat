@@ -5,10 +5,9 @@ import org.springframework.stereotype.Component;
 
 /**
  * Class Name : RbacProperties.java
- * Description : v0.3 권한 강제 스위치(app.rbac.enforce)를 정의한다. 기본 false는 절체 전 상태이며 지금과 똑같이 동작한다.
- *               이 PR은 값을 정의만 하고 읽어서 동작을 바꾸는 코드는 만들지 않는다 — 권한 강제 코드는 다른 RBAC 이슈가
- *               이 스위치 뒤에 둔다. 절체 PR이 이 스위치를 삭제한다. bootstrap·/api/platform/**·절체 사전 검증은
- *               이 값과 무관하게 동작한다.
+ * Description : v0.3 권한 강제 스위치(app.rbac.enforce). 기본값은 false지만, 운영 DB에 불변 절체 완료 표지가
+ *               기록된 뒤에는 CutoverMarkerGuard가 false 기동을 거부한다. bootstrap·/api/platform/**·절체 사전
+ *               검증은 스위치와 무관하게 동작한다.
  */
 @Component
 @ConfigurationProperties(prefix = "app.rbac")

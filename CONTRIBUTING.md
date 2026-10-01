@@ -314,6 +314,11 @@ cd backend
 `--args="--spring.flyway.enabled=true"`를 붙인다. 기본 프로파일에서는 꺼져 있다. 이는 개발 DB 초기화용이며,
 PR의 전체 migration 적용 검증은 CI `flyway-postgres` job이 담당한다.
 
+권한 기능을 쓰지 않는 로컬에서도 새 대화가 놓일 고객사(Tenant)가 하나 있어야 한다. `application-local.properties`에
+`app.rbac.workspace-setup-path`를 `infra/config/workspace-setup.default.yml`의 절대경로로 주면 BFF가 뜰 때 만든다.
+주지 않으면 새 대화 생성이 503이다. 대화가 이미 있는 옛 로컬 DB는 `--spring.flyway.target=20260929055051721`으로
+한 번 띄워 고객사를 만든 뒤 target 없이 다시 띄운다(INSTALL.md「v0.2에서 올릴 때」).
+
 테스트는 `bootRun` 자리에 `test`를 넣는다.
 
 `http://localhost:8090/actuator/health`가 `{"status":"UP"}`이면 정상이다.

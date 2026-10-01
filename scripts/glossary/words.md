@@ -28,6 +28,7 @@
 | `before` | 이전 |
 | `configuration` | 구성 |
 | `current` | 현재 |
+| `cutover` | 절체 |
 | `deployment` | 배포 |
 | `grant` | 권한 부여 |
 | `node` | 노드 |

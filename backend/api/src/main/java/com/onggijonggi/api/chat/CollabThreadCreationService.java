@@ -29,15 +29,14 @@ import org.springframework.transaction.annotation.Transactional;
  *               옛 행을 즉시 삭제한다(이슈 #240) — 그대로 두면 새 키 저장이 유니크 인덱스와
  *               충돌한다.
  *
- *               workspace는 방을 둘 워크스페이스다. 볼 수 있는지는 호출부(ThreadWorkspaceService)가 이미 판정했다.
- *               워크스페이스 트리가 없는 배포에서는 null이고 방은 워크스페이스 없이 만들어진다. 같은 키에 다른
- *               워크스페이스가 오면 title과 같은 이유로 거절한다.
+ *               workspace는 방을 둘 워크스페이스로 반드시 있어야 한다(모든 Thread는 Tenant·워크스페이스에 놓인다). 만들 수 있는지는
+ *               호출부(ThreadWorkspaceService)가 이미 판정했다. 같은 키에 다른 워크스페이스가 오면 title과 같은 이유로 거절한다.
  */
 @Service
 public class CollabThreadCreationService {
 
 	/** 이 기간이 지난 키는 재사용하지 않는다 — 별도 정리 배치 없이 조회 시점에 "새 요청"으로 본다. */
-	private static final Duration IDEMPOTENCY_KEY_TTL = Duration.ofHours(24);
+	public static final Duration IDEMPOTENCY_KEY_TTL = Duration.ofHours(24);
 
 	private final ThrRepository thrRepository;
 	private final ThrMbrRepository thrMbrRepository;
@@ -58,7 +57,7 @@ public class CollabThreadCreationService {
 	*/
 	@Transactional
 	public UUID createBlocking(UUID actorUserId, String title, String idempotencyKey, WorkspaceNode workspace) {
-		UUID workspaceId = workspace == null ? null : workspace.getId();
+		UUID workspaceId = workspace.getId();
 		if (idempotencyKey != null) {
 			Optional<ThrIdmKey> existing = thrIdmKeyRepository.findByUserIdAndKey(actorUserId, idempotencyKey);
 			if (existing.isPresent()) {
@@ -69,9 +68,7 @@ public class CollabThreadCreationService {
 			}
 		}
 		Thr thread = Thr.collab(actorUserId, title);
-		if (workspace != null) {
-			thread.placeIn(workspace.getTenantId(), workspace.getId());
-		}
+		thread.placeIn(workspace.getTenantId(), workspace.getId());
 		thrRepository.save(thread);
 		thrMbrRepository.save(new ThrMbr(thread.getId(), actorUserId, ThrMbrRole.OWNER, actorUserId));
 		if (idempotencyKey != null) {

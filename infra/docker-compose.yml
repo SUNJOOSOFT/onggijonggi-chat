@@ -201,6 +201,8 @@ services:
       - "8090:8090"
     environment:
       SPRING_PROFILES_ACTIVE: ${SPRING_PROFILE:-prod}
+      # v0.2에서 올릴 때 한 번만 절체 migration 앞 버전으로 정한다(INSTALL.md「v0.2에서 올릴 때」). 평소에는 latest(끝까지 적용)다.
+      SPRING_FLYWAY_TARGET: ${SPRING_FLYWAY_TARGET:-latest}
       SPRING_DATASOURCE_URL:      jdbc:postgresql://postgres:5432/${POSTGRES_DB:-appdb}
       SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:-appuser}
       SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD}
@@ -219,8 +221,11 @@ services:
       APP_LLM_GATEWAY_URL:                  http://litellm:4000
       APP_CORS_ALLOWED_ORIGINS: ${PUBLIC_FRONTEND_URL:-http://localhost:3010}
     volumes:
-      # 조직 구조 설정. SPRING_PROFILE에 casbin이 있을 때만 읽는다(application-casbin.properties).
+      # 조직 구조 설정. 두 파일을 모두 마운트하고 프로필이 고른다(application-prod / application-casbin.properties).
+      # 기본(prod)은 Tenant 하나만 만드는 default 파일 — 모든 대화가 놓일 곳이 있어야 대화를 만들 수 있다.
+      # casbin 프로필을 함께 켜면(SPRING_PROFILE=prod,casbin) 팀·규칙이 있는 workspace-setup.yml을 읽는다.
       - ./config/workspace-setup.yml:/config/workspace-setup.yml:ro
+      - ./config/workspace-setup.default.yml:/config/workspace-setup.default.yml:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8090/actuator/health"]
       interval: 20s

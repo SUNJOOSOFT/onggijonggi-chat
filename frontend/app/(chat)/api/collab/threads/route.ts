@@ -15,12 +15,17 @@ import {
   FORBIDDEN_FRAME_THREAD_ID,
   NORMAL_THREAD_ID,
 } from '@/mocks/rooms';
+import {
+  MOCK_COMMON_ID,
+  MOCK_COMMON_NAME,
+  MOCK_WORKSPACES,
+} from '@/mocks/workspaces';
 
 export const runtime = 'nodejs';
 
 /** 목업 방 네 개 — 정상 스트림, 오류 두 시점, 접근 거부를 결정적으로 재현한다. 방 단위 핸드셰이크
  * 거부는 핸드셰이크에 방이 없어져(이슈 #161) 재현할 대상이 아니다. */
-/** 목업은 워크스페이스 트리가 없는 배포처럼 동작한다(GET /api/workspaces가 빈 목록) — 방은 워크스페이스가 없다. */
+/** 목업 방은 모두 COMMON에 놓인다(mocks/workspaces.ts) — 실 BFF와 같이 방은 워크스페이스에 놓인다. */
 const THREADS: Array<{
   id: string;
   title: string;
@@ -32,29 +37,29 @@ const THREADS: Array<{
     id: NORMAL_THREAD_ID,
     title: '정상 스트리밍 확인방',
     participants: ['sujin', 'minho'],
-    workspaceId: null,
-    workspaceName: null,
+    workspaceId: MOCK_COMMON_ID,
+    workspaceName: MOCK_COMMON_NAME,
   },
   {
     id: ERROR_BEFORE_THREAD_ID,
     title: 'AI 최초 오류 확인방',
     participants: [],
-    workspaceId: null,
-    workspaceName: null,
+    workspaceId: MOCK_COMMON_ID,
+    workspaceName: MOCK_COMMON_NAME,
   },
   {
     id: ERROR_MID_THREAD_ID,
     title: 'AI 도중 오류 확인방',
     participants: [],
-    workspaceId: null,
-    workspaceName: null,
+    workspaceId: MOCK_COMMON_ID,
+    workspaceName: MOCK_COMMON_NAME,
   },
   {
     id: FORBIDDEN_FRAME_THREAD_ID,
     title: '접근 거부 확인방',
     participants: [],
-    workspaceId: null,
-    workspaceName: null,
+    workspaceId: MOCK_COMMON_ID,
+    workspaceName: MOCK_COMMON_NAME,
   },
 ];
 
@@ -93,13 +98,36 @@ export async function POST(request: Request) {
     );
   }
 
+  // 실 BFF는 workspaceId가 없으면 판정이 켜진 배포에서 400이다. 목업은 COMMON에 두되 모르는 워크스페이스는 거절한다.
+  const requested =
+    body !== null && typeof body === 'object' && 'workspaceId' in body
+      ? (body as { workspaceId?: unknown }).workspaceId
+      : undefined;
+  const workspace =
+    requested === undefined || requested === null
+      ? MOCK_WORKSPACES.find((node) => node.id === MOCK_COMMON_ID)
+      : MOCK_WORKSPACES.find(
+          (node) => node.id === requested && node.kind !== 'ROOT',
+        );
+  if (workspace === undefined) {
+    return Response.json(
+      {
+        error: {
+          code: 'FORBIDDEN',
+          message: '이 작업을 수행할 권한이 없습니다.',
+        },
+      },
+      { status: 403 },
+    );
+  }
+
   const id = crypto.randomUUID();
   THREADS.unshift({
     id,
     title,
     participants: [],
-    workspaceId: null,
-    workspaceName: null,
+    workspaceId: workspace.id,
+    workspaceName: workspace.name,
   });
   return Response.json({ id }, { status: 201 });
 }

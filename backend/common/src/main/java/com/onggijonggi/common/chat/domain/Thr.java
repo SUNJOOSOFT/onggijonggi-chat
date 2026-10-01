@@ -100,7 +100,7 @@ public class Thr {
 
 	/**
 	* 저장 전에만 부른다 — tnn_id는 updatable=false라 저장 뒤에 바꿔도 반영되지 않는다. Tenant는 노드에서 따라오므로
-	* 호출자가 노드의 Tenant를 그대로 넘긴다. 워크스페이스 트리가 없는 배포(casbin 꺼짐)에서는 부르지 않아 둘 다 null로 남는다.
+	* 호출자가 노드의 Tenant를 그대로 넘긴다. 저장 전에 반드시 불러야 한다 — 부르지 않으면 NOT NULL 제약에 걸린다.
 	*/
 	public void placeIn(UUID tenantId, UUID workspaceNodeId) {
 		this.tenantId = tenantId;

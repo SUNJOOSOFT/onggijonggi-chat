@@ -281,8 +281,7 @@ public class WorkspaceManagementService {
 			WorkspaceNode current = node(nodeId, tenantId);
 			manage.require(actor.subject(), current);
 			if (current.getKind() == WorkspaceNodeKind.ROOT) throw badRequest();
-			if (orgUnits.findById(orgUnitId).filter(value -> tenantId.equals(value.getTenantId())
-					&& value.getStatus() == OrgUnitStatus.ACTIVE).isEmpty()) throw conflict();
+			if (orgUnits.findById(orgUnitId).filter(value -> value.isActiveIn(tenantId)).isEmpty()) throw conflict();
 			if (hasGrant(nodeId, orgUnitId, role, null)) throw conflict();
 			WorkspaceGrant grant = grants.saveAndFlush(new WorkspaceGrant(tenantId, orgUnitId, nodeId, role));
 			audit(actor, tenantId, AuthorizationAuditEventKind.POLICY_ADDED, AuthorizationAuditTargetKind.POLICY,
@@ -363,8 +362,7 @@ public class WorkspaceManagementService {
 			WorkspaceNode current = node(nodeId, tenantId);
 			manage.require(actor.subject(), current);
 			if (current.getKind() == WorkspaceNodeKind.ROOT) throw badRequest();
-			if (orgUnitId != null && orgUnits.findById(orgUnitId).filter(unit -> tenantId.equals(unit.getTenantId())
-					&& unit.getStatus() == OrgUnitStatus.ACTIVE).isEmpty()) throw conflict();
+			if (orgUnitId != null && orgUnits.findById(orgUnitId).filter(unit -> unit.isActiveIn(tenantId)).isEmpty()) throw conflict();
 			if (hasRankGrant(nodeId, orgUnitId, rank, role, null)) throw conflict();
 			RankGrant grant = rankGrants.saveAndFlush(new RankGrant(tenantId, nodeId, orgUnitId, rank, role));
 			audit(actor, tenantId, AuthorizationAuditEventKind.POLICY_ADDED, AuthorizationAuditTargetKind.POLICY,
@@ -438,7 +436,8 @@ public class WorkspaceManagementService {
 		preauthorized(actor, existing.getWorkspaceNodeId(), true);
 		transactions.executeWithoutResult(status -> {
 			lock(tenantId);
-			Thr thread = threads.findById(threadId).orElseThrow(WorkspaceManagementService::notFound);
+			// 행 잠금으로 읽는다 — 잠금 없이 읽은 값을 그대로 저장하면 그사이 메시지 채번이 올린 next_seq를 옛 값으로 되돌린다.
+			Thr thread = threads.findByIdForSeqUpdate(threadId).orElseThrow(WorkspaceManagementService::notFound);
 			if (thread.getKind() != ThrKind.COLLAB || !tenantId.equals(thread.getTenantId())
 					|| thread.getWorkspaceNodeId() == null) throw notFound();
 			WorkspaceNode source = node(thread.getWorkspaceNodeId(), tenantId);

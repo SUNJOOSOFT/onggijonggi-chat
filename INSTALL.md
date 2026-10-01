@@ -211,7 +211,7 @@ docker compose up -d --build
 
 ## 권한 기능 켜기
 
-팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 팀·직급 배정과 CSV 임포트는 Keycloak `PLATFORM_ADMIN` 역할이 있는 계정만 할 수 있고, `.env`의 `APP_USER` 계정이 이 역할을 가진다.
+팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 꺼져 있어도 모든 대화는 기본 고객사 하나의 공용 공간에 놓인다(`infra/config/workspace-setup.default.yml`을 BFF가 뜰 때 읽는다). 팀·직급 배정과 CSV 임포트는 Keycloak `PLATFORM_ADMIN` 역할이 있는 계정만 할 수 있고, `.env`의 `APP_USER` 계정이 이 역할을 가진다.
 
 > 이 저장소를 이미 한 번 띄웠다면 Keycloak realm은 처음 만들 때만 가져오므로 `PLATFORM_ADMIN` 역할이 없다. Keycloak 관리 콘솔에서 realm 역할 `PLATFORM_ADMIN`을 만들어 `APP_USER`에 붙이거나, 계정·대화가 지워져도 되면 `docker compose down -v` 뒤 다시 띄운다.
 
@@ -221,6 +221,8 @@ docker compose up -d --build
 SPRING_PROFILE=prod,casbin
 COMPOSE_PROFILES=casbin
 ```
+
+`casbin`을 `prod` **뒤에** 적어야 한다 — 그러면 기본 조직 구조(고객사 `ogjg` 하나) 대신 팀·워크스페이스·규칙이 있는 `workspace-setup.yml`을 읽는다. 두 파일이 같은 고객사(`ogjg`)를 가리키므로 바꿔도 고객사가 둘로 늘지 않는다. `workspace-setup.yml`의 `tnn_key: ogjg`를 바꾸지 않는다 — 바꾸면 고객사가 둘이 되어 권한 기능이 꺼진 배포는 새 대화를 만들 수 없고(503) 기존 대화 절체도 멈춘다.
 
 ```bash
 docker compose up -d --build
@@ -239,7 +241,41 @@ node scripts/import-members.mjs infra/config/demo-members.csv --apply
 
 **3. 화면에서 확인한다.** `APP_USER`로 로그인하면 사이드바에 **권한 관리**가 생긴다(`demo` 계정은 일반 사용자라 메뉴가 없다)(<http://localhost:3010/admin/permissions>). 사람마다 팀·직급을 바꾸면 "누가 무엇을 보나" 표가 실제 판정 결과로 바뀐다.
 
-끄려면 두 줄을 지우고 `docker compose --profile casbin down` 뒤 다시 띄운다. 넣어둔 팀·직급은 DB에 남는다.
+끄려면 두 줄을 지우고 `docker compose --profile casbin down` 뒤 다시 띄운다. 넣어둔 팀·직급은 DB에 남는다. 단, 기존 대화 절체를 마치고 완료 표지가 기록된 DB에서는 끌 수 없다(아래「v0.2에서 올릴 때」).
+
+---
+
+## v0.2에서 올릴 때 (대화가 이미 있을 때)
+
+새 버전은 모든 대화를 고객사(Tenant)의 공용 공간에 귀속시키는 스키마 변경을 포함한다. **대화가 이미 있는데 고객사가 아직 없으면** 서버가 뜨면서 실행하는 Flyway가 `thread cutover requires exactly one ACTIVE tenant`로 멈추고 BFF가 기동하지 못한다. 이 migration은 통째로 되돌려져 대화 데이터는 그대로지만, 그 앞의 v0.3 migration은 이미 적용된 상태로 남고 BFF는 뜨지 못한다. 고객사는 BFF가 뜬 뒤에 만들어지니, 다음 순서로 올린다.
+
+**1. 쓰기를 멈춘다.** 올리는 동안 사용자가 대화를 만들지 않게 한다(점검 시간).
+
+**2. 절체 migration 앞까지만 적용해 새 이미지를 한 번 띄운다.** v0.2 DB에는 고객사 테이블이 아직 없으므로 Flyway를 완전히 끄면 안 된다 — 끄면 고객사를 만들 수 없다. `infra/.env`에 한 줄을 넣고 BFF만 다시 띄운다.
+
+```bash
+SPRING_FLYWAY_TARGET=20260929055051721
+```
+
+```bash
+docker compose up -d --build bff
+```
+
+**✅ 성공**: BFF 로그에 `RBAC bootstrap 완료`가 찍히고 처리된 Tenant에 `ogjg`가 보인다. 기본 고객사(`ogjg`)와 공용 공간이 만들어졌다. 대화는 아직 그대로다.
+
+**3. Flyway를 끝까지 적용해 띄운다.** 권한 판정(`prod,casbin`)을 켤 운영 DB라면 이 단계 전에 PLATFORM_ADMIN 계정으로 `POST /api/platform/rbac/cutover-validation`을 호출해 응답의 `failures`가 비어 있는지 확인한다(팀 배정 누락, 공용 공간 밖 대화 등을 알려 준다). 그다음 2단계에서 넣은 줄을 지우고(지우지 않으면 이후 migration이 조용히 적용되지 않는다) 다시 띄우면, 이번엔 migration이 기존 대화를 공용 공간에 놓고 스키마를 마무리한다.
+
+```bash
+docker compose up -d bff
+```
+
+**✅ 성공**: BFF가 정상 기동한다. 기존 대화가 모두 그대로 열린다.
+
+권한 기능을 켜서 쓰던 배포라면 이미 고객사가 있으므로 Tenant를 먼저 만드는 이 절차는 필요 없다. 공용 공간이 정확히 하나가 아니거나, 고객사가 둘 이상이거나, 1:1 대화가 공용 공간 밖에 있으면 migration은 추측하지 않고 멈춘다. 협업방은 같은 고객사의 활성 비ROOT 공간에 이미 배치돼 있으면 그 위치를 보존하고, 미배치 방만 공용 공간에 놓는다. 다른 고객사·없는 공간·비활성 공간·ROOT에 배치된 협업방은 중단 사유다. 제약을 거는 migration은 다른 트랜잭션이 잠금을 10초 넘게 쥐고 있으면 실패하고 통째로 되돌려진다 — 쓰기를 멈춘 상태에서 같은 명령을 다시 실행한다.
+
+**되돌릴 수 없다는 점.** migration은 단계별로 따로 커밋되므로 중간 단계가 실패하면 DB가 일부만 바뀐 채 멈출 수 있다. 적용된 migration은 고치지 않고 새 migration으로 앞으로 고친다. 올리기 전에 DB를 백업한다.
+
+**완료 표지.** 이 절차 자체는 표지를 기록하지 않는다. 권한 판정을 켠 운영 DB에서 절체를 마친 운영자가 사후 검증과 `enforce=true` 인가 확인 뒤 `insert into ctv (id, tnn_id) values (1, '<검증한 고객사 id>')`로 직접 기록한다. 표지는 수정·삭제·TRUNCATE가 거부되고, 표지가 있는 DB는 `app.rbac.enforce=false`로 기동하지 못하므로 그 뒤에는 `SPRING_PROFILE=prod,casbin`과 `COMPOSE_PROFILES=casbin`을 함께 유지해야 한다. 표지가 없는 기본 배포에는 이 제한이 없다.
 
 ---
 

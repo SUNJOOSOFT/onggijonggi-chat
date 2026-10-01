@@ -1,6 +1,7 @@
 package com.onggijonggi.api.authz;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import com.onggijonggi.api.support.MigrationVersions;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import java.sql.Connection;
@@ -45,7 +46,7 @@ class RbacSchemaPostgresTest {
 		Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
 				.locations("classpath:db/migration").cleanDisabled(false).load().clean();
 		Flyway.configure().dataSource(POSTGRES.getJdbcUrl(), POSTGRES.getUsername(), POSTGRES.getPassword())
-				.locations("classpath:db/migration").load().migrate();
+				.locations("classpath:db/migration").target(MigrationVersions.BEFORE_CUTOVER).load().migrate();
 	}
 
 	// ------------------------------------------------------------------ Workspace 트리

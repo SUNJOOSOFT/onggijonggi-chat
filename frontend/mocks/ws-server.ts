@@ -22,6 +22,7 @@ import {
   type MockAiJob,
   MockRoomRegistry,
   parseInboundMessage,
+  bootstrapRejection,
   roomAccess,
   type RoomMember,
   scenarioForRoom,
@@ -345,6 +346,18 @@ const server = Bun.serve<SocketData>({
               'NOT_SUBSCRIBED',
               '이 방을 구독하고 있지 않습니다.',
               `mock-not-subscribed-${++turnSequence}`,
+            ),
+          );
+          return;
+        }
+        const rejected = bootstrapRejection(threadId);
+        if (rejected !== null) {
+          reply(
+            errorFrame(
+              threadId,
+              rejected.code,
+              rejected.message,
+              `mock-bootstrap-${++turnSequence}`,
             ),
           );
           return;

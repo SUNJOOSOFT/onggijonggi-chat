@@ -53,6 +53,30 @@ export function scenarioForRoom(threadId: string): MockRoomScenario {
   return 'normal';
 }
 
+/**
+ * 1:1 첫 발화의 bootstrap을 거부하는 threadId. 실서버는 조직 배정이 없으면 FORBIDDEN, 새 대화를 놓을 고객사를
+ * 정할 수 없으면 SERVICE_UNAVAILABLE 프레임을 보낸다. 화면의 거부 안내와 다시 보내기를 목업으로 확인한다.
+ */
+export const BOOTSTRAP_FORBIDDEN_THREAD_ID =
+  '66666666-6666-4666-8666-666666666666';
+export const BOOTSTRAP_UNAVAILABLE_THREAD_ID =
+  '77777777-7777-4777-8777-777777777777';
+
+export function bootstrapRejection(
+  threadId: string,
+): { code: 'FORBIDDEN' | 'SERVICE_UNAVAILABLE'; message: string } | null {
+  if (threadId === BOOTSTRAP_FORBIDDEN_THREAD_ID) {
+    return { code: 'FORBIDDEN', message: '이 작업을 수행할 권한이 없습니다.' };
+  }
+  if (threadId === BOOTSTRAP_UNAVAILABLE_THREAD_ID) {
+    return {
+      code: 'SERVICE_UNAVAILABLE',
+      message: '서비스를 사용할 수 없습니다.',
+    };
+  }
+  return null;
+}
+
 export type RoomAccess = 'allow' | 'deny';
 
 /** 위 예약 threadId 외에는 전부 허용한다(목업엔 참여자 테이블이 없다). */

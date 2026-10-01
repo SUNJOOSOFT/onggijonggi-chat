@@ -29,16 +29,21 @@ public final class ThreadDeleteCascadeVerifier {
 		String password = requiredEnvironment(PASSWORD);
 
 		try (Connection connection = DriverManager.getConnection(jdbcUrl, username, password)) {
-			verifyDirectThreadWithMsgIdmKey(connection);
-			verifyCollabThreadWithThrIdmKey(connection);
+			verify(connection);
 		}
 		System.out.println("Thread delete cascade fixtures verified.");
 	}
 
+	static void verify(Connection connection) throws SQLException {
+		FixtureScope scope = insertTenantWorkspace(connection);
+		verifyDirectThreadWithMsgIdmKey(connection, scope);
+		verifyCollabThreadWithThrIdmKey(connection, scope);
+	}
+
 	/** DIRECT 발화 idempotency 키(msg_idm_key)가 남아 있어도 Thread 삭제가 FK 위반 없이 끝나는지 확인한다. */
-	private static void verifyDirectThreadWithMsgIdmKey(Connection connection) throws SQLException {
+	private static void verifyDirectThreadWithMsgIdmKey(Connection connection, FixtureScope scope) throws SQLException {
 		UUID userId = insertUser(connection, "fixture-251-direct");
-		UUID threadId = insertThread(connection, "DIRECT", userId);
+		UUID threadId = insertThread(connection, "DIRECT", userId, scope);
 		UUID memberId = insertMember(connection, threadId, userId);
 		UUID humanMsgId = insertMessage(connection, threadId, 0, "HUMAN", memberId, "사람 발화");
 		UUID agentMsgId = insertMessage(connection, threadId, 1, "AGENT", null, "AI 응답");
@@ -51,9 +56,9 @@ public final class ThreadDeleteCascadeVerifier {
 	}
 
 	/** COLLAB 방 생성 idempotency 키(thr_idm_key)가 남아 있어도 Thread 삭제가 FK 위반 없이 끝나는지 확인한다. */
-	private static void verifyCollabThreadWithThrIdmKey(Connection connection) throws SQLException {
+	private static void verifyCollabThreadWithThrIdmKey(Connection connection, FixtureScope scope) throws SQLException {
 		UUID userId = insertUser(connection, "fixture-251-collab");
-		UUID threadId = insertThread(connection, "COLLAB", userId);
+		UUID threadId = insertThread(connection, "COLLAB", userId, scope);
 		insertMember(connection, threadId, userId);
 		insertThrIdmKey(connection, userId, threadId);
 
@@ -74,21 +79,54 @@ public final class ThreadDeleteCascadeVerifier {
 		return id;
 	}
 
-	private static UUID insertThread(Connection connection, String kind, UUID userId) throws SQLException {
+	private static UUID insertThread(Connection connection, String kind, UUID userId, FixtureScope scope) throws SQLException {
 		UUID id = UUID.randomUUID();
 		boolean direct = "DIRECT".equals(kind);
 		try (PreparedStatement statement = connection.prepareStatement("""
-				insert into thr (id, kind, status, drc_own_user_id, created_user_id, title, next_seq)
-				values (?, ?, 'ACTIVE', ?, ?, ?, 0)
+				insert into thr (id, kind, status, drc_own_user_id, created_user_id, title, next_seq, tnn_id, wrk_node_id)
+				values (?, ?, 'ACTIVE', ?, ?, ?, 0, ?, ?)
 				""")) {
 			statement.setObject(1, id);
 			statement.setString(2, kind);
 			statement.setObject(3, direct ? userId : null);
 			statement.setObject(4, userId);
 			statement.setString(5, "#251 fixture");
+			statement.setObject(6, scope.tenantId());
+			statement.setObject(7, scope.commonId());
 			statement.executeUpdate();
 		}
 		return id;
+	}
+
+	private static FixtureScope insertTenantWorkspace(Connection connection) throws SQLException {
+		UUID tenant = UUID.randomUUID();
+		UUID root = UUID.randomUUID();
+		UUID common = UUID.randomUUID();
+		try (PreparedStatement statement = connection.prepareStatement(
+				"insert into tnn (id, tnn_key, name) values (?, 'fixture-251', 'Fixture')")) {
+			statement.setObject(1, tenant);
+			statement.executeUpdate();
+		}
+		try (PreparedStatement statement = connection.prepareStatement(
+				"insert into wrk_node (id, tnn_id, node_key, kind, name, path) values (?, ?, 'root', 'ROOT', 'Root', array[?]::uuid[])")) {
+			statement.setObject(1, root);
+			statement.setObject(2, tenant);
+			statement.setObject(3, root);
+			statement.executeUpdate();
+		}
+		try (PreparedStatement statement = connection.prepareStatement(
+				"insert into wrk_node (id, tnn_id, prn_id, node_key, kind, name, path) values (?, ?, ?, 'common', 'COMMON', 'Common', array[?, ?]::uuid[])")) {
+			statement.setObject(1, common);
+			statement.setObject(2, tenant);
+			statement.setObject(3, root);
+			statement.setObject(4, root);
+			statement.setObject(5, common);
+			statement.executeUpdate();
+		}
+		return new FixtureScope(tenant, common);
+	}
+
+	private record FixtureScope(UUID tenantId, UUID commonId) {
 	}
 
 	private static UUID insertMember(Connection connection, UUID threadId, UUID userId) throws SQLException {

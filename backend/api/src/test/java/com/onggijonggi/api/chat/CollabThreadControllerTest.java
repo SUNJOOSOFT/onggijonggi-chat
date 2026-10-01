@@ -32,7 +32,7 @@ import org.springframework.test.web.servlet.client.RestTestClient;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, CollabRoomFixture.class,
-		FakeKeycloakAdminConfig.class})
+		FakeKeycloakAdminConfig.class, DefaultWorkspaceFixture.class})
 class CollabThreadControllerTest {
 
 	@LocalServerPort

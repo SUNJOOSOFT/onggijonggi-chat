@@ -3,7 +3,6 @@ package com.onggijonggi.api.authz;
 import com.onggijonggi.common.authz.OrgUnitMember;
 import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
-import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
 import com.onggijonggi.common.authz.WorkspaceNode;
@@ -142,7 +141,7 @@ public class WorkspaceAuthorizer {
 	/** 배정된 org-unit이 배정과 같은 Tenant에 있고 ACTIVE인가. 비활성 org-unit의 배정은 판정에 쓰지 않는다. */
 	private boolean isActiveOrgUnit(OrgUnitMember assignment) {
 		return orgUnits.findById(assignment.getOrgUnitId())
-				.filter(unit -> unit.getTenantId().equals(assignment.getTenantId()) && unit.getStatus() == OrgUnitStatus.ACTIVE)
+				.filter(unit -> unit.isActiveIn(assignment.getTenantId()))
 				.isPresent();
 	}
 

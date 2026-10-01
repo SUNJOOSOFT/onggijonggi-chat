@@ -33,6 +33,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `created` | `created` | 생성됨 | 예외 | 관용 — `created_at`은 범용 관례라 원형 유지 |
 | `cur` | `current` | 현재 | 예외 | 관용어 — 알고리즘 결과 `crr`이 부자연스러움 |
 | `crs` | `cursor` | 커서 | 알고리즘 | - |
+| `ctv` | `cutover` | 절체 | 알고리즘 | - |
 | `deleted` | `deleted` | - | 예외 | 관용 유지 — `deleted_at`/`deleted_by` 대칭, 기존 `created`/`updated`/`indexed`/`uploaded`와 동일 패턴 |
 | `dnd` | `denied` | 거부됨 | 알고리즘 | - |
 | `dept` | `department` | - | 예외 | 관용어 — 알고리즘 결과 `dpr`이 불명확 |

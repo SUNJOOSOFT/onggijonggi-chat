@@ -3,7 +3,6 @@ package com.onggijonggi.api.authz;
 import com.onggijonggi.common.authz.OrgUnitMember;
 import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
-import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.RankGrant;
 import com.onggijonggi.common.authz.RankGrantRepository;
 import com.onggijonggi.common.authz.TenantRepository;
@@ -97,26 +96,14 @@ public class DirectManageAuthorizer {
 		if (assignments.isEmpty()) return false;
 		List<WorkspaceGrant> grants = workspaceGrants.findByWorkspaceNodeId(node.getId());
 		List<RankGrant> rankRules = rankGrants.findByWorkspaceNodeId(node.getId());
-		return assignments.stream().anyMatch(assignment -> grants.stream().anyMatch(grant -> allows(grant, assignment))
-				|| rankRules.stream().anyMatch(rule -> allows(rule, assignment)));
+		return assignments.stream().anyMatch(assignment -> grants.stream().anyMatch(grant -> CasbinPolicy.allows(grant, assignment, CasbinPolicy.MANAGE))
+				|| rankRules.stream().anyMatch(rule -> CasbinPolicy.allows(rule, assignment, CasbinPolicy.MANAGE)));
 	}
 
 	private boolean isActiveOrgUnit(OrgUnitMember assignment) {
 		return orgUnits.findById(assignment.getOrgUnitId())
-				.filter(unit -> unit.getTenantId().equals(assignment.getTenantId()) && unit.getStatus() == OrgUnitStatus.ACTIVE)
+				.filter(unit -> unit.isActiveIn(assignment.getTenantId()))
 				.isPresent();
-	}
-
-	private static boolean allows(WorkspaceGrant grant, OrgUnitMember assignment) {
-		return grant.getOrgUnitId().equals(assignment.getOrgUnitId())
-				&& CasbinPolicy.roleAllows(grant.getRole(), CasbinPolicy.MANAGE);
-	}
-
-	/** Casbin 식 `r.sub.OrgUnit == '<팀>' && r.sub.Rank <= N`(팀이 없으면 서열 조건만)과 같다. */
-	private static boolean allows(RankGrant rule, OrgUnitMember assignment) {
-		return (rule.getOrgUnitId() == null || rule.getOrgUnitId().equals(assignment.getOrgUnitId()))
-				&& assignment.getRank().order() <= rule.getRank().order()
-				&& CasbinPolicy.roleAllows(rule.getRole(), CasbinPolicy.MANAGE);
 	}
 
 	private static ResponseStatusException forbidden() {

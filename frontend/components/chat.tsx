@@ -183,9 +183,17 @@ function ChatSession({
       state.sessions.find((session) => session.id === id)?.failedMessages ??
       EMPTY_FAILED_MESSAGES,
   );
+  // 서버에 아직 없는 draft에는 세션을 만들지 않되, 미전송 본문은 화면에서 재전송할 수 있게 보존한다.
+  const [draftFailedMessages, setDraftFailedMessages] = useState<
+    Array<{ id: string; content: string }>
+  >([]);
+  const allFailedMessages = useMemo(
+    () => [...failedMessages, ...draftFailedMessages],
+    [failedMessages, draftFailedMessages],
+  );
   const failedMessageIds = useMemo(
-    () => failedMessages.map((failed) => failed.id),
-    [failedMessages],
+    () => allFailedMessages.map((failed) => failed.id),
+    [allFailedMessages],
   );
 
   // 연결이 끊겨 서버로 아예 못 나간 메시지도 이력에 남긴다(이슈 #226) — 서버가 받은 적이
@@ -202,7 +210,7 @@ function ChatSession({
           attachments: message.attachments,
         }),
       ),
-      ...failedMessages.map(
+      ...allFailedMessages.map(
         (failed): RenderedMessage => ({
           id: failed.id,
           role: 'user' as const,
@@ -211,7 +219,7 @@ function ChatSession({
         }),
       ),
     ],
-    [roomMessages, failedMessages],
+    [roomMessages, allFailedMessages],
   );
 
   /**
@@ -320,6 +328,9 @@ function ChatSession({
   const lastSentRef = useRef<{ content: string; clientMsgId: string } | null>(
     null,
   );
+  // 새 대화의 첫 발화를 보냈지만 서버 에코를 아직 못 받아 로컬 세션을 만들지 않은 상태.
+  const sessionPendingRef = useRef(false);
+  const sessionTitleRef = useRef('');
 
   const sendTurn = useCallback(
     (
@@ -337,9 +348,16 @@ function ChatSession({
         // 서버가 받은 적이 없어 재시도할 turnId·clientMsgId가 없다 — 그 자리에서 로컬
         // 전용 id를 만들어 "미전송" 메시지로 이력에 남긴다(이슈 #226). 재전송은
         // handleResendFailedMessage가 이 content로 sendTurn을 다시 부르는 것뿐이다.
-        useChatSessionsStore
-          .getState()
-          .markMessageFailed(id, `local-${generateUUID()}`, content);
+        const failedId = `local-${generateUUID()}`;
+        const store = useChatSessionsStore.getState();
+        if (store.sessions.some((session) => session.id === id)) {
+          store.markMessageFailed(id, failedId, content);
+        } else {
+          setDraftFailedMessages((previous) => [
+            ...previous,
+            { id: failedId, content },
+          ]);
+        }
         toast.error('연결이 끊겨 있어 메시지를 보내지 못했습니다.');
         return;
       }
@@ -360,7 +378,18 @@ function ChatSession({
     const latestUser = [...renderedMessages]
       .reverse()
       .find((message) => message.role === 'user');
-    if (!latestUser) return;
+    if (!latestUser) {
+      // 1:1 첫 발화의 bootstrap이 거부돼(권한·서버 설정) 에코가 한 번도 오지 않으면 렌더된 메시지가 없다.
+      // 보냈던 발화를 같은 clientMsgId로 다시 보낸다 — 서버 idempotency가 중복 생성을 막는다.
+      // 첨부만 보낸 발화는 첨부를 다시 실을 수 없어 다시 보내지 않는다.
+      const lastSent = lastSentRef.current;
+      if (lastSent && lastSent.content.trim() !== '') {
+        sessionPendingRef.current = true;
+        sessionTitleRef.current = lastSent.content;
+        sendTurn(lastSent.content, lastSent.clientMsgId);
+      }
+      return;
+    }
     if (latestUser.content.trim() === '') {
       // 첨부만 보낸 메시지다 — 첨부를 다시 실을 수 없어 본문 없이 보내면 서버가 거절한다.
       toast.error('파일에 대해 물어볼 내용을 입력해 다시 보내 주세요.');
@@ -394,35 +423,53 @@ function ChatSession({
 
   const handleResendFailedMessage = useCallback(
     (messageId: string) => {
-      const failed = failedMessages.find((entry) => entry.id === messageId);
+      const failed = allFailedMessages.find((entry) => entry.id === messageId);
+      setDraftFailedMessages((previous) =>
+        previous.filter((entry) => entry.id !== messageId),
+      );
       useChatSessionsStore.getState().clearMessageFailed(id, messageId);
       if (failed) sendTurn(failed.content);
     },
-    [id, failedMessages, sendTurn],
+    [id, allFailedMessages, sendTurn],
   );
 
-  // 입력창이 완성한 발화 하나를 받아 보낸다. 세션은 첫 메시지를 실제로 보낼 때만 스토어에
-  // 만든다(draft 화면 새로고침으로 빈 세션이 쌓이지 않도록).
+  // 입력창이 완성한 발화 하나를 받아 보낸다. 새 세션은 서버 에코 뒤에만 만든다.
   const handleSend = useCallback(
     (content: string, attachments: MessageAttachment[]) => {
-      const { sessions, createSession, applyFirstMessageTitle } =
+      const { sessions, applyFirstMessageTitle } =
         useChatSessionsStore.getState();
-      if (!sessions.some((session) => session.id === id)) {
-        createSession({ id, modelId: modelIdRef.current });
-      }
-      // 서버도 첫 발화로 제목을 정하지만 사이드바는 마운트당 한 번만 서버 목록을 읽는다 —
-      // 여기서 정해 두지 않으면 새 대화가 새로고침 전까지 "새 대화"로 남는다. 첨부만 보냈으면
-      // 서버와 같이 첫 파일 이름을 제목으로 쓴다.
-      applyFirstMessageTitle(
-        id,
+      // 첨부만 보냈으면 서버와 같이 첫 파일 이름을 제목으로 쓴다.
+      const title =
         content.trim() === '' && attachments.length > 0
           ? attachments[0].fileName
-          : content,
-      );
+          : content;
+      if (sessions.some((session) => session.id === id)) {
+        applyFirstMessageTitle(id, title);
+      } else {
+        // 새 대화의 세션은 서버가 첫 발화를 받아 에코한 뒤에 만든다(아래 effect). 지금 만들면 첫 발화가
+        // 거부됐을 때(권한·서버 설정) 서버에는 없는 방이 사이드바에 남는다.
+        sessionPendingRef.current = true;
+        sessionTitleRef.current = title;
+      }
       sendTurn(content, undefined, attachments);
     },
     [id, sendTurn],
   );
+
+  // 새 대화의 로컬 세션은 첫 사람 발화의 에코가 온 뒤에 만든다. 서버도 첫 발화로 제목을 정하지만 사이드바는
+  // 마운트당 한 번만 서버 목록을 읽으므로, 여기서 제목을 정해 두지 않으면 새로고침 전까지 "새 대화"로 남는다.
+  useEffect(() => {
+    if (!sessionPendingRef.current) return;
+    const first = roomMessages.find((message) => message.from !== null);
+    if (!first) return;
+    sessionPendingRef.current = false;
+    const { sessions, createSession, applyFirstMessageTitle } =
+      useChatSessionsStore.getState();
+    if (!sessions.some((session) => session.id === id)) {
+      createSession({ id, modelId: modelIdRef.current });
+    }
+    applyFirstMessageTitle(id, sessionTitleRef.current || first.content);
+  }, [roomMessages, id]);
 
   const stop = useCallback(() => {
     if (cancellableTurnId !== null) cancel(cancellableTurnId);

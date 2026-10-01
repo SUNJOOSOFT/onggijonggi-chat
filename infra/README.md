@@ -10,7 +10,8 @@
 - `elasticsearch/Dockerfile` — 한국어 형태소 분석기 nori를 넣은 Elasticsearch 이미지
 - `config/litellm_config*.yaml` — LiteLLM 모델 라우팅. **프리셋 파일들이다** — 기본은 `litellm_config.yaml`(Gemini 하나)이고, `_multi`(공급자 셋)·`_ollama`·`_vllm`로 갈아끼운다. 고르는 곳은 `.env`의 `LITELLM_CONFIG_FILE`이라 추적 파일을 고칠 일이 없다(저장소 밖 절대경로도 된다)
 - `config/realm-app.json` — Keycloak realm·client·역할·계정 최초 기동 시 자동 임포트
-- `config/workspace-setup.yml` — 조직 구조(고객사·팀·워크스페이스·팀 규칙·직급 규칙). bff에 읽기 전용으로 마운트되고, `SPRING_PROFILE`에 `casbin`이 있을 때만 bff가 기동 때 읽는다. 구조를 바꿀 때는 `reconcile.dpl_id`를 새 값으로 바꾼다(같은 값은 한 번만 적용된다)
+- `config/workspace-setup.default.yml` — 기본 조직 구조. 고객사(`ogjg`) 하나만 만든다. 모든 대화가 놓일 곳이 있어야 해서 권한 기능을 켜지 않은 기본 배포도 bff가 기동 때 읽는다. `casbin` 프로필을 켜지 않으면 이 파일을 읽는다.
+- `config/workspace-setup.yml` — 조직 구조(고객사·팀·워크스페이스·팀 규칙·직급 규칙). `SPRING_PROFILE=prod,casbin`으로 권한 기능을 켜면 이 파일을 읽는다(두 파일 모두 bff에 읽기 전용으로 마운트된다). 구조를 바꿀 때는 `reconcile.dpl_id`를 새 값으로 바꾼다(같은 값은 한 번만 적용된다)
 - `config/demo-members.csv` — 시험 계정 `demo1`~`demo6`의 팀·직급. `scripts/import-members.mjs`로 넣는다
 
 서비스끼리는 compose가 만드는 `app-net`(bridge)으로 통신한다. `proxy-net`(`external: true`)은 **caddy 프로필에만** 걸려 있다 — 다른 compose 스택을 이 caddy 뒤에 붙이기 위한 공용 네트워크라, caddy를 켤 때만 `docker network create proxy-net`이 한 번 필요하다.

@@ -146,6 +146,20 @@ describe('createRoomHub', () => {
     expect(connection.sent).toEqual([subscribe(ROOM_A)]);
   });
 
+  it('FORBIDDEN and SERVICE_UNAVAILABLE do not trigger resubscription', () => {
+    const h = hub();
+    const room = listener();
+    h.subscribeRoom(ROOM_A, room);
+    const connection = h.connections[0];
+    connection.open();
+
+    connection.receive(error(ROOM_A, 'FORBIDDEN'));
+    connection.receive(error(ROOM_A, 'SERVICE_UNAVAILABLE'));
+
+    expect(connection.sent).toEqual([]);
+    expect(room.onFrame).toHaveBeenCalledTimes(2);
+  });
+
   it('보내기는 방마다 구독 핸들로 하고, close() 뒤에는 보내지 않는다', () => {
     const h = hub();
     const room = h.subscribeRoom(ROOM_A, listener());

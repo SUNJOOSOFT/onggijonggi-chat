@@ -131,8 +131,7 @@ public class CollabThreadController {
 		return currentActorProvider.currentActor()
 				.flatMap(actor -> threadWorkspaceService.collabPlacement(actor.subject(), request.workspaceId())
 						.flatMap(workspace -> Mono
-								.fromCallable(() -> createWithRetry(actor.userId(), request.title(), idempotencyKey,
-										workspace.orElse(null)))
+								.fromCallable(() -> createWithRetry(actor.userId(), request.title(), idempotencyKey, workspace))
 								.subscribeOn(Schedulers.boundedElastic())))
 				.map(CreateCollabThreadResponse::new);
 	}

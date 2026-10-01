@@ -1,6 +1,7 @@
 package com.onggijonggi.api.migration;
 
 import java.sql.Connection;
+import com.onggijonggi.api.support.MigrationVersions;
 import java.sql.DriverManager;
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
@@ -128,7 +129,8 @@ public final class DirectChatMigrationFixtureVerifier {
 	}
 
 	private static void migrateLatest(String jdbcUrl, String username, String password, String schema) {
-		Flyway flyway = flyway(jdbcUrl, username, password, schema).load();
+		// 이 fixture는 #158 DIRECT 이관과 절체 전 확장 스키마만 검증한다.
+		Flyway flyway = flyway(jdbcUrl, username, password, schema).target(MigrationVersions.BEFORE_CUTOVER).load();
 		flyway.migrate();
 		flyway.validate();
 	}
