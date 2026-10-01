@@ -10,6 +10,9 @@ on:
 
 jobs:
   deploy:
+    concurrency:
+      group: dev-deploy
+      cancel-in-progress: false
     if: github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, dev-server]
     # 배포 전에 사람 승인을 거친다 — 절체(#262)처럼 점검창을 잡고 수동으로
