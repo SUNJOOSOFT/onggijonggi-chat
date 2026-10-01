@@ -1,0 +1,31 @@
+name: CD
+
+# dev에 push된 뒤 CI(위 push 트리거)가 성공했을 때만 돈다.
+# PR 단계의 CI(pull_request 트리거)는 건드리지 않는다 — 거기엔 이 워크플로가 반응하지 않는다.
+on:
+  workflow_run:
+    workflows: ["CI"]
+    types: [completed]
+    branches: [dev]
+
+jobs:
+  deploy:
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, dev-server]
+    # 배포 전에 사람 승인을 거친다 — 절체(#262)처럼 점검창을 잡고 수동으로
+    # 확인해야 하는 migration이 섞여 있을 수 있어, 머지 즉시 무인으로 돌리면 위험하다.
+    # Settings > Environments > dev-server에 Required reviewers를 설정해야
+    # 이 승인 대기가 실제로 걸린다.
+    environment: dev-server
+    steps:
+      - name: 배포 디렉터리에서 최신 dev로 갱신
+        working-directory: /home/ogjg/agent-onggijonggi
+        run: |
+          git fetch origin dev
+          git reset --hard origin/dev
+
+      - name: docker compose 재기동
+        working-directory: /home/ogjg/agent-onggijonggi/infra
+        run: |
+          docker compose build bff nextjs
+          docker compose up -d
