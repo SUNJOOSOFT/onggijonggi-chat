@@ -9,21 +9,46 @@ on:
     branches: [dev]
 
 jobs:
+  check:
+    # 배포 전 커밋(현재 서버에 떠 있는 버전)과 이번에 배포할 커밋(origin/dev) 사이에
+    # 새 Flyway migration이 섞여 있는지 미리 확인한다 — 이 결과로 아래 deploy 잡이
+    # 승인이 필요한 환경을 탈지 바로 넘어갈 환경을 탈지 정한다.
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: [self-hosted, dev-server]
+    outputs:
+      has_migration: ${{ steps.check.outputs.has_migration }}
+    steps:
+      - name: migration 포함 여부 확인
+        id: check
+        working-directory: /home/ogjg/agent-onggijonggi
+        run: |
+          set -euo pipefail
+          git config --global --add safe.directory /home/ogjg/agent-onggijonggi
+          current=$(git rev-parse HEAD)
+          git fetch origin dev
+          if git diff --name-only "$current" origin/dev -- backend/common/src/main/resources/db/migration/ | grep -q .; then
+            echo "has_migration=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_migration=false" >> "$GITHUB_OUTPUT"
+          fi
+
   deploy:
+    needs: check
     concurrency:
       group: dev-deploy
       cancel-in-progress: false
-    if: github.event.workflow_run.conclusion == 'success'
     runs-on: [self-hosted, dev-server]
-    # 배포 전에 사람 승인을 거친다 — 절체(#262)처럼 점검창을 잡고 수동으로
-    # 확인해야 하는 migration이 섞여 있을 수 있어, 머지 즉시 무인으로 돌리면 위험하다.
-    # Settings > Environments > dev-server에 Required reviewers를 설정해야
-    # 이 승인 대기가 실제로 걸린다.
-    environment: dev-server
+    # migration이 섞여 있으면 사람 승인을 거친다 — 절체(#262)처럼 점검창을 잡고 수동으로
+    # 확인해야 하는 migration이 있을 수 있어서다. migration이 없으면 바로 배포한다.
+    # Settings > Environments에 dev-server(보호 없음)·dev-server-review(Required reviewers)를
+    # 각각 만들어 둬야 한다.
+    environment: ${{ needs.check.outputs.has_migration == 'true' && 'dev-server-review' || 'dev-server' }}
     steps:
       - name: 배포 디렉터리에서 최신 dev로 갱신
         working-directory: /home/ogjg/agent-onggijonggi
         run: |
+          set -euo pipefail
+          git config --global --add safe.directory /home/ogjg/agent-onggijonggi
           git fetch origin dev
           git reset --hard origin/dev
 
