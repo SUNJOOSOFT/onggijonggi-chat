@@ -59,6 +59,12 @@ public class DirectManageAuthorizer {
 		return node.getStatus() == WorkspaceNodeStatus.ACTIVE && manages(subject, node);
 	}
 
+	/** 관리 목록의 복구 대상 조회. 비활성 노드도 보존된 직접 부여로 읽되 비활성 계정은 허용하지 않는다. */
+	public boolean canReadManagement(String subject, WorkspaceNode node) {
+		return users.findByKeycloakSubj(subject).filter(user -> user.getStatus() == AppUserStatus.ACTIVE).isPresent()
+				&& manages(subject, node);
+	}
+
 	/**
 	 * 관리 쓰기용. ACTIVE 노드에 직접 MANAGE가 없으면 403이다. 계정이 비활성이거나, 판정이 켜진 동안 그 Tenant의 커밋된 변경이
 	 * 아직 Casbin에 반영되지 못했으면(RbacPolicyRefresh가 막아 둠) 쓰기도 막는다 — 반영되지 않은 규칙 위에 변경을 더 쌓지 않는다.

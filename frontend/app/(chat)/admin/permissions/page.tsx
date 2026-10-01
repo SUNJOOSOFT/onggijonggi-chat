@@ -5,8 +5,8 @@
  (chat) 라우트 그룹 안에 둬서 같은 사이드바에서 오간다.
  *********************************************************/
 
-import { PermissionsAdmin } from '@/components/permissions/permissions-admin';
+import { ManagementShell } from '@/components/permissions/management-shell';
 
 export default function Page() {
-  return <PermissionsAdmin />;
+  return <ManagementShell title="권한 관리" />;
 }

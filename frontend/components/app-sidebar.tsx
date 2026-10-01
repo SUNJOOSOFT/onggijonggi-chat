@@ -41,12 +41,12 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from '@/components/ui/sidebar';
-import { fetchPermissionsEnabled } from '@/lib/api/permissions';
 import {
   deleteSessionOnServer,
   fetchChatSessions,
   renameSessionOnServer,
 } from '@/lib/api/chat';
+import { managementAccess } from '@/lib/api/rbac-management';
 import {
   TITLE_MAX_LENGTH,
   useChatSessionsHydrated,
@@ -96,9 +96,13 @@ export function AppSidebar({
   const [permissionsEnabled, setPermissionsEnabled] = useState(false);
   useEffect(() => {
     let alive = true;
-    fetchPermissionsEnabled().then((enabled) => {
-      if (alive) setPermissionsEnabled(enabled);
-    });
+    managementAccess()
+      .then((access) => {
+        if (alive) setPermissionsEnabled(access.workspace || access.platform);
+      })
+      .catch(() => {
+        if (alive) setPermissionsEnabled(false);
+      });
     return () => {
       alive = false;
     };

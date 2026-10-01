@@ -133,6 +133,46 @@ class WorkspaceManagementCasbinHttpTest extends PostgresSpringTestBase {
 	}
 
 	@Test
+	void managementQueriesKeepPlatformAndDirectWorkspaceScopesSeparate() {
+		client.get().uri("/api/rbac/workspaces")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("USER")))
+				.exchange().expectStatus().isOk().expectBody()
+				.jsonPath("$[0].id").isEqualTo(hr.toString())
+				.jsonPath("$[0].parentId").isEmpty()
+				.jsonPath("$[0].declared").isEqualTo(true);
+		client.get().uri("/api/rbac/workspaces/" + hr + "/grants")
+				.header(HttpHeaders.AUTHORIZATION, bearer(opsMember, List.of("USER")))
+				.exchange().expectStatus().isForbidden();
+		client.get().uri("/api/platform/rbac/tenants")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("USER")))
+				.exchange().expectStatus().isForbidden();
+		client.get().uri("/api/platform/rbac/tenants")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("PLATFORM_ADMIN")))
+				.exchange().expectStatus().isOk();
+		client.get().uri("/api/rbac/workspaces/" + hr + "/org-units")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("USER")))
+				.exchange().expectStatus().isOk().expectBody()
+				.jsonPath("$[0].key").doesNotExist()
+				.jsonPath("$[0].subject").doesNotExist();
+	}
+
+	@Test
+	void recoveryListDoesNotPermitInactiveDetailReads() {
+		UUID child = created(post(hrAdmin, List.of("USER"), "/api/rbac/workspaces",
+				Map.of("parentId", hr.toString(), "kind", "WORK", "name", "복구 대상")));
+		client.post().uri("/api/rbac/workspaces/" + child + "/deactivate")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("USER")))
+				.exchange().expectStatus().isNoContent();
+		client.get().uri("/api/rbac/workspaces")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("USER")))
+				.exchange().expectStatus().isOk().expectBody().jsonPath("$[?(@.id == '" + child + "')].status")
+				.isEqualTo(List.of("INACTIVE"));
+		client.get().uri("/api/rbac/workspaces/" + child + "/grants")
+				.header(HttpHeaders.AUTHORIZATION, bearer(hrAdmin, List.of("USER")))
+				.exchange().expectStatus().isForbidden();
+	}
+
+	@Test
 	void rankGrantEndpointsEnforceManageAndRefreshCasbin() {
 		UUID project = created(post(hrAdmin, List.of("USER"), "/api/rbac/workspaces",
 				Map.of("parentId", hr.toString(), "kind", "WORK", "name", "Rank project")));

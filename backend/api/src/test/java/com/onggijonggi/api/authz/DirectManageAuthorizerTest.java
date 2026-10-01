@@ -87,6 +87,23 @@ class DirectManageAuthorizerTest {
 	}
 
 	@Test
+	void managementReadIncludesInactiveRecoveryTargetsWithBothSwitchValues() {
+		grant(hr, team.getId(), WorkspaceRole.ADMIN);
+		hr.reconcileStatus(WorkspaceNodeStatus.INACTIVE);
+		for (boolean enforce : List.of(false, true)) {
+			rbac.setEnforce(enforce);
+			assertThat(authorizer.canReadManagement(SUBJECT, hr)).isTrue();
+			assertThat(authorizer.hasDirectManage(SUBJECT, hr)).isFalse();
+		}
+	}
+
+	@Test
+	void managementReadDoesNotBypassMissingGrantWhenSwitchIsOff() {
+		rbac.setEnforce(false);
+		assertThat(authorizer.canReadManagement(SUBJECT, hr)).isFalse();
+	}
+
+	@Test
 	void viewerAndContributorGrantsDoNotGiveManage() {
 		grant(hr, team.getId(), WorkspaceRole.VIEWER);
 		assertThat(authorizer.hasDirectManage(SUBJECT, hr)).isFalse();
