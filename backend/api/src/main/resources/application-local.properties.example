@@ -35,3 +35,9 @@ spring.ai.openai.base-url=http://<공용호스트주소>:4000/v1
 # 권한 기능을 쓰지 않아도 새 대화가 놓일 고객사가 하나 있어야 한다. 이 값이 없으면 새 대화 생성이 503이다.
 # bootRun의 작업 디렉터리 기준으로 상대경로가 어긋나므로 절대경로를 쓴다.
 app.rbac.workspace-setup-path=<저장소 절대경로>/infra/config/workspace-setup.default.yml
+
+# --- 방 문서 원본 저장(문서 워커) ---
+# 비우면 방 문서 등록·원본 열람이 503이다(채팅은 영향 없음). 루트 compose의 워커는 호스트에 포트를 열지 않으므로
+# worker/doc/compose.yaml로 워커를 따로 띄우고(127.0.0.1:8100), 그 .env의 INTERNAL_API_KEY와 같은 값을 넣는다(CONTRIBUTING 5절).
+#app.document.worker-url=http://localhost:8100
+#app.document.internal-api-key=여기에_워커_INTERNAL_API_KEY_입력

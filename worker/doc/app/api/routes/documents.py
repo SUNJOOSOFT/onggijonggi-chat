@@ -24,7 +24,8 @@ def get_document_service(settings: Annotated[Settings, Depends(get_settings)]) -
 
 
 def authorize(settings: Settings, internal_api_key: str, tenant_id: str) -> None:
-    if not hmac.compare_digest(internal_api_key, settings.internal_api_key):
+    # str 비교는 비ASCII 헤더 값(latin-1로 디코딩됨)에서 TypeError(500)가 나므로 bytes로 비교한다.
+    if not hmac.compare_digest(internal_api_key.encode(), settings.internal_api_key.encode()):
         raise WorkerError(401, "UNAUTHORIZED", "Invalid internal API key")
     if not _TENANT_ID.fullmatch(tenant_id):
         raise WorkerError(400, "VALIDATION_ERROR", "X-Tenant-Id is invalid")

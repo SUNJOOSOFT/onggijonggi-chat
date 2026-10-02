@@ -2,10 +2,11 @@
 
 이 문서는 Spring AI BFF가 현재 `document-worker`를 내부 HTTP로 호출하는 방법을 정리한다. FrontEnd는 Worker나 SeaweedFS를 직접 호출하지 않고 BFF만 호출한다.
 
-현재 Worker는 다음 두 기능을 제공한다.
+현재 Worker는 다음 세 기능을 제공한다.
 
 1. 검증된 DOCX renderer DSL로 DOCX, PDF 또는 Markdown을 생성하고 SeaweedFS에 저장한다.
 2. 템플릿 원본 파일을 검증해 SeaweedFS에 저장한다.
+3. 대화방(Thread) 문서의 원본을 변환 없이 저장·조회·삭제한다(`/api/v1/thread-sources`). 경로·헤더 계약은 [worker README](../../README.md)「Thread 문서 원본」에 있다. 이 경로의 `X-Tenant-Id`는 UUID다.
 
 템플릿을 생성 문서에 적용하는 기능, `TemplateManifest`, 템플릿 선택은 아직 구현하지 않았다.
 
@@ -14,8 +15,8 @@
 BFF는 `onggijonggi-chat/infra/docker-compose.yml`의 `app-net`에서 Worker **서비스 이름**으로 호출한다. 컨테이너명(`worker-doc`)이 아니라 Compose 서비스명(`document-worker`)을 사용한다.
 
 ```yaml
-APP_DOCUMENT_WORKER_BASE_URL: http://document-worker:8100
-APP_DOCUMENT_WORKER_API_KEY: ${DOCUMENT_WORKER_INTERNAL_API_KEY}
+APP_DOCUMENT_WORKER_URL: http://document-worker:8100
+APP_DOCUMENT_INTERNAL_API_KEY: ${DOCUMENT_WORKER_INTERNAL_API_KEY}
 ```
 
 API key는 BFF와 Worker에 같은 secret으로 주입한다. 브라우저나 API 응답에 노출하지 않는다.

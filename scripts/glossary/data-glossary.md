@@ -79,6 +79,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `path` | `path` | 경로 | 알고리즘 | - |
 | `pyl` | `payload` | 적재 데이터 | 알고리즘 | - |
 | `pnd` | `pending` | 대기 중 | 알고리즘 | - |
+| `pnn` | `pinned` | 고정됨 | 알고리즘 | - |
 | `qst` | `question` | 질문 | 알고리즘 | - |
 | `rank` | `rank` | 직급 | 알고리즘 | - |
 | `rsn` | `reason` | 사유 | 알고리즘 | - |
@@ -90,6 +91,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `run` | `run` | 실행 | 알고리즘 | - |
 | `seq` | `sequence` | - | 예외 | 관용어 — 알고리즘 결과 `sqn`이 불명확, 업계 통용 축약 |
 | `sess` | `session` | 세션 | 예외 | 알고리즘 결과 `sss`가 불량(동일 문자 반복) |
+| `size` | `size` | 크기 | 알고리즘 | - |
 | `src` | `source` | 근거 | 알고리즘 | - |
 | `stg` | `staging` | 사전 적재 | 알고리즘 | - |
 | `status` | `status` | - | 예외 | 관용 유지 — 알고리즘 결과 `stt`가 부자연스러움(`content`·`title`과 같은 패턴) |

@@ -64,6 +64,12 @@ public class WorkspaceAuthorizer {
 		return authorize(subject, workspaceNodeId, CasbinPolicy.VIEW);
 	}
 
+	/** 이미 boundedElastic의 DB 트랜잭션 안인 업무 경계에서 동일한 VIEW 판정을 적용한다. */
+	public boolean canViewBlocking(String subject, UUID workspaceNodeId) {
+		if (!rbacProperties.isEnforce()) return true;
+		return workspaceNodeId != null && authorizeBlocking(subject, workspaceNodeId, CasbinPolicy.VIEW);
+	}
+
 	/** COLLAB Thread 생성 시 확인한다(#265) — COMMON도 예외 없이 이 판정을 그대로 탄다. */
 	public Mono<Boolean> canCreateThread(String subject, UUID workspaceNodeId) {
 		return authorize(subject, workspaceNodeId, CasbinPolicy.THREAD_CREATE);

@@ -241,6 +241,8 @@ services:
       SPRING_AI_OPENAI_API_KEY:             ${LITELLM_MASTER_KEY}
       SPRING_AI_OPENAI_CHAT_OPTIONS_MODEL:  ${LLM_MODEL:-gemini-3.6-flash}
       APP_LLM_GATEWAY_URL:                  http://litellm:4000
+      APP_DOCUMENT_WORKER_URL: http://document-worker:8100
+      APP_DOCUMENT_INTERNAL_API_KEY: ${DOCUMENT_WORKER_INTERNAL_API_KEY}
       APP_CORS_ALLOWED_ORIGINS: ${PUBLIC_FRONTEND_URL:-http://localhost:3010}
     volumes:
       # 조직 구조 설정. 두 파일을 모두 마운트하고 프로필이 고른다(application-prod / application-casbin.properties).

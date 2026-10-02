@@ -5,12 +5,15 @@ import com.onggijonggi.api.authz.RbacStateConflictException;
 import com.onggijonggi.api.chat.IdempotencyKeyConflictException;
 import com.onggijonggi.api.chat.InviteeOutsideWorkspaceException;
 import com.onggijonggi.api.chat.MsgFileRejectedException;
+import com.onggijonggi.api.chat.ThreadDocumentException;
 import com.openai.errors.OpenAIServiceException;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.core.io.buffer.DataBufferLimitException;
 import org.springframework.dao.OptimisticLockingFailureException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.HttpStatusCode;
+import org.springframework.http.MediaType;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -103,6 +106,28 @@ public class GlobalExceptionHandler {
 	public ResponseEntity<ErrorResponse> handleMsgFileRejected(MsgFileRejectedException ex, ServerWebExchange exchange) {
 		return ResponseEntity.status(ex.getStatus())
 				.body(ErrorResponse.of(ex.getCode(), ex.getMessage(), traceId(exchange)));
+	}
+
+	/** 방 문서(#338)가 문서 고유의 이유로 거부된 경우. 원본 저장소 장애(503)는 사용자에게 재시도만 안내하고 원인은
+	 * 서버에만 남는다 — 이 핸들러가 아니면 503이 로그 없이 사라진다. */
+	@ExceptionHandler(ThreadDocumentException.class)
+	public ResponseEntity<ErrorResponse> handleThreadDocument(ThreadDocumentException ex, ServerWebExchange exchange) {
+		if (ex.getStatusCode().is5xxServerError())
+			log.warn("문서 원본 저장소 요청 실패(traceId={})", traceId(exchange), ex.getCause());
+		return ResponseEntity.status(ex.getStatusCode())
+				.body(ErrorResponse.of(ex.getCode(), ex.getReason(), traceId(exchange)));
+	}
+
+	/** 코덱 상한에서 끊긴 본문 — 아니면 처리되지 않은 예외(500)가 된다. 멀티파트는 파서의 파트 크기 상한
+	 * (spring.webflux.multipart.max-disk-usage-per-part)이고, 첨부·방 문서 모두 10MiB 상한이라 컨트롤러가 내는 크기 초과와
+	 * 같은 code로 답한다. 그 밖의 경우는 서버가 바깥 응답(모델 목록 등)을 읽다 상한에 걸린 것일 수 있어 요청자 잘못(413)으로
+	 * 답하지 않고 처리되지 않은 예외(500)와 같게 둔다. */
+	@ExceptionHandler(DataBufferLimitException.class)
+	public ResponseEntity<ErrorResponse> handleBodyLimit(DataBufferLimitException ex, ServerWebExchange exchange) {
+		if (!MediaType.MULTIPART_FORM_DATA.isCompatibleWith(exchange.getRequest().getHeaders().getContentType()))
+			return handleUnexpected(ex, exchange);
+		return ResponseEntity.status(HttpStatus.CONTENT_TOO_LARGE)
+				.body(ErrorResponse.of("FILE_TOO_LARGE", "파일이 너무 큽니다.", traceId(exchange)));
 	}
 
 	/** Workspace·부여·org-unit 관리(#260)가 현재 권한 구성 상태 때문에 거부된 경우(선언 리소스, 마지막 ADMIN, 남은 방 등).

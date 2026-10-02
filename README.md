@@ -61,7 +61,7 @@ docker compose up -d --build                   # ③ 전체 기동 (첫 빌드 5
 | `backend/api/` | 실행 모듈 — HTTP·WebSocket 엔드포인트, 필터체인 | Spring Boot WebFlux · Spring AI |
 | `backend/common/` | 공유 라이브러리 — 인증·사용자·대화 도메인, 마이그레이션 | JPA · Flyway |
 | `infra/` | compose 오케스트레이션 · 게이트웨이 설정 | Docker Compose · LiteLLM · Keycloak · PostgreSQL |
-| `worker/` | 문서 처리 워커 | (예약 — 코드 없음) |
+| `worker/` | 문서 처리 워커 — 문서 생성, 대화방 문서 원본 저장 | Python · FastAPI · SeaweedFS |
 
 프론트엔드는 **BFF만** 호출한다. 게이트웨이와 모델 자격증명은 브라우저에 노출되지 않는다.
 
@@ -78,7 +78,7 @@ docker compose up -d --build                   # ③ 전체 기동 (첫 빌드 5
 | [CONTRIBUTING.md](CONTRIBUTING.md) | **코드를 고칠 때.** 이슈·브랜치·커밋·PR 절차와, 프론트·BFF를 호스트에서 직접 띄우는 개발 환경 구성 |
 | [`frontend/README.md`](frontend/README.md) | 프론트엔드 계층의 역할·스택과 동작 메모 |
 
-계층 구조는 코드와 주석에서 `01·CLIENT` ~ `06·DOCUMENT` 번호로 참조한다 — 01은 `frontend/`, 02·EDGE와 03·CORE는 `backend/api/`의 `security/`·`chat/`와 `backend/common/`의 `auth/`·`chat/`, 04·DATA는 스키마·엔티티, 05·INFRA는 `infra/`, 06·DOCUMENT는 `worker/`(예약)에 해당한다.
+계층 구조는 코드와 주석에서 `01·CLIENT` ~ `06·DOCUMENT` 번호로 참조한다 — 01은 `frontend/`, 02·EDGE와 03·CORE는 `backend/api/`의 `security/`·`chat/`와 `backend/common/`의 `auth/`·`chat/`, 04·DATA는 스키마·엔티티, 05·INFRA는 `infra/`, 06·DOCUMENT는 `worker/`에 해당한다.
 
 ---
 

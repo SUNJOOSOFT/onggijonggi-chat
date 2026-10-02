@@ -44,6 +44,7 @@ import {
 } from '@/lib/collab/use-collab-room';
 import { CollabInput } from './collab-input';
 import { ParticipantsSheet } from './participants-sheet';
+import { ThreadDocuments } from '@/components/thread-documents';
 
 const CONNECTION_LABEL: Record<RoomConnection, string> = {
   connecting: '연결 중…',
@@ -188,6 +189,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
           {CONNECTION_LABEL[connection]}
         </span>
       </header>
+
+      <ThreadDocuments threadId={threadId} />
 
       <div className="flex min-h-0 flex-1">
         <main className="flex min-h-0 flex-1 flex-col">

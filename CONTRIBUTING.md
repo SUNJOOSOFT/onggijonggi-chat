@@ -323,6 +323,11 @@ PR의 전체 migration 적용 검증은 CI `flyway-postgres` job이 담당한다
 주지 않으면 새 대화 생성이 503이다. 대화가 이미 있는 옛 로컬 DB는 `--spring.flyway.target=20260929055051721`으로
 한 번 띄워 고객사를 만든 뒤 target 없이 다시 띄운다(INSTALL.md「v0.2에서 올릴 때」).
 
+방 문서 등록·원본 열람은 문서 워커를 쓴다. 루트 compose의 워커는 호스트에 포트를 열지 않으므로, 호스트 `bootRun`에서는
+`worker/doc`에 `INTERNAL_API_KEY=<임의 값>` 한 줄짜리 `.env`를 만들고 `docker compose up -d --build`로 워커를 따로 띄운
+뒤(`127.0.0.1:8100`), 같은 값을 `application-local.properties`의 `app.document.internal-api-key`에 넣는다. 비우면 문서
+요청이 503이다(채팅은 영향 없음). 이 compose는 루트 스택과 컨테이너 이름이 같아 루트 스택의 워커와 동시에 띄울 수 없다.
+
 테스트는 `bootRun` 자리에 `test`를 넣는다.
 
 `http://localhost:8090/actuator/health`가 `{"status":"UP"}`이면 정상이다.

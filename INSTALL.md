@@ -205,7 +205,7 @@ docker volume rm ogjg-chat_postgres-data
 docker compose up -d --build
 ```
 
-> ⚠️ **로그인 계정과 대화 내용이 함께 지워진다.** `.env`의 `APP_USER`로 만들어지는 기본 계정은 자동으로 다시 생긴다.
+> ⚠️ **로그인 계정과 대화 내용이 함께 지워진다.** 대화방에 등록한 문서 원본은 문서 워커의 SeaweedFS 볼륨(`ogjg-chat_document-worker-seaweed-volume`·`ogjg-chat_document-worker-seaweed-filer`)에 따로 남으므로, 함께 지우려면 이 두 볼륨도 지운다. `.env`의 `APP_USER`로 만들어지는 기본 계정은 자동으로 다시 생긴다.
 
 ---
 

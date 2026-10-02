@@ -23,6 +23,7 @@ import { toast } from 'sonner';
 
 import { saveModelId } from '@/app/(chat)/actions';
 import { ChatHeader } from '@/components/chat-header';
+import { ThreadDocuments } from '@/components/thread-documents';
 import { LoaderIcon } from '@/components/icons';
 import { NoticeBanner } from '@/components/notice-banner';
 import { friendlyMessageForCode } from '@/lib/api/errors';
@@ -482,6 +483,15 @@ function ChatSession({
         selectedModelId={modelId}
         onModelChange={handleModelChange}
       />
+
+      {!isInaccessible && (
+        <ThreadDocuments
+          threadId={id}
+          available={
+            !isNewDraft || roomMessages.some((message) => message.from !== null)
+          }
+        />
+      )}
 
       {/* 같은 code는 한 건뿐이라(room-state의 upsertNotice) key가 겹치지 않는다. */}
       {room.state.notices.map((notice) => (
