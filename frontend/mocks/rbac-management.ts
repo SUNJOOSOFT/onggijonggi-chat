@@ -282,17 +282,6 @@ export async function handleRbacMock(
       })),
     });
   }
-  if (
-    isPlatform &&
-    resource.join('/') === 'members/import' &&
-    method === 'POST'
-  ) {
-    return importMockMembers(
-      await request.text(),
-      url.searchParams.get('apply') === 'true',
-      state,
-    );
-  }
   if (method === 'GET' && url.pathname === '/api/rbac/workspaces')
     return Response.json(visible());
   if (nodeId) {
@@ -681,29 +670,6 @@ export async function handleRbacMock(
         eventKind = 'NODE_REACTIVATED';
       } else return error(404, 'NOT_FOUND');
     }
-  } else if (
-    isPlatform &&
-    resource[0] === 'admin' &&
-    resource[1] === 'people' &&
-    resource[3] === 'assignment'
-  ) {
-    const person = state.people.find((value) => value.subject === resource[2]);
-    if (!person) return error(404, 'NOT_FOUND');
-    if (method === 'DELETE') {
-      person.teamId = null;
-      person.rank = null;
-      person.visible = [];
-    } else if (
-      method === 'PUT' &&
-      state.organizations.some(
-        (unit) => unit.id === body.teamId && unit.status === 'ACTIVE',
-      ) &&
-      RANKS.includes(String(body.rank))
-    ) {
-      person.teamId = String(body.teamId);
-      person.rank = String(body.rank);
-    } else return error(400, 'MALFORMED_REQUEST');
-    eventKind = method === 'DELETE' ? 'MEMBER_UNASSIGNED' : 'MEMBER_CHANGED';
   } else if (resource[0] === 'grants' || resource[0] === 'rank-grants') {
     const grant =
       resource[0] === 'grants' ? grantAt(resource[1]) : rankAt(resource[1]);
@@ -883,15 +849,13 @@ export async function handleRbacMock(
     workspaceNodeId = target.id;
     eventKind = 'THREAD_MOVED';
   } else return error(404, 'NOT_FOUND');
-  const targetKind = eventKind.startsWith('MEMBER')
-    ? 'MEMBER'
-    : isPlatform
-      ? 'ORG_UNIT'
-      : eventKind.startsWith('NODE')
-        ? 'WORKSPACE'
-        : eventKind === 'THREAD_MOVED'
-          ? 'THREAD'
-          : 'POLICY';
+  const targetKind = isPlatform
+    ? 'ORG_UNIT'
+    : eventKind.startsWith('NODE')
+      ? 'WORKSPACE'
+      : eventKind === 'THREAD_MOVED'
+        ? 'THREAD'
+        : 'POLICY';
   const after = created
     ? structuredClone(
         state.nodes.find((value) => value.id === created) ??
@@ -1004,87 +968,6 @@ export async function handleRbacMock(
   return created
     ? Response.json({ id: created }, { status: 201 })
     : new Response(null, { status: 204 });
-}
-
-/** 단순 목업 CSV는 명시 행만 반영하며 미리보기·전체 오류 검증을 적용보다 먼저 수행한다. */
-function importMockMembers(csv: string, apply: boolean, state: RbacMockState) {
-  const lines = csv.trim().split(/\r?\n/);
-  const problems: { line: number; message: string }[] = [];
-  const rows: {
-    line: number;
-    email: string;
-    team: string;
-    rank: string;
-    outcome: string;
-  }[] = [];
-  const changes: { person: PermissionPerson; teamId: string; rank: string }[] =
-    [];
-  const seen = new Set<string>();
-  if (lines.shift() !== 'email,team,rank')
-    problems.push({ line: 1, message: 'email,team,rank 헤더가 필요합니다.' });
-  lines.forEach((line, index) => {
-    const fields = line.split(',');
-    const [email, team, rank] = fields;
-    const person = state.people.find((value) => value.username === email);
-    const unit = state.organizations.find(
-      (value) => value.key === team && value.status === 'ACTIVE',
-    );
-    if (
-      fields.length !== 3 ||
-      !person ||
-      !unit ||
-      !RANKS.includes(rank) ||
-      seen.has(email)
-    ) {
-      problems.push({
-        line: index + 2,
-        message: '사용자·조직·직급 또는 중복 행을 확인하세요.',
-      });
-      return;
-    }
-    seen.add(email);
-    changes.push({ person, teamId: unit.id, rank });
-    rows.push({
-      line: index + 2,
-      email,
-      team,
-      rank,
-      outcome:
-        person.teamId === unit.id && person.rank === rank
-          ? 'UNCHANGED'
-          : 'CHANGED',
-    });
-  });
-  const applied = apply && problems.length === 0;
-  if (applied)
-    for (const change of changes) {
-      if (
-        change.person.teamId === change.teamId &&
-        change.person.rank === change.rank
-      )
-        continue;
-      const before = structuredClone(change.person);
-      change.person.teamId = change.teamId;
-      change.person.rank = change.rank;
-      appendAudit(
-        state,
-        'MEMBER_CHANGED',
-        'MEMBER',
-        null,
-        { subject: change.person.subject },
-        before,
-        structuredClone(change.person),
-      );
-    }
-  return Response.json({
-    applied,
-    counts: {
-      CHANGED: rows.filter((row) => row.outcome === 'CHANGED').length,
-      UNCHANGED: rows.filter((row) => row.outcome === 'UNCHANGED').length,
-    },
-    rows,
-    problems,
-  });
 }
 
 function appendAudit(

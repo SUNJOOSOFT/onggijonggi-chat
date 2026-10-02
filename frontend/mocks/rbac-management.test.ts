@@ -165,7 +165,7 @@ it('깊이 11은 허용하지만 생성·이동으로 깊이 12를 만들거나 
   ).not.toContain('CREATE');
 });
 
-it('overview는 해제·재배정과 권한 축소 뒤 최신 VIEW를 계산하고 COMMON을 제외한다', async () => {
+it('overview는 배정이 빠지거나 다시 들어온 뒤와 권한 축소 뒤 최신 VIEW를 계산하고 COMMON을 제외한다', async () => {
   const state = createRbacMockState();
   const person = state.people[0];
   const team = person.teamId;
@@ -178,24 +178,12 @@ it('overview는 해제·재배정과 권한 축소 뒤 최신 VIEW를 계산하�
         'both',
       )
     ).json();
-  await handleRbacMock(
-    request(
-      `/api/platform/rbac/admin/people/${person.subject}/assignment`,
-      'DELETE',
-    ),
-    state,
-    'both',
-  );
+  // 배정은 화면에서 바꾸지 않는다(속성 파일). 목업 상태를 직접 바꿔 다시 읽는다.
+  person.teamId = null;
+  person.rank = null;
   expect((await overview()).people[0].visible).toEqual([]);
-  await handleRbacMock(
-    request(
-      `/api/platform/rbac/admin/people/${person.subject}/assignment`,
-      'PUT',
-      { teamId: team, rank: 'S' },
-    ),
-    state,
-    'both',
-  );
+  person.teamId = team;
+  person.rank = 'S';
   const result = await overview();
   expect(result.workspaces.map((value: { id: string }) => value.id)).toEqual([
     node.id,
@@ -377,21 +365,13 @@ it('플랫폼과 Workspace 권한을 분리하고 일반 사용자는 목록이 
   ).toEqual({ workspaceManagement: false });
 });
 
-it('플랫폼에서 자기 조직 배정을 회수하면 Workspace 관리도 즉시 거부한다', async () => {
+it('자기 조직 배정이 빠지면 Workspace 관리도 즉시 거부한다', async () => {
   const state = createRbacMockState();
   const node = state.nodes.find((value) => value.kind === 'ORG');
-  expect(
-    (
-      await handleRbacMock(
-        request(
-          '/api/platform/rbac/admin/people/mock-admin/assignment',
-          'DELETE',
-        ),
-        state,
-        'both',
-      )
-    ).status,
-  ).toBe(204);
+  const admin = state.people.find((value) => value.subject === 'mock-admin');
+  if (!admin) throw new Error('mock-admin이 없다');
+  admin.teamId = null;
+  admin.rank = null;
   expect(
     await (
       await handleRbacMock(request('/api/rbac/admin/context'), state, 'both')
@@ -439,34 +419,6 @@ it('목업 감사 snapshot에는 대상만 담고 다른 자원이나 이전 감
   expect(state.audits[1].beforeJson).not.toHaveProperty('people');
 });
 
-it('플랫폼 CSV는 미리보기에서 저장하지 않고 오류가 있으면 전체 적용을 거부한다', async () => {
-  const state = createRbacMockState();
-  const before = structuredClone(state.people);
-  const csv = 'email,team,rank\nadmin@example.test,development,C';
-  const call = (text: string, apply: boolean) =>
-    handleRbacMock(
-      new Request(
-        `http://localhost/api/platform/rbac/members/import?apply=${apply}`,
-        { method: 'POST', body: text },
-      ),
-      state,
-      'platform',
-    );
-  expect((await (await call(csv, false)).json()).applied).toBe(false);
-  expect(state.people).toEqual(before);
-  expect(state.audits).toHaveLength(0);
-  expect(
-    (
-      await (
-        await call(`${csv}\nmissing@example.test,development,C`, true)
-      ).json()
-    ).applied,
-  ).toBe(false);
-  expect(state.people).toEqual(before);
-  expect((await (await call(csv, true)).json()).applied).toBe(true);
-  expect(state.people[0].rank).toBe('C');
-  expect(state.audits[0].targetKind).toBe('MEMBER');
-});
 it('변경 뒤 목록과 감사가 갱신되고 숨겨진 부모는 노출하지 않는다', async () => {
   const state = createRbacMockState();
   const nodes = await (

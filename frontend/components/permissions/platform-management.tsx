@@ -54,7 +54,7 @@ export function PlatformManagement() {
         </select>
       </label>
       {tenant && <OrganizationManagement key={tenant.id} tenant={tenant} />}
-      <Section title="기존 사람 배정·CSV">
+      <Section title="사람별 팀·직급">
         <PermissionsAdmin embedded />
       </Section>
     </>

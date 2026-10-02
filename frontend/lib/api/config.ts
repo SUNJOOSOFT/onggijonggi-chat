@@ -71,7 +71,6 @@ export const WORKSPACES_PATH = '/api/workspaces';
 
 /** 권한 관리 화면(/admin/permissions) API. bff의 casbin 프로필에서만 있고(꺼져 있으면 404), PLATFORM_ADMIN만 부른다(아니면 403). */
 export const PERMISSIONS_ADMIN_PATH = '/api/platform/rbac/admin';
-export const MEMBERS_IMPORT_PATH = '/api/platform/rbac/members/import';
 
 /** 채팅 첨부 업로드. 방과 묶지 않는다 — 1:1 첫 발화는 방이 아직 없어서다(MsgFileController). */
 export const ATTACHMENTS_PATH = '/api/attachments';

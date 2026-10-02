@@ -2,11 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./http', () => ({ authFetch: vi.fn() }));
 
-import {
-  fetchPermissionsOverview,
-  importMembersCsv,
-  saveAssignment,
-} from './permissions';
+import { fetchPermissionsOverview } from './permissions';
 import { authFetch } from './http';
 
 const mockedAuthFetch = vi.mocked(authFetch);
@@ -62,7 +58,7 @@ describe('permissions API errors', () => {
       ),
     );
 
-    await expect(saveAssignment('person', 'team', 'S')).rejects.toThrow(
+    await expect(fetchPermissionsOverview()).rejects.toThrow(
       '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요.',
     );
   });
@@ -72,7 +68,7 @@ describe('permissions API errors', () => {
       new Response('private stack trace', { status: 404 }),
     );
 
-    await expect(importMembersCsv('email,team,rank', false)).rejects.toThrow(
+    await expect(fetchPermissionsOverview()).rejects.toThrow(
       '일시적인 오류가 발생했어요. 잠시 후 다시 시도해 주세요.',
     );
   });

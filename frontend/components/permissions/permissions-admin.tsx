@@ -2,41 +2,21 @@
 
 /********************************************************
  파일명 : permissions-admin.tsx (components/permissions)
- 설 명 : 권한 관리 화면(/admin/permissions). 사람마다 팀·직급을 고르면 바로 저장하고, 아래 "누가 무엇을 보나" 표를
- 서버의 실제 판정으로 다시 그린다. CSV(email,team,rank)는 미리보기 뒤 저장한다. 판정은 흉내 내지 않는다 —
- 표의 O/-는 bff가 Casbin에 물어본 결과 그대로다.
+ 설 명 : 권한 관리 화면(/admin/permissions). 사람마다 팀·직급(Casbin에 적재된 속성)과 "누가 무엇을 보나" 표를
+ 보여 준다. 팀·직급은 여기서 바꾸지 않는다 — 속성 파일(members.csv)을 고치고 casbin을 재시작하면 반영된다.
+ 판정은 흉내 내지 않는다 — 표의 O/-는 bff가 Casbin에 물어본 결과 그대로다.
  bff의 casbin 프로필에서만 API가 있다. 꺼져 있으면 404, PLATFORM_ADMIN이 아니면 403을 반환한다.
  *********************************************************/
 
-import {
-  type ChangeEvent,
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-} from 'react';
-import { toast } from 'sonner';
+import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { Button } from '@/components/ui/button';
 import {
-  type ImportReport,
   type PermissionsOverview,
   PermissionsApiError,
   fetchPermissionsOverview,
-  importMembersCsv,
-  saveAssignment,
 } from '@/lib/api/permissions';
-
-const SELECT_CLASS =
-  'h-8 rounded-md border border-input bg-background px-2 text-sm disabled:cursor-not-allowed disabled:opacity-50';
-
-const OUTCOME_LABELS: Record<string, string> = {
-  ASSIGNED: '새로 배정',
-  CHANGED: '변경',
-  UNCHANGED: '그대로',
-  UNASSIGNED: '해제',
-};
 
 export function PermissionsAdmin({ embedded = false }: { embedded?: boolean }) {
   const [overview, setOverview] = useState<PermissionsOverview | null>(null);
@@ -45,8 +25,6 @@ export function PermissionsAdmin({ embedded = false }: { embedded?: boolean }) {
     message: string;
     code?: string;
   } | null>(null);
-  const [saving, setSaving] = useState(false);
-  const mutationBusy = useRef(false);
   const sequence = useRef(0);
 
   const reload = useCallback(async () => {
@@ -75,40 +53,6 @@ export function PermissionsAdmin({ embedded = false }: { embedded?: boolean }) {
     };
   }, [reload]);
 
-  function beginChange() {
-    if (mutationBusy.current) return false;
-    mutationBusy.current = true;
-    setSaving(true);
-    return true;
-  }
-  function endChange() {
-    mutationBusy.current = false;
-    setSaving(false);
-  }
-
-  async function change(
-    subject: string,
-    teamId: string | null,
-    rank: string | null,
-  ) {
-    if (!beginChange()) return;
-    try {
-      await saveAssignment(subject, teamId, rank);
-      toast.success('저장했습니다.');
-      try {
-        await reload();
-      } catch {
-        toast.warning('변경 완료, 최신 정보 조회 실패');
-      }
-    } catch (error) {
-      toast.error(
-        `저장하지 못했습니다. ${error instanceof Error ? error.message : ''}`,
-      );
-    } finally {
-      endChange();
-    }
-  }
-
   return (
     <div className={embedded ? 'flex flex-col' : 'flex h-dvh flex-col'}>
       {!embedded && (
@@ -126,8 +70,8 @@ export function PermissionsAdmin({ embedded = false }: { embedded?: boolean }) {
         }
       >
         <p className="rounded-lg bg-muted px-4 py-3 text-sm">
-          팀·직급을 바꾸면 바로 저장되고, 아래 표가 실제 권한 판정 결과로 다시
-          그려집니다. 변경과 CSV 적용은 PLATFORM_ADMIN만 할 수 있습니다.
+          팀·직급은 members.csv에서 옵니다. 바꾸려면 파일을 고친 뒤 casbin을
+          재시작하세요. 아래 표는 실제 권한 판정 결과입니다.
         </p>
 
         {failed !== null && (
@@ -150,18 +94,8 @@ export function PermissionsAdmin({ embedded = false }: { embedded?: boolean }) {
 
         {overview && (
           <>
-            <AssignmentTable
-              overview={overview}
-              saving={saving}
-              onChange={change}
-            />
+            <AssignmentTable overview={overview} />
             <VisibilityTable overview={overview} />
-            <CsvImport
-              onApplied={reload}
-              changing={saving}
-              beginChange={beginChange}
-              endChange={endChange}
-            />
           </>
         )}
       </div>
@@ -169,19 +103,11 @@ export function PermissionsAdmin({ embedded = false }: { embedded?: boolean }) {
   );
 }
 
-function AssignmentTable({
-  overview,
-  saving,
-  onChange,
-}: {
-  overview: PermissionsOverview;
-  saving: boolean;
-  onChange: (
-    subject: string,
-    teamId: string | null,
-    rank: string | null,
-  ) => void;
-}) {
+function AssignmentTable({ overview }: { overview: PermissionsOverview }) {
+  const teamNames = new Map(overview.teams.map((team) => [team.id, team.name]));
+  const rankLabels = new Map(
+    overview.ranks.map((rank) => [rank.code, rank.label]),
+  );
   return (
     <section className="flex flex-col gap-3">
       <h2 className="text-base font-semibold">배정</h2>
@@ -209,55 +135,14 @@ function AssignmentTable({
                   )}
                 </td>
                 <td className="py-2">
-                  <select
-                    aria-label={`${person.name} 팀`}
-                    className={SELECT_CLASS}
-                    disabled={saving}
-                    value={person.teamId ?? ''}
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) => {
-                      const teamId = event.target.value || null;
-                      // 팀을 처음 고르면 직급이 없으니 가장 낮은 직급으로 시작한다.
-                      onChange(
-                        person.subject,
-                        teamId,
-                        teamId ? (person.rank ?? 'S') : null,
-                      );
-                    }}
-                  >
-                    <option value="">미배정</option>
-                    {overview.teams.map((team) => (
-                      <option key={team.id} value={team.id}>
-                        {team.name}
-                      </option>
-                    ))}
-                  </select>
+                  {person.teamId === null
+                    ? '미배정'
+                    : (teamNames.get(person.teamId) ?? '알 수 없는 팀')}
                 </td>
                 <td className="py-2">
-                  <select
-                    aria-label={`${person.name} 직급`}
-                    className={SELECT_CLASS}
-                    disabled={saving || person.teamId === null}
-                    value={person.rank ?? ''}
-                    onChange={(event: ChangeEvent<HTMLSelectElement>) =>
-                      onChange(
-                        person.subject,
-                        person.teamId,
-                        event.target.value,
-                      )
-                    }
-                  >
-                    {person.teamId === null && <option value="">-</option>}
-                    {overview.ranks.map((rank) => (
-                      <option key={rank.code} value={rank.code}>
-                        {rank.label}
-                      </option>
-                    ))}
-                  </select>
-                  {saving && (
-                    <span className="ml-2 text-xs text-muted-foreground">
-                      저장 중…
-                    </span>
-                  )}
+                  {person.rank === null
+                    ? '-'
+                    : (rankLabels.get(person.rank) ?? person.rank)}
                 </td>
               </tr>
             );
@@ -317,166 +202,6 @@ function VisibilityTable({ overview }: { overview: PermissionsOverview }) {
           </tbody>
         </table>
       </div>
-    </section>
-  );
-}
-
-function CsvImport({
-  onApplied,
-  changing,
-  beginChange,
-  endChange,
-}: {
-  onApplied: () => Promise<void>;
-  changing: boolean;
-  beginChange: () => boolean;
-  endChange: () => void;
-}) {
-  const [csv, setCsv] = useState<string | null>(null);
-  const [fileName, setFileName] = useState('');
-  const [report, setReport] = useState<ImportReport | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [previewing, setPreviewing] = useState(false);
-  const selection = useRef(0);
-
-  async function applyCsv(text: string) {
-    if (!beginChange()) return;
-    setBusy(true);
-    try {
-      const result = await importMembersCsv(text, true);
-      setReport(result);
-      if (result.applied) {
-        toast.success('저장했습니다.');
-        try {
-          await onApplied();
-        } catch {
-          toast.warning('변경 완료, 최신 정보 조회 실패');
-        }
-      }
-    } catch (error) {
-      toast.error(
-        `CSV를 넣지 못했습니다. ${error instanceof Error ? error.message : ''}`,
-      );
-    } finally {
-      setBusy(false);
-      endChange();
-    }
-  }
-
-  async function pick(event: ChangeEvent<HTMLInputElement>) {
-    if (changing) return;
-    const file = event.target.files?.[0];
-    event.target.value = '';
-    if (!file) return;
-    const selected = ++selection.current;
-    setCsv(null);
-    setReport(null);
-    setFileName(file.name);
-    setPreviewing(true);
-    try {
-      const text = await file.text();
-      if (selected !== selection.current) return;
-      setCsv(text);
-      const result = await importMembersCsv(text, false);
-      if (selected === selection.current) setReport(result);
-    } catch (error) {
-      if (selected === selection.current) {
-        toast.error(
-          `CSV를 읽지 못했습니다. ${error instanceof Error ? error.message : ''}`,
-        );
-      }
-    } finally {
-      if (selected === selection.current) setPreviewing(false);
-    }
-  }
-
-  const canApply =
-    csv !== null &&
-    report !== null &&
-    !report.applied &&
-    report.problems.length === 0 &&
-    !previewing;
-
-  return (
-    <section className="flex flex-col gap-3">
-      <h2 className="text-base font-semibold">CSV로 넣기</h2>
-      <p className="text-xs text-muted-foreground">
-        첫 줄은 email,team,rank입니다. 파일을 고르면 먼저 미리보기만 하고,
-        저장을 눌러야 들어갑니다. 한 줄이라도 틀리면 아무것도 저장하지 않습니다.
-        CSV에 없는 사람의 배정은 그대로 둡니다.
-      </p>
-      <div className="flex flex-wrap items-center gap-2">
-        <label className="inline-flex h-9 cursor-pointer items-center rounded-md border px-3 text-sm hover:bg-muted">
-          파일 고르기
-          <input
-            type="file"
-            accept=".csv,text/csv"
-            className="hidden"
-            onChange={pick}
-            disabled={busy || changing}
-          />
-        </label>
-        {fileName && (
-          <span className="text-sm text-muted-foreground">{fileName}</span>
-        )}
-        <Button
-          disabled={!canApply || busy || changing}
-          onClick={() => csv && applyCsv(csv)}
-          size="sm"
-        >
-          저장
-        </Button>
-      </div>
-
-      {report && (
-        <div className="flex flex-col gap-2 text-sm">
-          {report.problems.length > 0 && (
-            <div
-              className="rounded-lg border border-destructive px-4 py-3"
-              role="alert"
-            >
-              <p className="font-medium text-destructive">
-                틀린 줄 {report.problems.length}개 — 아무것도 저장하지
-                않았습니다.
-              </p>
-              <ul className="mt-1 list-disc pl-5">
-                {report.problems.map((problem) => (
-                  <li key={`${problem.line}-${problem.message}`}>
-                    {problem.line}줄: {problem.message}
-                  </li>
-                ))}
-              </ul>
-            </div>
-          )}
-          <p>
-            {Object.entries(report.counts)
-              .map(
-                ([outcome, count]) =>
-                  `${OUTCOME_LABELS[outcome] ?? outcome} ${count}`,
-              )
-              .join(', ') || '넣을 줄이 없습니다'}
-            {' · '}
-            {report.applied ? '저장했습니다' : '미리보기입니다'}
-          </p>
-          <table className="text-sm">
-            <tbody>
-              {report.rows.map((row) => (
-                <tr key={row.line} className="border-b">
-                  <td className="py-1 pr-4 text-muted-foreground">
-                    {row.line}줄
-                  </td>
-                  <td className="py-1 pr-4">{row.email}</td>
-                  <td className="py-1 pr-4">{row.team}</td>
-                  <td className="py-1 pr-4">{row.rank}</td>
-                  <td className="py-1">
-                    {OUTCOME_LABELS[row.outcome] ?? row.outcome}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      )}
     </section>
   );
 }
