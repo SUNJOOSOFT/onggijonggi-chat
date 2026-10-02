@@ -8,11 +8,11 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakUserSummary;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -33,7 +33,7 @@ class PeopleSearchTest {
 	private static final UUID TENANT = UUID.randomUUID();
 
 	private final KeycloakAdminClient keycloak = mock(KeycloakAdminClient.class);
-	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final MemberAttributes members = mock(MemberAttributes.class);
 	private final OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
 	private final PeopleSearch search = new PeopleSearch(keycloak, members, orgUnits);
 
@@ -46,9 +46,9 @@ class PeopleSearchTest {
 		legal = new OrgUnit(TENANT, "legal", "법무팀", OrgUnitStatus.ACTIVE);
 		when(orgUnits.findAll()).thenReturn(List.of(hr, legal));
 		when(members.findAll()).thenReturn(List.of(
-				new OrgUnitMember(TENANT, hr.getId(), "sub-song", Rank.TL),
-				new OrgUnitMember(TENANT, hr.getId(), "sub-hwang", Rank.D),
-				new OrgUnitMember(TENANT, legal.getId(), "sub-yoon", Rank.D)));
+				new MemberAttribute("sub-song", TENANT, hr.getId(), Rank.TL),
+				new MemberAttribute("sub-hwang", TENANT, hr.getId(), Rank.D),
+				new MemberAttribute("sub-yoon", TENANT, legal.getId(), Rank.D)));
 		name("sub-song", "송강호");
 		name("sub-hwang", "황정민");
 		name("sub-yoon", "윤여정");

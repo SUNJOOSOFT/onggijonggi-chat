@@ -1,8 +1,6 @@
 package com.onggijonggi.api.authz;
 
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.RankGrant;
 import com.onggijonggi.common.authz.RankGrantRepository;
@@ -32,21 +30,24 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Isolation;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Class Name : CutoverValidationService.java
  * Description : 점검창에서 다시 실행하는 읽기 전용 단일 Tenant·최종 Workspace 사전 검증.
- *               Keycloak은 활성 subject만 제공하고 현재 소속·직급·권한의 정본은 DB다.
+ *               Keycloak은 활성 subject만 제공한다. 사람의 소속·직급은 Casbin(p2, MemberAttributes)에서, 조직 구조와 부여는
+ *               DB에서 읽는다. 사람 속성을 읽을 수 없으면 503이다 — 빈 속성으로 검증하면 전원이 실패로 나와 결과가 틀린다.
  */
 @Service
 public class CutoverValidationService {
 
 	private final AppUserRepository users;
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final OrgUnitRepository orgUnits;
 	private final TenantRepository tenants;
 	private final WorkspaceNodeRepository nodes;
@@ -56,7 +57,7 @@ public class CutoverValidationService {
 	/** 응답이 끝없이 커지지 않게 하는 상한. 넘으면 FAILURES_TRUNCATED가 붙는다. */
 	private static final int MAX_FAILURES = 500;
 
-	public CutoverValidationService(AppUserRepository users, OrgUnitMemberRepository members,
+	public CutoverValidationService(AppUserRepository users, MemberAttributes members,
 			OrgUnitRepository orgUnits, TenantRepository tenants, WorkspaceNodeRepository nodes,
 			WorkspaceGrantRepository grants, RankGrantRepository rankGrants, JdbcTemplate jdbc) {
 		this.users = users;
@@ -175,8 +176,12 @@ public class CutoverValidationService {
 		Map<UUID, OrgUnit> unitById = new HashMap<>();
 		for (OrgUnit unit : orgUnits.findAll()) unitById.put(unit.getId(), unit);
 		// 사람당 배정 한 행이 DB 제약이다. 겸직이 생기면 이 표와 아래 판정을 함께 고쳐야 한다.
-		Map<String, OrgUnitMember> assignmentBySubject = new HashMap<>();
-		for (OrgUnitMember member : members.findAll()) assignmentBySubject.put(member.getSubject(), member);
+		Map<String, MemberAttribute> assignmentBySubject = new HashMap<>();
+		try {
+			for (MemberAttribute member : members.findAll()) assignmentBySubject.put(member.subject(), member);
+		} catch (MemberAttributesUnavailableException unavailable) {
+			throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
+		}
 		Map<UUID, List<WorkspaceGrant>> grantsByNode = new HashMap<>();
 		for (WorkspaceGrant grant : grants.findAll())
 			grantsByNode.computeIfAbsent(grant.getWorkspaceNodeId(), ignored -> new ArrayList<>()).add(grant);
@@ -192,7 +197,7 @@ public class CutoverValidationService {
 
 	/** 한 번의 검증이 읽은 표를 묶은 것. 판정은 모두 이 값으로만 한다. */
 	private record Snapshot(UUID tenantId, UUID commonId, Set<String> enabled, Map<UUID, String> subjectByUser,
-			Map<UUID, OrgUnit> unitById, Map<String, OrgUnitMember> assignmentBySubject,
+			Map<UUID, OrgUnit> unitById, Map<String, MemberAttribute> assignmentBySubject,
 			Map<UUID, List<WorkspaceGrant>> grantsByNode, Map<UUID, List<RankGrant>> ranksByNode) {
 
 		/** 놓인 곳이 없으면(절체 전) COMMON이 최종 위치다. */
@@ -201,9 +206,9 @@ public class CutoverValidationService {
 		}
 
 		/** 배정이 이 Tenant의 ACTIVE org-unit을 가리키나. */
-		boolean hasValidAssignment(OrgUnitMember member) {
-			if (member == null || !tenantId.equals(member.getTenantId())) return false;
-			OrgUnit unit = unitById.get(member.getOrgUnitId());
+		boolean hasValidAssignment(MemberAttribute member) {
+			if (member == null || !tenantId.equals(member.tenantId())) return false;
+			OrgUnit unit = unitById.get(member.orgUnitId());
 			return unit != null && unit.isActiveIn(tenantId);
 		}
 
@@ -214,7 +219,7 @@ public class CutoverValidationService {
 				return;
 			}
 			if (!enabled.contains(subject)) return; // 삭제·비활성 계정의 참여 이력은 보존한다.
-			OrgUnitMember member = assignmentBySubject.get(subject);
+			MemberAttribute member = assignmentBySubject.get(subject);
 			if (!hasValidAssignment(member)) {
 				failures.add(failure("THREAD_ACTOR_TENANT_MISMATCH", actor.threadId(), subject));
 				return;

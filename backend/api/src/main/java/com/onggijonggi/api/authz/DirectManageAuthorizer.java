@@ -1,7 +1,5 @@
 package com.onggijonggi.api.authz;
 
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.RankGrant;
 import com.onggijonggi.common.authz.RankGrantRepository;
@@ -23,8 +21,10 @@ import org.springframework.web.server.ResponseStatusException;
  * Description : 03·CORE "이 사람이 이 workspace에 직접 MANAGE를 갖나"를 판정 스위치와 무관하게 엄격히 본다.
  *               감사 조회(#259)와 Workspace·부여 관리 쓰기(#260)가 함께 쓴다.
  *               WorkspaceAuthorizer는 app.rbac.enforce가 꺼지면 늘 허용하고, 스위치를 켜는 casbin 프로필이 꺼지면
- *               Casbin 서버 자체가 없다. 그래서 Casbin을 거치지 않고 DB의 부여에서 직접 계산한다.
- *               선검증은 WorkspaceAuthorizer와 같다: Tenant ACTIVE, 배정이 노드와 같은 Tenant에 있고 그 org-unit이 ACTIVE.
+ *               Casbin 서버 자체가 없다. 그래서 Casbin 판정을 거치지 않고 DB의 부여에서 직접 계산한다. 사람 속성만은
+ *               Casbin(p2, MemberAttributes)에서 읽는다 — 우리 DB에 없다. 프로필이 꺼져 있으면 속성이 없어 아무도 관리할 수 없다.
+ *               선검증은 WorkspaceAuthorizer와 같다: Tenant ACTIVE, 속성이 노드와 같은 Tenant에 있고 그 org-unit이 ACTIVE.
+ *               속성을 읽을 수 없으면(적재 전·장애) 관리 권한이 없는 것으로 본다.
  *               판정은 Casbin 규칙과 뜻이 같아야 한다(CasbinPolicy.rules) — 역할→액션은 CasbinPolicy.roleAllows를 쓰고,
  *               직급 규칙은 "팀이 없거나 내 팀이면서 내 서열 숫자 <= 규칙 서열"이다. 부모 노드의 부여는 보지 않는다(상속 없음).
  *               DB가 블로킹이라 호출하는 쪽이 boundedElastic에서 부른다.
@@ -32,7 +32,7 @@ import org.springframework.web.server.ResponseStatusException;
 @Service
 public class DirectManageAuthorizer {
 
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final TenantRepository tenants;
 	private final OrgUnitRepository orgUnits;
 	private final WorkspaceGrantRepository workspaceGrants;
@@ -41,7 +41,7 @@ public class DirectManageAuthorizer {
 	private final RbacPolicyRefresh policyRefresh;
 	private final RbacProperties rbacProperties;
 
-	public DirectManageAuthorizer(OrgUnitMemberRepository members, TenantRepository tenants, OrgUnitRepository orgUnits,
+	public DirectManageAuthorizer(MemberAttributes members, TenantRepository tenants, OrgUnitRepository orgUnits,
 			WorkspaceGrantRepository workspaceGrants, RankGrantRepository rankGrants, AppUserRepository users,
 			RbacPolicyRefresh policyRefresh, RbacProperties rbacProperties) {
 		this.members = members;
@@ -96,9 +96,14 @@ public class DirectManageAuthorizer {
 		if (tenants.findById(node.getTenantId()).filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).isEmpty()) {
 			return false;
 		}
-		List<OrgUnitMember> assignments = members.findBySubject(subject).stream()
-				.filter(assignment -> node.getTenantId().equals(assignment.getTenantId()) && isActiveOrgUnit(assignment))
-				.toList();
+		List<MemberAttribute> assignments;
+		try {
+			assignments = members.findBySubject(subject).stream()
+					.filter(assignment -> node.getTenantId().equals(assignment.tenantId()) && isActiveOrgUnit(assignment))
+					.toList();
+		} catch (MemberAttributesUnavailableException unavailable) {
+			return false;
+		}
 		if (assignments.isEmpty()) return false;
 		List<WorkspaceGrant> grants = workspaceGrants.findByWorkspaceNodeId(node.getId());
 		List<RankGrant> rankRules = rankGrants.findByWorkspaceNodeId(node.getId());
@@ -106,9 +111,9 @@ public class DirectManageAuthorizer {
 				|| rankRules.stream().anyMatch(rule -> CasbinPolicy.allows(rule, assignment, CasbinPolicy.MANAGE)));
 	}
 
-	private boolean isActiveOrgUnit(OrgUnitMember assignment) {
-		return orgUnits.findById(assignment.getOrgUnitId())
-				.filter(unit -> unit.isActiveIn(assignment.getTenantId()))
+	private boolean isActiveOrgUnit(MemberAttribute assignment) {
+		return orgUnits.findById(assignment.orgUnitId())
+				.filter(unit -> unit.isActiveIn(assignment.tenantId()))
 				.isPresent();
 	}
 

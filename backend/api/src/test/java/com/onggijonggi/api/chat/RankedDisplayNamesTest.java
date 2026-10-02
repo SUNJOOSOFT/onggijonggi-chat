@@ -5,9 +5,9 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.Rank;
 import java.util.List;
 import java.util.Optional;
@@ -23,7 +23,7 @@ import reactor.core.publisher.Mono;
 class RankedDisplayNamesTest {
 
 	private final KeycloakAdminClient keycloak = mock(KeycloakAdminClient.class);
-	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final MemberAttributes members = mock(MemberAttributes.class);
 	private final RankedDisplayNames names = new RankedDisplayNames(keycloak, members);
 
 	@Test
@@ -57,7 +57,7 @@ class RankedDisplayNamesTest {
 		verifyNoInteractions(members);
 	}
 
-	private static OrgUnitMember assignment(String subject, Rank rank) {
-		return new OrgUnitMember(UUID.randomUUID(), UUID.randomUUID(), subject, rank);
+	private static MemberAttribute assignment(String subject, Rank rank) {
+		return new MemberAttribute(subject, UUID.randomUUID(), UUID.randomUUID(), rank);
 	}
 }

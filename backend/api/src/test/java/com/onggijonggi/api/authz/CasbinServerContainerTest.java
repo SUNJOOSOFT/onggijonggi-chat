@@ -4,6 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.chat.CollabAuthorizationRevoker;
+import com.onggijonggi.common.authz.OrgUnit;
+import com.onggijonggi.common.authz.OrgUnitRepository;
+import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
 import com.onggijonggi.common.authz.RankGrant;
 import com.onggijonggi.common.authz.RankGrantRepository;
@@ -17,6 +21,7 @@ import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.ObjectProvider;
 import org.testcontainers.DockerClientFactory;
 import org.testcontainers.containers.FixedHostPortGenericContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
@@ -25,8 +30,9 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Class Name : CasbinServerContainerTest.java
- * Description : infra/docker-compose.yml과 같은 casbin-server 이미지에 규칙을 넣고 판정한다. model.conf·정책 식·JSON 요청
- *               방식이 실제 서버에서 맞물리는지, 서버 재시작으로 규칙을 잃었을 때 다시 넣고 복구하는지 확인한다.
+ * Description : infra/docker-compose.yml과 같은 casbin-server 이미지에 규칙과 사람 속성(p2)을 넣고 판정·조회한다.
+ *               model.conf·정책 식·JSON 요청 방식이 실제 서버에서 맞물리는지, p2가 판정에 끼어들지 않는지, 서버 재시작으로
+ *               규칙과 사람 속성을 잃었을 때 다시 넣고 복구하는지 확인한다.
  *               재시작 뒤에도 같은 주소로 닿아야 해서 호스트 포트를 고정한다. Docker가 없으면 건너뛴다.
  */
 @Testcontainers(disabledWithoutDocker = true)
@@ -41,15 +47,21 @@ class CasbinServerContainerTest {
 			.waitingFor(Wait.forListeningPort());
 
 	private static final UUID TENANT = UUID.randomUUID();
-	private static final UUID HR = UUID.randomUUID();
-	private static final UUID FIN = UUID.randomUUID();
+	private static final OrgUnit HR_UNIT = new OrgUnit(TENANT, "hr", "인사팀", OrgUnitStatus.ACTIVE);
+	private static final OrgUnit FIN_UNIT = new OrgUnit(TENANT, "fin", "재무팀", OrgUnitStatus.ACTIVE);
+	private static final UUID HR = HR_UNIT.getId();
+	private static final UUID FIN = FIN_UNIT.getId();
 	private static final UUID HR_NODE = UUID.randomUUID();
 	private static final UUID FIN_NODE = UUID.randomUUID();
 	private static final UUID EXEC_NODE = UUID.randomUUID();
 	private static final UUID HR_LEAD_NODE = UUID.randomUUID();
 
+	private static final String ALICE = UUID.randomUUID().toString();
+	private static final String BOB = UUID.randomUUID().toString();
+
 	private CasbinClient client;
 	private CasbinRuleLoader loader;
+	private MemberAttributes members;
 
 	@BeforeEach
 	void setUp() {
@@ -63,9 +75,47 @@ class CasbinServerContainerTest {
 		RankGrantRepository rankGrants = mock(RankGrantRepository.class);
 		when(rankGrants.findAll()).thenReturn(List.of(new RankGrant(TENANT, EXEC_NODE, Rank.K),
 				new RankGrant(TENANT, HR_LEAD_NODE, HR, Rank.K)));
-		RbacProperties rbac = new RbacProperties();
-		rbac.setEnforce(true);
-		loader = new CasbinRuleLoader(rbac, client, workspaceGrants, rankGrants);
+		MemberAttributeSource source = () -> new MemberAttributeSource.Load(List.of(
+				new MemberAttribute(ALICE, TENANT, HR, Rank.K), new MemberAttribute(BOB, TENANT, FIN, Rank.S)), List.of(), "test");
+		@SuppressWarnings("unchecked")
+		ObjectProvider<CollabAuthorizationRevoker> revoker = mock(ObjectProvider.class);
+		when(revoker.getObject()).thenReturn(mock(CollabAuthorizationRevoker.class));
+		loader = new CasbinRuleLoader(properties, client, workspaceGrants, rankGrants, source, revoker);
+		OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
+		when(orgUnits.findAll()).thenReturn(List.of(HR_UNIT, FIN_UNIT));
+		members = new MemberAttributes(loader, client, orgUnits);
+	}
+
+	@Test
+	void memberAttributesAreLoadedAndReadBack() {
+		loader.ensureLoaded();
+
+		assertThat(members.findBySubject(ALICE)).containsExactly(new MemberAttribute(ALICE, TENANT, HR, Rank.K));
+		assertThat(members.findBySubject("nobody")).isEmpty();
+		assertThat(members.findByOrgUnit(FIN)).containsExactly(new MemberAttribute(BOB, TENANT, FIN, Rank.S));
+		assertThat(members.findAll()).hasSize(2);
+		// p2가 있어도 판정은 p 규칙만 본다.
+		assertThat(sees(HR, Rank.K)).containsExactly(HR_NODE, EXEC_NODE);
+	}
+
+	@Test
+	void memberAttributesLostByAServerRestartAreReloadedOnRead() throws Exception {
+		loader.ensureLoaded();
+		assertThat(members.findBySubject(ALICE)).hasSize(1);
+
+		DockerClientFactory.instance().client().restartContainerCmd(CASBIN.getContainerId()).exec();
+		waitUntilListening();
+
+		// 첫 조회가 "enforcer not found"를 받아 적재 상태를 비우고, 한 번 다시 넣은 뒤 다시 읽는다.
+		List<MemberAttribute> afterRestart = List.of();
+		for (int attempt = 0; attempt < 50 && afterRestart.isEmpty(); attempt++) {
+			try {
+				afterRestart = members.findBySubject(ALICE);
+			} catch (MemberAttributesUnavailableException notYet) {
+				Thread.sleep(200);
+			}
+		}
+		assertThat(afterRestart).containsExactly(new MemberAttribute(ALICE, TENANT, HR, Rank.K));
 	}
 
 	@Test

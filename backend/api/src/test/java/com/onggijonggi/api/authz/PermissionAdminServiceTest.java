@@ -2,17 +2,13 @@ package com.onggijonggi.api.authz;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
-import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakPerson;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -39,13 +35,12 @@ class PermissionAdminServiceTest {
 
 	private final KeycloakAdminClient keycloak = mock(KeycloakAdminClient.class);
 	private final OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
-	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final MemberAttributes members = mock(MemberAttributes.class);
 	private final WorkspaceNodeRepository nodes = mock(WorkspaceNodeRepository.class);
 	private final WorkspaceAuthorizer authorizer = mock(WorkspaceAuthorizer.class);
-	private final OrgUnitMemberService memberService = mock(OrgUnitMemberService.class);
 	private final AppUserRepository appUsers = mock(AppUserRepository.class);
 	private final PermissionAdminService service = new PermissionAdminService(keycloak, orgUnits, members, nodes, authorizer,
-			memberService, appUsers);
+			appUsers);
 
 	/** Keycloak 관리 연결 설정 문제(#326)는 빈 사람 목록으로 바꾸지 않고 그대로 올린다 — 화면이 전용 문구를 보이게. */
 	@Test
@@ -72,7 +67,7 @@ class PermissionAdminServiceTest {
 		WorkspaceNode retired = WorkspaceNode.child(TENANT, root.getId(), root.getPath(), "retired", WorkspaceNodeKind.ORG, "Retired",
 				WorkspaceNodeStatus.INACTIVE);
 		when(nodes.findAll()).thenReturn(List.of(lead, retired, common, root, hrNode));
-		when(members.findAll()).thenReturn(List.of(new OrgUnitMember(TENANT, hr.getId(), "sub-kim", Rank.K)));
+		when(members.findAll()).thenReturn(List.of(new MemberAttribute("sub-kim", TENANT, hr.getId(), Rank.K)));
 		when(keycloak.listPeople(any(Integer.class))).thenReturn(Mono.just(List.of(
 				new KeycloakPerson("sub-park", "demo7", "박", "p@example.com", true),
 				new KeycloakPerson("sub-kim", "demo1", "김", "k@example.com", true))));
@@ -132,19 +127,5 @@ class PermissionAdminServiceTest {
 		PermissionAdminService.Overview overview = service.overview().block();
 
 		assertThat(overview.people().get(0).visible()).containsExactly(node.getId());
-	}
-
-	@Test
-	void changingAnAssignmentGoesThroughTheAssignmentServiceAsTheScreenUser() {
-		UUID actor = UUID.randomUUID();
-		UUID team = UUID.randomUUID();
-		when(memberService.apply(any(), any())).thenReturn(new OrgUnitMemberService.Result("sub-kim", OrgUnitMemberService.Outcome.CHANGED));
-
-		assertThat(service.assign("sub-kim", team, Rank.B, actor).block()).isEqualTo(OrgUnitMemberService.Outcome.CHANGED);
-		verify(memberService).apply(eq(OrgUnitMemberService.Change.assign("sub-kim", team, Rank.B)),
-				eq(OrgUnitMemberService.Actor.user(actor, "admin-screen")));
-
-		service.assign("sub-kim", null, null, actor).block();
-		verify(memberService).apply(eq(OrgUnitMemberService.Change.unassign("sub-kim")), any());
 	}
 }

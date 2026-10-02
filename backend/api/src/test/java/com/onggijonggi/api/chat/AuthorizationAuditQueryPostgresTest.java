@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import com.onggijonggi.api.authz.AuthorizationAuditPage;
 import com.onggijonggi.api.authz.AuthorizationAuditView;
 import com.onggijonggi.api.authz.RbacBootstrapService;
+import com.onggijonggi.common.authz.Rank;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import java.nio.file.Files;
@@ -49,6 +50,8 @@ class AuthorizationAuditQueryPostgresTest extends PostgresSpringTestBase {
 	private WorkspaceNodeRepository nodes;
 	@Autowired
 	private JdbcTemplate jdbc;
+	@Autowired
+	private FakeMemberAttributesConfig.FakeMemberAttributes members;
 
 	private RestTestClient client;
 	private String tag;
@@ -234,7 +237,7 @@ class AuthorizationAuditQueryPostgresTest extends PostgresSpringTestBase {
 		for (int i = 0; i < 3; i++) audit(tenantId, hr, "NODE_RENAMED", "WORKSPACE", BASE.plusSeconds(i), null, null);
 		String cursor = ok(workspace(hrAdmin, hr, SINCE_BASE + "&limit=1")).nextCursor();
 
-		jdbc.update("delete from org_unit_mbr where subj = ?", hrAdmin);
+		members.unassign(hrAdmin);
 
 		workspace(hrAdmin, hr, SINCE_BASE + "&limit=1&cursor=" + cursor).expectStatus().isEqualTo(HttpStatus.FORBIDDEN);
 	}
@@ -273,8 +276,7 @@ class AuthorizationAuditQueryPostgresTest extends PostgresSpringTestBase {
 	}
 
 	private void assign(String subject, UUID tenant, UUID team) {
-		jdbc.update("insert into org_unit_mbr (id, tnn_id, org_unit_id, subj, rank) values (?, ?, ?, ?, 'S')",
-				UUID.randomUUID(), tenant, team, subject);
+		members.assign(subject, tenant, team, Rank.S);
 	}
 
 	private UUID user(String subject) {

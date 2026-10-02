@@ -10,9 +10,10 @@ import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakUserSummary;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
@@ -73,7 +74,7 @@ class ThreadParticipantServiceTest {
 	private ThreadMembershipService threadMembershipService;
 
 	@Mock
-	private OrgUnitMemberRepository orgUnitMemberRepository;
+	private MemberAttributes orgUnitMemberRepository;
 
 	@Mock
 	private OrgUnitRepository orgUnitRepository;

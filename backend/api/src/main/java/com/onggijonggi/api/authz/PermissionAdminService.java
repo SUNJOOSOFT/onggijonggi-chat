@@ -3,8 +3,6 @@ package com.onggijonggi.api.authz;
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakPerson;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -22,7 +20,9 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.function.Function;
 import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -31,7 +31,8 @@ import reactor.core.scheduler.Schedulers;
  * Class Name : PermissionAdminService.java
  * Description : 03·CORE 권한 관리 화면(/admin/permissions)이 보는 한 장. 사람(Keycloak 계정 전체)과 그 배정, 고를 수 있는
  *               팀·직급, workspace 목록, 그리고 "누가 무엇을 보나" 표를 만든다. 표는 실제 판정 API(WorkspaceAuthorizer)를
- *               사람 × workspace마다 불러 만든다 — 화면이 판정을 흉내 내지 않는다. 배정 변경은 배정 서비스를 거친다.
+ *               사람 × workspace마다 불러 만든다 — 화면이 판정을 흉내 내지 않는다. 팀·직급은 Casbin(p2)에서 읽기만 한다 —
+ *               바꾸는 곳은 속성 파일이다. 속성을 읽을 수 없으면(적재 전·장애) 503이다.
  */
 @Service
 public class PermissionAdminService {
@@ -41,21 +42,18 @@ public class PermissionAdminService {
 
 	private final KeycloakAdminClient keycloak;
 	private final OrgUnitRepository orgUnits;
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final WorkspaceNodeRepository nodes;
 	private final WorkspaceAuthorizer authorizer;
-	private final OrgUnitMemberService memberService;
 	private final AppUserRepository appUsers;
 
-	public PermissionAdminService(KeycloakAdminClient keycloak, OrgUnitRepository orgUnits, OrgUnitMemberRepository members,
-			WorkspaceNodeRepository nodes, WorkspaceAuthorizer authorizer, OrgUnitMemberService memberService,
-			AppUserRepository appUsers) {
+	public PermissionAdminService(KeycloakAdminClient keycloak, OrgUnitRepository orgUnits, MemberAttributes members,
+			WorkspaceNodeRepository nodes, WorkspaceAuthorizer authorizer, AppUserRepository appUsers) {
 		this.keycloak = keycloak;
 		this.orgUnits = orgUnits;
 		this.members = members;
 		this.nodes = nodes;
 		this.authorizer = authorizer;
-		this.memberService = memberService;
 		this.appUsers = appUsers;
 	}
 
@@ -76,7 +74,7 @@ public class PermissionAdminService {
 	public record Overview(List<Team> teams, List<RankOption> ranks, List<Workspace> workspaces, List<Person> people) {
 	}
 
-	private record Snapshot(List<Team> teams, List<Workspace> workspaces, Map<String, OrgUnitMember> membersBySubject) {
+	private record Snapshot(List<Team> teams, List<Workspace> workspaces, Map<String, MemberAttribute> membersBySubject) {
 	}
 
 	public Mono<Overview> overview() {
@@ -91,14 +89,6 @@ public class PermissionAdminService {
 					.collectList()
 					.map(list -> new Overview(data.teams(), rankOptions(), data.workspaces(), list));
 		});
-	}
-
-	/** teamId가 null이면 배정 해제다. 행위자는 화면을 쓰는 사람이다. */
-	public Mono<OrgUnitMemberService.Outcome> assign(String subject, UUID teamId, Rank rank, UUID actorUserId) {
-		OrgUnitMemberService.Change change = teamId == null ? OrgUnitMemberService.Change.unassign(subject)
-				: OrgUnitMemberService.Change.assign(subject, teamId, rank);
-		return Mono.fromCallable(() -> memberService.apply(change, OrgUnitMemberService.Actor.user(actorUserId, "admin-screen")).outcome())
-				.subscribeOn(Schedulers.boundedElastic());
 	}
 
 	private Snapshot snapshot() {
@@ -117,8 +107,12 @@ public class PermissionAdminService {
 				.sorted(Comparator.comparing(node -> treeKey(node, byId)))
 				.map(node -> new Workspace(node.getId(), node.getKey(), node.getName(), node.getPath().length - 1))
 				.toList();
-		Map<String, OrgUnitMember> membersBySubject = new HashMap<>();
-		for (OrgUnitMember member : members.findAll()) membersBySubject.put(member.getSubject(), member);
+		Map<String, MemberAttribute> membersBySubject = new HashMap<>();
+		try {
+			for (MemberAttribute member : members.findAll()) membersBySubject.put(member.subject(), member);
+		} catch (MemberAttributesUnavailableException unavailable) {
+			throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
+		}
 		return new Snapshot(teams, workspaces, membersBySubject);
 	}
 
@@ -142,9 +136,9 @@ public class PermissionAdminService {
 				.flatMap(active -> active ? visibleOf(person.subject(), workspaces) : Mono.just(List.of()));
 	}
 
-	private static Person toPerson(KeycloakPerson person, OrgUnitMember member, List<UUID> visible) {
+	private static Person toPerson(KeycloakPerson person, MemberAttribute member, List<UUID> visible) {
 		return new Person(person.subject(), person.username(), person.name(), person.enabled(),
-				member == null ? null : member.getOrgUnitId(), member == null ? null : member.getRank().name(), visible);
+				member == null ? null : member.orgUnitId(), member == null ? null : member.rank().name(), visible);
 	}
 
 	private static List<RankOption> rankOptions() {

@@ -5,7 +5,6 @@ import com.onggijonggi.common.authz.AuthorizationAuditEventKind;
 import com.onggijonggi.common.authz.AuthorizationAuditRepository;
 import com.onggijonggi.common.authz.AuthorizationAuditTargetKind;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -38,6 +37,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.function.Predicate;
+import java.util.function.Supplier;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 import org.springframework.http.HttpStatus;
@@ -64,7 +64,7 @@ public class WorkspaceManagementService {
 	private final WorkspaceGrantRepository grants;
 	private final RankGrantRepository rankGrants;
 	private final OrgUnitRepository orgUnits;
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final AppUserRepository users;
 	private final ThrRepository threads;
 	private final AuthorizationAuditRepository audits;
@@ -90,7 +90,7 @@ public class WorkspaceManagementService {
 
 	public WorkspaceManagementService(TenantRepository tenants, WorkspaceNodeRepository nodes,
 			WorkspaceGrantRepository grants, RankGrantRepository rankGrants, OrgUnitRepository orgUnits,
-			OrgUnitMemberRepository members,
+			MemberAttributes members,
 			AppUserRepository users, ThrRepository threads, AuthorizationAuditRepository audits,
 			DirectManageAuthorizer manage, RbacBootstrapConfigReader config, RbacPolicyRefresh refresh,
 			EntityManager entityManager, ObjectMapper json, PlatformTransactionManager transactionManager) {
@@ -128,9 +128,9 @@ public class WorkspaceManagementService {
 			uniqueSiblingName(parentId, name, null);
 			WorkspaceNode created = nodes.saveAndFlush(WorkspaceNode.child(tenantId, parentId, parent.getPath(),
 					generatedKey(tenantId), kind, name, WorkspaceNodeStatus.ACTIVE));
-			UUID actorOrgUnit = members.findBySubject(actor.subject()).stream()
-					.filter(member -> tenantId.equals(member.getTenantId()))
-					.map(member -> member.getOrgUnitId())
+			UUID actorOrgUnit = attributesOrUnavailable(() -> members.findBySubject(actor.subject())).stream()
+					.filter(member -> tenantId.equals(member.tenantId()))
+					.map(MemberAttribute::orgUnitId)
 					.filter(id -> orgUnits.findById(id).filter(unit -> unit.getStatus() == OrgUnitStatus.ACTIVE).isPresent())
 					.findFirst().orElseThrow(WorkspaceManagementService::forbidden);
 			WorkspaceGrant initial = grants.saveAndFlush(new WorkspaceGrant(tenantId, actorOrgUnit, created.getId(), WorkspaceRole.ADMIN));
@@ -489,9 +489,9 @@ public class WorkspaceManagementService {
 			OrgUnit unit = orgUnits.findById(orgUnitId).filter(value -> value.getTenantId().equals(tenant.getId()))
 					.orElseThrow(WorkspaceManagementService::notFound);
 			undeclaredOrgUnit(declared(tenant), unit.getKey());
-			// app_user가 없는 배정(아직 로그인하지 않은 사람)도 배정된 사용자로 센다 — 비활성화하면 그 사람이 막힌다.
-			if (targetStatus == OrgUnitStatus.INACTIVE && members.findByOrgUnitId(unit.getId()).stream()
-					.anyMatch(member -> users.findByKeycloakSubj(member.getSubject())
+			// app_user가 없는 사람(아직 로그인하지 않은 사람)도 배정된 사용자로 센다 — 비활성화하면 그 사람이 막힌다.
+			if (targetStatus == OrgUnitStatus.INACTIVE && attributesOrUnavailable(() -> members.findByOrgUnit(unit.getId())).stream()
+					.anyMatch(member -> users.findByKeycloakSubj(member.subject())
 									.map(user -> user.getStatus() == AppUserStatus.ACTIVE).orElse(true))) throw conflict();
 			// 이 팀이 어떤 노드의 마지막 ACTIVE ADMIN이면 비활성화할 수 없다 — 그 노드는 아무도 관리하지 못하게 되고, 노드를
 			// 관리하는 API는 일반 ADMIN에게만 있어 되살릴 길이 없다. 다른 팀에 ADMIN을 먼저 주고 비활성화한다.
@@ -732,6 +732,14 @@ public class WorkspaceManagementService {
 	private static ResponseStatusException notFound() { return new ResponseStatusException(HttpStatus.NOT_FOUND); }
 	private static ResponseStatusException forbidden() { return new ResponseStatusException(HttpStatus.FORBIDDEN); }
 	private static ResponseStatusException conflict() { return new RbacStateConflictException(); }
+	/** 사람 속성을 읽을 수 없으면(Casbin 적재 전·장애) 권한 문제가 아니라 일시 장애라 503이다. */
+	private static <T> T attributesOrUnavailable(Supplier<T> read) {
+		try {
+			return read.get();
+		} catch (MemberAttributesUnavailableException unavailable) {
+			throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
+		}
+	}
 	/** 요청 본문의 필수 id가 비었으면 400이다 — 그대로 조회에 넘기면 IllegalArgumentException이 500이 된다. */
 	private static UUID required(UUID id) {
 		if (id == null) throw badRequest();

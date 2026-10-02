@@ -1,7 +1,5 @@
 package com.onggijonggi.api.authz;
 
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.TenantStatus;
@@ -25,7 +23,8 @@ import tools.jackson.databind.ObjectMapper;
  *               켜져 있으면(#299):
  *               - COMMON도 예외가 없다. 모든 ACTIVE org-unit이 COMMON VIEWER 부여를 가지므로 소속이 있는 사람은
  *                 Casbin 판정으로 COMMON을 보고, 소속이 없는 사람은 COMMON도 못 본다.
- *               - 배정(org_unit_mbr)이 없으면 Casbin에 묻지 않고 거부한다 — 서열 0 같은 값으로 넘기면 서열 규칙이 열린다.
+ *               - 사람 속성(Casbin p2, MemberAttributes)이 없으면 판정을 묻지 않고 거부한다 — 서열 0 같은 값으로 넘기면 서열
+ *                 규칙이 열린다. 속성을 읽을 수 없어도(적재 전·장애) 거부다.
  *               - Casbin에 묻기 전에 DB로 확인한다: 배정의 Tenant와 대상 노드의 Tenant가 같고, 그 Tenant와 배정된
  *                 org-unit이 ACTIVE여야 한다. Casbin model에는 Tenant 차원이 없어서 이 검사가 Tenant 격리를 맡는다
  *                 (팀을 정하지 않은 직급 규칙이 다른 Tenant의 같은 직급을 통과시키지 않게 한다).
@@ -39,7 +38,7 @@ public class WorkspaceAuthorizer {
 
 	private final RbacProperties rbacProperties;
 	private final WorkspaceNodeRepository nodes;
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final TenantRepository tenants;
 	private final OrgUnitRepository orgUnits;
 	private final CasbinRuleLoader loader;
@@ -47,7 +46,7 @@ public class WorkspaceAuthorizer {
 	private final ObjectMapper objectMapper;
 	private final RbacPolicyRefresh policyRefresh;
 
-	public WorkspaceAuthorizer(RbacProperties rbacProperties, WorkspaceNodeRepository nodes, OrgUnitMemberRepository members,
+	public WorkspaceAuthorizer(RbacProperties rbacProperties, WorkspaceNodeRepository nodes, MemberAttributes members,
 			TenantRepository tenants, OrgUnitRepository orgUnits, CasbinRuleLoader loader, CasbinClient client,
 			ObjectMapper objectMapper, RbacPolicyRefresh policyRefresh) {
 		this.rbacProperties = rbacProperties;
@@ -116,10 +115,14 @@ public class WorkspaceAuthorizer {
 	}
 
 	private List<String> activeAssignmentAttributes(String subject, UUID tenantId) {
-		return members.findBySubject(subject).stream()
-				.filter(assignment -> tenantId.equals(assignment.getTenantId()) && isActiveOrgUnit(assignment))
-				.map(this::attributes)
-				.toList();
+		try {
+			return members.findBySubject(subject).stream()
+					.filter(member -> tenantId.equals(member.tenantId()) && isActiveOrgUnit(member))
+					.map(this::attributes)
+					.toList();
+		} catch (MemberAttributesUnavailableException unavailable) {
+			return List.of();
+		}
 	}
 
 	private boolean passesAnyAssignment(List<String> attributesList, UUID workspaceNodeId, String action) {
@@ -138,18 +141,18 @@ public class WorkspaceAuthorizer {
 		return tenants.findById(tenantId).filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).isPresent();
 	}
 
-	/** 배정된 org-unit이 배정과 같은 Tenant에 있고 ACTIVE인가. 비활성 org-unit의 배정은 판정에 쓰지 않는다. */
-	private boolean isActiveOrgUnit(OrgUnitMember assignment) {
-		return orgUnits.findById(assignment.getOrgUnitId())
-				.filter(unit -> unit.isActiveIn(assignment.getTenantId()))
+	/** 속성의 org-unit이 그 Tenant에 있고 ACTIVE인가. 비활성 org-unit의 속성은 판정에 쓰지 않는다. */
+	private boolean isActiveOrgUnit(MemberAttribute member) {
+		return orgUnits.findById(member.orgUnitId())
+				.filter(unit -> unit.isActiveIn(member.tenantId()))
 				.isPresent();
 	}
 
 	/** r.sub JSON. 서열은 숫자로 넘긴다 — 문자열이면 casbin-server가 비교에서 오류를 낸다. */
-	private String attributes(OrgUnitMember assignment) {
+	private String attributes(MemberAttribute member) {
 		Map<String, Object> attributes = new LinkedHashMap<>();
-		attributes.put(CasbinPolicy.ORG_UNIT, assignment.getOrgUnitId().toString());
-		attributes.put(CasbinPolicy.RANK, assignment.getRank().order());
+		attributes.put(CasbinPolicy.ORG_UNIT, member.orgUnitId().toString());
+		attributes.put(CasbinPolicy.RANK, member.rank().order());
 		return objectMapper.writeValueAsString(attributes);
 	}
 }

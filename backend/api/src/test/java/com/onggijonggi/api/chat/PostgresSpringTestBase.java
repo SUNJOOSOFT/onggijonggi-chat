@@ -20,7 +20,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
  */
 @SpringBootTest
 @ActiveProfiles("test")
-@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, FakeKeycloakAdminConfig.class})
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, FakeKeycloakAdminConfig.class, FakeMemberAttributesConfig.class})
 @Testcontainers(disabledWithoutDocker = true)
 abstract class PostgresSpringTestBase {
 

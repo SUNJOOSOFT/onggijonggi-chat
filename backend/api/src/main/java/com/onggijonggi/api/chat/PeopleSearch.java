@@ -2,9 +2,10 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakUserSummary;
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
+import com.onggijonggi.api.authz.MemberAttributesUnavailableException;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -15,7 +16,9 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Collectors;
+import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
@@ -26,22 +29,23 @@ import reactor.core.scheduler.Schedulers;
  *               팀 이름(인사팀 등)인지 정확히 맞춰 보고, 어느 쪽도 아닌 단어는 이름으로 본다.
  *               <ul>
  *               <li>이름이 있으면 Keycloak에서 이름으로 찾고(KeycloakAdminClient.search), 직급·팀이 있으면 그 배정으로 거른다.</li>
- *               <li>이름이 없으면 배정(org_unit_mbr)에서 그 직급·팀인 사람을 모두 찾아 Keycloak에서 이름만 붙인다.</li>
+ *               <li>이름이 없으면 사람 속성(Casbin p2)에서 그 직급·팀인 사람을 모두 찾아 Keycloak에서 이름만 붙인다.</li>
  *               </ul>
- *               직급·팀은 Keycloak에 없고 우리 DB에만 있어서 Keycloak 검색만으로는 찾을 수 없다. 직급·팀은 정확히 같을
+ *               직급·팀은 Keycloak에 없고 Casbin에만 있어서 Keycloak 검색만으로는 찾을 수 없다. 직급·팀 조건이 있는데 속성을
+ *               읽을 수 없으면(적재 전·장애) 503이다. 직급·팀은 정확히 같을
  *               때만 조건으로 본다 — "과"를 과장으로 보면 이름 검색과 섞인다.
  *
  *               결과는 게으른 Flux다. 호출부가 참여 여부·워크스페이스로 거른 뒤 개수를 자르므로, 이름 조회는 실제로
- *               쓰이는 사람까지만 나간다. 배정 표는 조직 규모(수백 명)라 한 번에 읽어 메모리에서 거른다.
+ *               쓰이는 사람까지만 나간다. 속성은 조직 규모(수백 명)라 한 번에 읽어 메모리에서 거른다.
  */
 @Service
 public class PeopleSearch {
 
 	private final KeycloakAdminClient keycloakAdminClient;
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final OrgUnitRepository orgUnits;
 
-	public PeopleSearch(KeycloakAdminClient keycloakAdminClient, OrgUnitMemberRepository members,
+	public PeopleSearch(KeycloakAdminClient keycloakAdminClient, MemberAttributes members,
 			OrgUnitRepository orgUnits) {
 		this.keycloakAdminClient = keycloakAdminClient;
 		this.members = members;
@@ -106,10 +110,16 @@ public class PeopleSearch {
 	}
 
 	private Set<String> matchingSubjects(Criteria criteria) {
-		return members.findAll().stream()
-				.filter(member -> criteria.rank() == null || member.getRank() == criteria.rank())
-				.filter(member -> criteria.team() == null || member.getOrgUnitId().equals(criteria.team()))
-				.map(OrgUnitMember::getSubject)
+		List<MemberAttribute> all;
+		try {
+			all = members.findAll();
+		} catch (MemberAttributesUnavailableException unavailable) {
+			throw new ResponseStatusException(HttpStatus.SERVICE_UNAVAILABLE);
+		}
+		return all.stream()
+				.filter(member -> criteria.rank() == null || member.rank() == criteria.rank())
+				.filter(member -> criteria.team() == null || member.orgUnitId().equals(criteria.team()))
+				.map(MemberAttribute::subject)
 				.collect(Collectors.toCollection(java.util.LinkedHashSet::new));
 	}
 }

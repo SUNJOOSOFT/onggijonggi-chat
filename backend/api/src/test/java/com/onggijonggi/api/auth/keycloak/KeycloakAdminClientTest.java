@@ -461,13 +461,13 @@ class KeycloakAdminClientTest {
 		}
 	}
 
-	/** Admin API 403은 서비스 계정 역할 누락이다. 사람 목록·검색·실존 확인·활성 계정·이메일 조회 모두 같은 예외로 알린다. */
+	/** Admin API 403은 서비스 계정 역할 누락이다. 사람 목록·검색·실존 확인·활성 계정·계정 전체 목록 모두 같은 예외로 알린다. */
 	@Test
 	void aForbiddenAdminCallIsAConfigurationProblemEverywhere() {
 		KeycloakAdminClient client = clientWithStatuses(HttpStatus.OK, HttpStatus.FORBIDDEN);
 
 		for (Mono<?> call : List.of(client.listPeople(10), client.search("kim", 10), client.exists(SUBJECT),
-				client.listEnabledUserSubjects(), client.subjectsByEmail("a@example.com"), client.eventsConfig())) {
+				client.listEnabledUserSubjects(), client.users(), client.eventsConfig())) {
 			StepVerifier.create(call)
 					.expectErrorSatisfies(error -> assertThat(error)
 							.isInstanceOfSatisfying(KeycloakAdminUnavailableException.class, unavailable -> {

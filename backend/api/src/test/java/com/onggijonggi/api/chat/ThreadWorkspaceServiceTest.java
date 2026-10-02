@@ -8,11 +8,11 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
 import com.onggijonggi.api.authz.RbacProperties;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -51,7 +51,7 @@ class ThreadWorkspaceServiceTest {
 	private final WorkspaceNodeRepository nodes = mock(WorkspaceNodeRepository.class);
 	private final TenantRepository tenants = mock(TenantRepository.class);
 	private final AppUserRepository appUsers = mock(AppUserRepository.class);
-	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final MemberAttributes members = mock(MemberAttributes.class);
 	private final OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
 	private final ThreadWorkspaceService service = new ThreadWorkspaceService(rbac, authorizer, nodes, tenants, appUsers,
 			members, orgUnits);
@@ -206,7 +206,7 @@ class ThreadWorkspaceServiceTest {
 		OrgUnit team = new OrgUnit(tenantId, "team-" + userId.toString().substring(0, 6), "팀", teamStatus);
 		AppUser user = loginUser();
 		when(appUsers.findById(userId)).thenReturn(Optional.of(user));
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, team.getId(), SUBJECT, Rank.S)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new MemberAttribute(SUBJECT, tenantId, team.getId(), Rank.S)));
 		when(orgUnits.findById(team.getId())).thenReturn(Optional.of(team));
 		return userId;
 	}

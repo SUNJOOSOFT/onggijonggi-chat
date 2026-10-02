@@ -8,6 +8,7 @@ import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.authz.RbacBootstrapService;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
+import com.onggijonggi.common.authz.Rank;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.HashMap;
@@ -48,7 +49,7 @@ import reactor.core.publisher.Mono;
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.RANDOM_PORT)
 @ActiveProfiles("test")
 @TestPropertySource(properties = "app.rbac.enforce=true")
-@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, FakeKeycloakAdminConfig.class})
+@Import({FakeChatModelConfig.class, FakeJwtDecoderConfig.class, FakeKeycloakAdminConfig.class, FakeMemberAttributesConfig.class})
 @Testcontainers(disabledWithoutDocker = true)
 class EnforcedAfterCutoverPostgresTest {
 
@@ -79,6 +80,14 @@ class EnforcedAfterCutoverPostgresTest {
 	private DirectChatTurnService directTurns;
 	@Autowired
 	private JdbcTemplate jdbc;
+	@Autowired
+	private FakeMemberAttributesConfig.FakeMemberAttributes members;
+
+	@Test
+	void personAssignmentsAreNotStoredInTheDatabase() {
+		// 사람의 팀·직급은 우리 DB에 두지 않는다 — 속성 파일에서 casbin-server(p2)로 적재한다. 전체 마이그레이션 뒤 표가 없다.
+		assertThat(jdbc.queryForObject("select to_regclass('org_unit_mbr')::text", String.class)).isNull();
+	}
 
 	@Test
 	void enforcedThreadsLandInTheirTenantAndTheDatabaseKeepsTenantsApart() throws Exception {
@@ -117,8 +126,7 @@ class EnforcedAfterCutoverPostgresTest {
 		UUID hrUnit = one("select id from org_unit where tnn_id = ? and org_unit_key = 'hr'", alpha);
 
 		UUID assigned = user("assigned");
-		jdbc.update("insert into org_unit_mbr (id, tnn_id, org_unit_id, subj, rank) values (?, ?, ?, 'assigned', 'S')",
-				UUID.randomUUID(), alpha, hrUnit);
+		members.assign("assigned", alpha, hrUnit, Rank.S);
 		UUID unassigned = user("unassigned");
 		RestTestClient client = RestTestClient.bindToServer().baseUrl("http://localhost:" + port).build();
 

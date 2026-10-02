@@ -8,8 +8,6 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -48,7 +46,7 @@ class DirectManageAuthorizerTest {
 	private final Tenant acme = new Tenant("acme", "ACME", TenantStatus.ACTIVE);
 	private final UUID tenantId = acme.getId();
 	private final OrgUnit team = new OrgUnit(tenantId, "hr", "인사팀", OrgUnitStatus.ACTIVE);
-	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final MemberAttributes members = mock(MemberAttributes.class);
 	private final TenantRepository tenants = mock(TenantRepository.class);
 	private final OrgUnitRepository orgUnits = mock(OrgUnitRepository.class);
 	private final WorkspaceGrantRepository workspaceGrants = mock(WorkspaceGrantRepository.class);
@@ -179,7 +177,7 @@ class DirectManageAuthorizerTest {
 		assertThat(authorizer.hasDirectManage(SUBJECT, hr)).isFalse();
 
 		when(members.findBySubject(SUBJECT))
-				.thenReturn(List.of(new OrgUnitMember(UUID.randomUUID(), team.getId(), SUBJECT, Rank.TL)));
+				.thenReturn(List.of(new MemberAttribute(SUBJECT, UUID.randomUUID(), team.getId(), Rank.TL)));
 		assertThat(authorizer.hasDirectManage(SUBJECT, hr)).isFalse();
 	}
 
@@ -239,7 +237,7 @@ class DirectManageAuthorizerTest {
 	}
 
 	private void assign(Rank rank) {
-		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new OrgUnitMember(tenantId, team.getId(), SUBJECT, rank)));
+		when(members.findBySubject(SUBJECT)).thenReturn(List.of(new MemberAttribute(SUBJECT, tenantId, team.getId(), rank)));
 	}
 
 	private void grant(WorkspaceNode node, UUID orgUnitId, WorkspaceRole role) {

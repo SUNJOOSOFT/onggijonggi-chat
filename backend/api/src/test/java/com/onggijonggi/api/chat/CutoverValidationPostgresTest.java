@@ -5,6 +5,7 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 import com.onggijonggi.api.authz.CutoverValidationResult;
 import com.onggijonggi.api.authz.CutoverValidationService;
+import com.onggijonggi.common.authz.Rank;
 import java.util.List;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
@@ -21,6 +22,7 @@ class CutoverValidationPostgresTest extends PostgresSpringTestBase {
 
 	@Autowired private CutoverValidationService validation;
 	@Autowired private JdbcTemplate jdbc;
+	@Autowired private FakeMemberAttributesConfig.FakeMemberAttributes members;
 
 	@BeforeEach
 	void isolateTenant() {
@@ -172,7 +174,7 @@ class CutoverValidationPostgresTest extends PostgresSpringTestBase {
 	@Test
 	void enabledSubjectWithoutAssignmentIsReported() {
 		Fixture fixture = fixture();
-		jdbc.update("delete from org_unit_mbr where subj = ?", fixture.subject());
+		members.unassign(fixture.subject());
 
 		CutoverValidationResult result = validation.validate(List.of(fixture.subject()));
 		assertThat(result.failures()).contains(new CutoverValidationResult.Failure("INVALID_ACTIVE_SUBJECT_ASSIGNMENT", null, fixture.subject()));
@@ -283,7 +285,7 @@ class CutoverValidationPostgresTest extends PostgresSpringTestBase {
 		jdbc.update("insert into wrk_node (id, tnn_id, prn_id, node_key, kind, name, path) values (?, ?, ?, 'common', 'COMMON', 'Common', array[?, ?]::uuid[])", common, tenant, root, root, common);
 		jdbc.update("insert into wrk_node (id, tnn_id, prn_id, node_key, kind, name, path) values (?, ?, ?, 'team', 'WORK', 'Team', array[?, ?]::uuid[])", workspace, tenant, root, root, workspace);
 		jdbc.update("insert into org_unit (id, tnn_id, org_unit_key, name) values (?, ?, 'team', 'Team')", team, tenant);
-		jdbc.update("insert into org_unit_mbr (id, tnn_id, org_unit_id, subj, rank) values (?, ?, ?, ?, 'S')", UUID.randomUUID(), tenant, team, subject);
+		members.assign(subject, tenant, team, Rank.S);
 		return new Fixture(tenant, common, workspace, team, subject);
 	}
 

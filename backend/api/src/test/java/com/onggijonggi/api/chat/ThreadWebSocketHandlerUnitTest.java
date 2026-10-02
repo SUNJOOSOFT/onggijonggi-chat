@@ -1,5 +1,7 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
 import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
@@ -850,7 +852,7 @@ class ThreadWebSocketHandlerUnitTest {
 	/** 배정이 없는 표시 이름 — 이 테스트들은 이름을 보지 않는다. 직급 붙이기는 RankedDisplayNamesTest가 맡는다. */
 	private static RankedDisplayNames noRanks() {
 		return new RankedDisplayNames(mock(com.onggijonggi.api.auth.keycloak.KeycloakAdminClient.class),
-				mock(com.onggijonggi.common.authz.OrgUnitMemberRepository.class));
+				mock(com.onggijonggi.api.authz.MemberAttributes.class));
 	}
 
 	/** 클라이언트가 올려보내는 텍스트 프레임 한 장. */

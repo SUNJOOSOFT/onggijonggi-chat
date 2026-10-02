@@ -3,7 +3,7 @@ package com.onggijonggi.common.authz;
 /**
  * Class Name : Rank.java
  * Description : 직급과 그 서열. 서열 숫자가 작을수록 높다(팀장 1 ~ 사원 6). Casbin ABAC 판정에는 이 숫자를
- *               넘기고 규칙은 "서열 N 이하"로 적는다. DB(org_unit_mbr.rank, rank_grn.rank)에는 코드만 둔다.
+ *               넘기고 규칙은 "서열 N 이하"로 적는다. DB(rank_grn.rank)와 Casbin 사람 속성(p2)에는 코드만 둔다.
  */
 public enum Rank {
 	TL(1, "팀장"),

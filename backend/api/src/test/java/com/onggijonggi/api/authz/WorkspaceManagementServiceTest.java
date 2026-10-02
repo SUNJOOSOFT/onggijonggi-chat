@@ -11,7 +11,6 @@ import static org.mockito.Mockito.when;
 
 import com.onggijonggi.common.authz.AuthorizationAuditRepository;
 import com.onggijonggi.common.authz.OrgUnit;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.OrgUnitStatus;
 import com.onggijonggi.common.authz.Rank;
@@ -60,7 +59,7 @@ class WorkspaceManagementServiceTest {
 	private final WorkspaceGrantRepository grants = mock(WorkspaceGrantRepository.class);
 	private final RankGrantRepository rankGrants = mock(RankGrantRepository.class);
 	private final OrgUnitRepository units = mock(OrgUnitRepository.class);
-	private final OrgUnitMemberRepository members = mock(OrgUnitMemberRepository.class);
+	private final MemberAttributes members = mock(MemberAttributes.class);
 	private final AppUserRepository users = mock(AppUserRepository.class);
 	private final ThrRepository threads = mock(ThrRepository.class);
 	private final AuthorizationAuditRepository audits = mock(AuthorizationAuditRepository.class);

@@ -14,10 +14,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
-import java.util.Base64;
 import java.util.List;
 import java.util.Map;
-import java.util.Optional;
 import java.util.stream.Collectors;
 import org.flywaydb.core.Flyway;
 import org.junit.jupiter.api.Test;
@@ -51,7 +49,6 @@ class KeycloakRealmFileTest {
 	private static final String APP_USER = "appuser";
 	private static final String APP_USER_PASSWORD = "appuser-password";
 	private static final String FRONTEND = "http://localhost:3000";
-	private static final String CLI_CLIENT = "ogjg-cli";
 
 	@Container
 	static final GenericContainer<?> KEYCLOAK = new GenericContainer<>("quay.io/keycloak/keycloak:26.0")
@@ -183,111 +180,7 @@ class KeycloakRealmFileTest {
 		assertThat(bff.listEnabledUserSubjects().block()).contains(person);
 	}
 
-	/**
-	 * 저장소 스크립트(import-members.mjs)의 로그인. secret 없는 ogjg-cli로 device flow를 시작해 브라우저에서 승인하면 BFF가 받는
-	 * 토큰(aud에 로그인 client id)이 나온다. 같은 클라이언트로 비밀번호를 받는 흐름은 거부된다.
-	 */
-	@Test
-	void theScriptClientLogsInThroughTheBrowserOnly() throws Exception {
-		KeycloakTestAdmin admin = new KeycloakTestAdmin(baseUrl(), REALM);
-		Map<?, ?> cli = admin.client(CLI_CLIENT);
-		// 꺼진 채 만든다 — 켜 두면 누구나 승인 코드를 받아 관리자에게 승인을 유도할 수 있다(device code 피싱).
-		assertThat(cli.get("enabled")).isEqualTo(false);
-		assertThat(post(oidc() + "/auth/device", Map.of("client_id", CLI_CLIENT)).statusCode()).isGreaterThanOrEqualTo(400);
-		assertThat(cli.get("consentRequired")).isEqualTo(true);
-		// consentRequired면 Keycloak이 fullScopeAllowed를 false로 가져와 토큰에서 realm 역할이 빠진다(실측) — 명시해 둔다.
-		assertThat(cli.get("fullScopeAllowed")).isEqualTo(true);
-		assertThat(((Map<?, ?>) cli.get("attributes")).get("use.refresh.tokens")).isEqualTo("false");
-		admin.updateClient(CLI_CLIENT, Map.of("enabled", true));
-		cli = admin.client(CLI_CLIENT);
-		assertThat(cli.get("enabled")).isEqualTo(true);
-		assertThat(cli.get("publicClient")).isEqualTo(true);
-		assertThat(cli.get("directAccessGrantsEnabled")).isEqualTo(false);
-		assertThat(cli.get("standardFlowEnabled")).isEqualTo(false);
-		assertThat(token(REALM, Map.of("grant_type", "password", "client_id", CLI_CLIENT, "username", APP_USER,
-				"password", APP_USER_PASSWORD)).statusCode()).isIn(400, 401);
-
-		HttpResponse<String> started = post(oidc() + "/auth/device", Map.of("client_id", CLI_CLIENT, "scope", "openid"));
-		assertThat(started.statusCode()).isEqualTo(200);
-		Map<?, ?> device = json.readValue(started.body(), Map.class);
-		Map<String, String> poll = Map.of("grant_type", "urn:ietf:params:oauth:grant-type:device_code",
-				"device_code", String.valueOf(device.get("device_code")), "client_id", CLI_CLIENT);
-		assertThat(token(REALM, poll).body()).contains("authorization_pending");
-
-		approveInBrowser(String.valueOf(device.get("verification_uri_complete")));
-		// Keycloak이 알려 준 간격보다 빨리 다시 물으면 slow_down이다. 승인 직후 잠깐 pending일 수 있어 몇 번 더 묻는다.
-		long interval = ((Number) device.get("interval")).longValue() * 1000;
-		HttpResponse<String> approved = null;
-		for (int attempt = 0; attempt < 3 && (approved == null || approved.statusCode() != 200); attempt++) {
-			Thread.sleep(interval);
-			approved = token(REALM, poll);
-		}
-		assertThat(approved.statusCode()).isEqualTo(200);
-		assertThat(approved.body()).doesNotContain("refresh_token");
-		// BFF가 PLATFORM_ADMIN을 토큰의 realm 역할로 판정하므로 역할이 실려 있어야 한다(콘솔로 만든 클라이언트와 같게).
-		String approvedToken = String.valueOf(json.readValue(approved.body(), Map.class).get("access_token"));
-		assertThat(String.valueOf(json.readValue(Base64.getUrlDecoder().decode(approvedToken.split("\\.")[1]), Map.class)
-				.get("realm_access"))).contains("PLATFORM_ADMIN");
-		assertThat(audiences(String.valueOf(json.readValue(approved.body(), Map.class).get("access_token"))))
-				.contains(LOGIN_CLIENT);
-	}
-
 	// ------------------------------------------------------------------ 준비
-
-	/**
-	 * 브라우저 대신 Keycloak 화면의 폼을 차례로 낸다: 로그인 → (동의). Keycloak 세션 쿠키에는 Secure가 붙어 Java 기본 쿠키
-	 * 관리자가 http로는 다시 보내지 않으므로(브라우저는 localhost라 보낸다) 쿠키와 리다이렉트를 직접 다룬다.
-	 */
-	private void approveInBrowser(String verificationUri) throws Exception {
-		HttpClient browser = HttpClient.newBuilder().followRedirects(HttpClient.Redirect.NEVER).build();
-		Map<String, String> cookies = new java.util.LinkedHashMap<>();
-		String page = visit(browser, cookies, URI.create(verificationUri), null);
-		for (int step = 0; step < 5; step++) {
-			java.util.regex.Matcher action = java.util.regex.Pattern.compile("<form[^>]*action=\"([^\"]+)\"").matcher(page);
-			if (!action.find()) return; // 폼이 없는 화면 = 승인 완료 안내
-			Map<String, String> fields;
-			if (page.contains("name=\"username\"")) {
-				fields = Map.of("username", APP_USER, "password", APP_USER_PASSWORD);
-			} else if (page.contains("name=\"accept\"")) {
-				fields = Map.of("accept", "Yes");
-			} else {
-				throw new AssertionError("예상하지 못한 Keycloak 화면이다: " + page.substring(0, Math.min(300, page.length())));
-			}
-			page = visit(browser, cookies, URI.create(baseUrl()).resolve(action.group(1).replace("&amp;", "&")), fields);
-		}
-		throw new AssertionError("다섯 화면 안에 승인을 마치지 못했다");
-	}
-
-	/** 요청 하나를 보내고 리다이렉트를 따라가며 Set-Cookie를 모아 다음 요청에 싣는다. 마지막 화면의 HTML을 돌려준다. */
-	private static String visit(HttpClient browser, Map<String, String> cookies, URI uri, Map<String, String> form)
-			throws Exception {
-		for (int hop = 0; hop < 10; hop++) {
-			HttpRequest.Builder request = HttpRequest.newBuilder(uri);
-			if (!cookies.isEmpty()) {
-				request.header("Cookie", cookies.entrySet().stream().map(entry -> entry.getKey() + "=" + entry.getValue())
-						.collect(Collectors.joining("; ")));
-			}
-			if (form != null) {
-				request.header("Content-Type", "application/x-www-form-urlencoded")
-						.POST(HttpRequest.BodyPublishers.ofString(encode(form)));
-			}
-			HttpResponse<String> response = browser.send(request.build(), HttpResponse.BodyHandlers.ofString());
-			for (String header : response.headers().allValues("Set-Cookie")) {
-				String pair = header.split(";", 2)[0];
-				int equals = pair.indexOf('=');
-				if (equals > 0) cookies.put(pair.substring(0, equals), pair.substring(equals + 1));
-			}
-			Optional<String> location = response.headers().firstValue("Location");
-			if (response.statusCode() / 100 != 3 || location.isEmpty()) return response.body();
-			uri = uri.resolve(location.get());
-			form = null;
-		}
-		throw new IllegalStateException("리다이렉트가 너무 많다");
-	}
-
-	private static String oidc() {
-		return baseUrl() + "/realms/" + REALM + "/protocol/openid-connect";
-	}
 
 	private HttpResponse<String> post(String url, Map<String, String> form) throws Exception {
 		return http.send(HttpRequest.newBuilder(URI.create(url)).header("Content-Type", "application/x-www-form-urlencoded")
@@ -329,12 +222,6 @@ class KeycloakRealmFileTest {
 
 	private HttpResponse<String> token(String realm, Map<String, String> form) throws Exception {
 		return post(baseUrl() + "/realms/" + realm + "/protocol/openid-connect/token", form);
-	}
-
-	private List<String> audiences(String accessToken) {
-		Object audience = json.readValue(Base64.getUrlDecoder().decode(accessToken.split("\\.")[1]), Map.class).get("aud");
-		return audience instanceof List<?> list ? list.stream().map(String::valueOf).toList()
-				: Optional.ofNullable(audience).map(String::valueOf).map(List::of).orElse(List.of());
 	}
 
 	private static final java.util.concurrent.atomic.AtomicInteger DATABASES = new java.util.concurrent.atomic.AtomicInteger();

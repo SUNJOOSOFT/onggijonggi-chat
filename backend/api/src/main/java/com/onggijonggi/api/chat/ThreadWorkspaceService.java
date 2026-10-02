@@ -1,9 +1,10 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.authz.MemberAttribute;
+import com.onggijonggi.api.authz.MemberAttributes;
+import com.onggijonggi.api.authz.MemberAttributesUnavailableException;
 import com.onggijonggi.api.authz.RbacProperties;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
-import com.onggijonggi.common.authz.OrgUnitMember;
-import com.onggijonggi.common.authz.OrgUnitMemberRepository;
 import com.onggijonggi.common.authz.OrgUnitRepository;
 import com.onggijonggi.common.authz.Tenant;
 import com.onggijonggi.common.authz.TenantRepository;
@@ -43,8 +44,8 @@ import reactor.core.scheduler.Schedulers;
  *               워크스페이스 트리는 bootstrap이 만든다. 모든 Thread는 Tenant·워크스페이스에 놓이므로(절체 뒤 NOT NULL) 방을
  *               워크스페이스 없이 만들지 않는다. 설정이 없는 기본 배포도 bootstrap이 Tenant 하나와 그 common을 만든다.
  *
- *               1:1의 common은 판정이 켜져 있으면 요청자의 조직 배정(org_unit_mbr)이 속한 Tenant의 것이다(#299). 배정이
- *               없거나 그 Tenant·팀이 비활성이면 1:1을 만들 수 없다. 판정이 꺼져 있으면 ACTIVE Tenant가 하나일 때 그
+ *               1:1의 common은 판정이 켜져 있으면 요청자의 팀·직급 속성(Casbin p2, MemberAttributes)이 속한 Tenant의 것이다
+ *               (#299). 속성이 없거나, 읽을 수 없거나, 그 Tenant·팀이 비활성이면 1:1을 만들 수 없다. 판정이 꺼져 있으면 ACTIVE Tenant가 하나일 때 그
  *               common에 두고, 정할 수 없으면(Tenant가 없거나 여럿) 503이다.
  */
 @Service
@@ -58,12 +59,12 @@ public class ThreadWorkspaceService {
 	private final WorkspaceNodeRepository nodes;
 	private final TenantRepository tenants;
 	private final AppUserRepository appUsers;
-	private final OrgUnitMemberRepository members;
+	private final MemberAttributes members;
 	private final OrgUnitRepository orgUnits;
 
 	public ThreadWorkspaceService(RbacProperties rbacProperties, WorkspaceAuthorizer authorizer,
 			WorkspaceNodeRepository nodes, TenantRepository tenants, AppUserRepository appUsers,
-			OrgUnitMemberRepository members, OrgUnitRepository orgUnits) {
+			MemberAttributes members, OrgUnitRepository orgUnits) {
 		this.rbacProperties = rbacProperties;
 		this.authorizer = authorizer;
 		this.nodes = nodes;
@@ -120,19 +121,25 @@ public class ThreadWorkspaceService {
 		if (!rbacProperties.isEnforce()) {
 			return defaultCommonOrUnavailable();
 		}
-		return members.findBySubject(user.getKeycloakSubj()).stream().findFirst()
+		List<MemberAttribute> member;
+		try {
+			member = members.findBySubject(user.getKeycloakSubj());
+		} catch (MemberAttributesUnavailableException unavailable) {
+			throw new ResponseStatusException(HttpStatus.FORBIDDEN);
+		}
+		return member.stream().findFirst()
 				.filter(this::isUsableAssignment)
-				.flatMap(assignment -> nodes.findByTenantIdAndKey(assignment.getTenantId(), COMMON_KEY))
+				.flatMap(assignment -> nodes.findByTenantIdAndKey(assignment.tenantId(), COMMON_KEY))
 				.filter(node -> node.getStatus() == WorkspaceNodeStatus.ACTIVE)
 				.orElseThrow(() -> new ResponseStatusException(HttpStatus.FORBIDDEN));
 	}
 
-	/** 배정의 Tenant와 팀이 모두 ACTIVE이고 팀이 그 Tenant에 있는가. */
-	private boolean isUsableAssignment(OrgUnitMember assignment) {
-		boolean tenantActive = tenants.findById(assignment.getTenantId())
+	/** 속성의 Tenant와 팀이 모두 ACTIVE이고 팀이 그 Tenant에 있는가. */
+	private boolean isUsableAssignment(MemberAttribute assignment) {
+		boolean tenantActive = tenants.findById(assignment.tenantId())
 				.filter(tenant -> tenant.getStatus() == TenantStatus.ACTIVE).isPresent();
-		boolean unitActive = orgUnits.findById(assignment.getOrgUnitId())
-				.filter(unit -> unit.isActiveIn(assignment.getTenantId()))
+		boolean unitActive = orgUnits.findById(assignment.orgUnitId())
+				.filter(unit -> unit.isActiveIn(assignment.tenantId()))
 				.isPresent();
 		return tenantActive && unitActive;
 	}

@@ -54,6 +54,8 @@ class WorkspaceManagementPostgresTest extends PostgresSpringTestBase {
 	private WorkspaceNodeRepository nodes;
 	@Autowired
 	private JdbcTemplate jdbc;
+	@Autowired
+	private FakeMemberAttributesConfig.FakeMemberAttributes members;
 	@MockitoBean
 	private RbacPolicyRefresh refresh;
 
@@ -335,7 +337,7 @@ class WorkspaceManagementPostgresTest extends PostgresSpringTestBase {
 		// 다른 ACTIVE 팀에 ADMIN을 준 뒤에는 비활성화할 수 있다. 그 부여는 새 관리팀 ADMIN이 준다.
 		Actor newOwner = actor("new-owner", unit);
 		service.addGrant(newOwner, project, opsTeam, WorkspaceRole.ADMIN);
-		jdbc.update("delete from org_unit_mbr where subj = ?", newOwner.subject());
+		members.unassign(newOwner.subject());
 		service.changeOrgUnit(hrAdmin, tenantKey, unit, null, OrgUnitStatus.INACTIVE);
 		assertThat(jdbc.queryForObject("select status from org_unit where id = ?", String.class, unit)).isEqualTo("INACTIVE");
 	}
@@ -429,7 +431,7 @@ class WorkspaceManagementPostgresTest extends PostgresSpringTestBase {
 		assertStatus(HttpStatus.CONFLICT,
 				() -> service.changeOrgUnit(hrAdmin, tenantKey, unit, null, OrgUnitStatus.INACTIVE));
 
-		jdbc.update("delete from org_unit_mbr where subj = ?", member.subject());
+		members.unassign(member.subject());
 		service.changeOrgUnit(hrAdmin, tenantKey, unit, null, OrgUnitStatus.INACTIVE);
 		assertThat(jdbc.queryForObject("select status from org_unit where id = ?", String.class, unit)).isEqualTo("INACTIVE");
 	}
@@ -571,8 +573,7 @@ class WorkspaceManagementPostgresTest extends PostgresSpringTestBase {
 		String subject = name + "-" + tag;
 		UUID userId = UUID.randomUUID();
 		jdbc.update("insert into app_user (id, keycloak_subj) values (?, ?)", userId, subject);
-		jdbc.update("insert into org_unit_mbr (id, tnn_id, org_unit_id, subj, rank) values (?, ?, ?, ?, 'S')",
-				UUID.randomUUID(), tenantId, orgUnit, subject);
+		members.assign(subject, tenantId, orgUnit, Rank.S);
 		return new Actor(userId, subject, List.of("USER"), "req-" + UUID.randomUUID());
 	}
 

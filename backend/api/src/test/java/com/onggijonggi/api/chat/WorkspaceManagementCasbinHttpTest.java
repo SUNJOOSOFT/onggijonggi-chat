@@ -4,6 +4,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import com.onggijonggi.api.authz.RbacBootstrapService;
 import com.onggijonggi.api.authz.WorkspaceAuthorizer;
+import com.onggijonggi.common.authz.Rank;
 import com.onggijonggi.common.authz.TenantRepository;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
 import java.nio.file.Files;
@@ -69,6 +70,8 @@ class WorkspaceManagementCasbinHttpTest extends PostgresSpringTestBase {
 	private WorkspaceAuthorizer authorizer;
 	@Autowired
 	private JdbcTemplate jdbc;
+	@Autowired
+	private FakeMemberAttributesConfig.FakeMemberAttributes members;
 
 	private RestTestClient client;
 	private String tag;
@@ -253,8 +256,7 @@ class WorkspaceManagementCasbinHttpTest extends PostgresSpringTestBase {
 	/** 배정(사원)만 넣는다. app_user는 첫 HTTP 요청이 만든다. */
 	private String assign(String name, UUID orgUnit) {
 		String subject = name + "-" + tag;
-		jdbc.update("insert into org_unit_mbr (id, tnn_id, org_unit_id, subj, rank) values (?, ?, ?, ?, 'S')",
-				UUID.randomUUID(), tenantId, orgUnit, subject);
+		members.assign(subject, tenantId, orgUnit, Rank.S);
 		return subject;
 	}
 
