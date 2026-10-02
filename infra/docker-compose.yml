@@ -248,6 +248,9 @@ services:
       # casbin 프로필을 함께 켜면(SPRING_PROFILE=prod,casbin) 팀·규칙이 있는 workspace-setup.yml을 읽는다.
       - ./config/workspace-setup.yml:/config/workspace-setup.yml:ro
       - ./config/workspace-setup.default.yml:/config/workspace-setup.default.yml:ro
+      # 사람의 팀·직급(username,team,rank). casbin 프로필에서만 읽는다. 폴더째 마운트한다 — 파일 하나만 마운트하면 편집기가
+      # 파일을 바꿔치기해 저장할 때 컨테이너가 옛 내용을 본다. 고친 뒤 casbin을 재시작하면 다음 판정 때 다시 적재된다.
+      - ./config/members:/config/members:ro
     healthcheck:
       test: ["CMD", "curl", "-sf", "http://localhost:8090/actuator/health"]
       interval: 20s

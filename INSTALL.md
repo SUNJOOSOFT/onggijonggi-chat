@@ -211,7 +211,7 @@ docker compose up -d --build
 
 ## 권한 기능 켜기
 
-팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 꺼져 있어도 모든 대화는 기본 고객사 하나의 공용 공간에 놓인다(`infra/config/workspace-setup.default.yml`을 BFF가 뜰 때 읽는다). 팀·직급 배정과 CSV 임포트는 Keycloak `PLATFORM_ADMIN` 역할이 있는 계정만 할 수 있고, `.env`의 `APP_USER` 계정이 이 역할을 가진다.
+팀·직급에 따라 볼 수 있는 워크스페이스가 갈리는 권한 기능(Casbin)은 **기본으로 꺼져 있다.** 켜지 않으면 지금 설명한 그대로 돈다. 꺼져 있어도 모든 대화는 기본 고객사 하나의 공용 공간에 놓인다(`infra/config/workspace-setup.default.yml`을 BFF가 뜰 때 읽는다). 사람의 팀·직급은 우리 DB에 두지 않는다 — `infra/config/members/members.csv`(`username,team,rank`)에 적고, BFF가 casbin-server에 적재한다. 권한 관리 화면은 Keycloak `PLATFORM_ADMIN` 역할이 있는 계정만 열 수 있고, `.env`의 `APP_USER` 계정이 이 역할을 가진다.
 
 > 이 저장소를 이미 한 번 띄웠다면 Keycloak realm은 처음 만들 때만 가져오므로 `PLATFORM_ADMIN` 역할이 없다. Keycloak 관리 콘솔에서 realm 역할 `PLATFORM_ADMIN`을 만들어 `APP_USER`에 붙이거나, 계정·대화가 지워져도 되면 `docker compose down -v` 뒤 다시 띄운다.
 
@@ -228,20 +228,22 @@ COMPOSE_PROFILES=casbin
 docker compose up -d --build
 ```
 
-**✅ 성공**: `docker compose ps`에 `casbin`이 보이고, BFF 로그에 `Casbin 규칙 적재`가 찍힌다. 조직 구조(팀·워크스페이스·규칙)는 `infra/config/workspace-setup.yml`에서 BFF가 뜰 때 읽는다.
+**✅ 성공**: `docker compose ps`에 `casbin`이 보이고, BFF 로그에 `Casbin 규칙 적재`와 `사람 속성 적재`가 찍힌다. 조직 구조(팀·워크스페이스·규칙)는 `infra/config/workspace-setup.yml`에서 BFF가 뜰 때 읽고, 사람의 팀·직급은 `infra/config/members/members.csv`에서 적재할 때마다 읽는다.
 
-**2. 시험 계정과 배정을 넣는다.** 저장소 루트에서:
+**2. 시험 계정을 만들고 casbin을 재시작한다.** 저장소 루트에서:
 
 ```bash
 node scripts/casbin-demo-accounts.mjs
-node scripts/import-members.mjs infra/config/demo-members.csv --apply
+docker compose -f infra/docker-compose.yml restart casbin
 ```
 
-첫 줄은 `demo1`~`demo7` 계정(비밀번호는 계정 이름과 같다)을 Keycloak에 만들고 배정 스크립트용 `ogjg-cli` 클라이언트를 켠다(평소에는 꺼져 있다 — 데모가 끝나면 `node scripts/casbin-demo-accounts.mjs --disable-cli`로 끈다). 둘째 줄은 `demo1`~`demo6`의 팀·직급을 넣는다. 이 줄은 주소와 코드를 보여 주고 기다린다 — 브라우저에서 그 주소를 열어 `APP_USER`로 로그인하고 접근 허용 화면(*Grant Access to ogjg-cli*)에서 *Yes*를 누르면 이어서 진행한다. 브라우저 주소의 `user_code`가 스크립트가 보여 준 코드와 같은지 확인하고(접근 허용 화면에는 코드가 나오지 않는다), 직접 실행하지 않은 스크립트의 코드는 승인하지 않는다(비밀번호는 스크립트를 거치지 않는다). `demo7`은 배정하지 않은 사람을 확인하는 계정이다 — 권한 기능이 켜져 있으면 조직 배정이 없는 사람은 1:1 채팅도 쓸 수 없다. 임포트는 `--apply`를 빼면 미리보기만 한다.
+첫 줄은 `demo1`~`demo7` 계정(비밀번호는 계정 이름과 같다)을 Keycloak에 만든다. 팀·직급은 `infra/config/members/members.csv`에 이미 적혀 있다(`demo1`~`demo6`, 그리고 `APP_USER` 기본값인 `appuser`). BFF는 적재할 때 아이디를 Keycloak 계정에 맞추는데, 그때 Keycloak에 없던 아이디는 건너뛴다 — 계정을 BFF보다 늦게 만들었으므로 둘째 줄로 casbin을 재시작해 다시 적재하게 한다(BFF 로그의 `사람 속성 적재: N명, 건너뜀 [...]`에서 건너뛴 아이디가 없는지 본다). `demo7`은 배정하지 않은 사람을 확인하는 계정이다 — 권한 기능이 켜져 있으면 팀·직급이 없는 사람은 1:1 채팅도 쓸 수 없다. `appuser`는 `free` 팀(1:1·공용 공간·전사 공지만)으로 들어 있다.
 
-**3. 화면에서 확인한다.** `APP_USER`로 로그인하면 사이드바에 **권한 관리**가 생긴다(`demo` 계정은 일반 사용자라 메뉴가 없다)(<http://localhost:3010/admin/permissions>). 사람마다 팀·직급을 바꾸면 "누가 무엇을 보나" 표가 실제 판정 결과로 바뀐다.
+**3. 화면에서 확인한다.** `APP_USER`로 로그인하면 사이드바에 **권한 관리**가 생긴다(`demo` 계정은 일반 사용자라 메뉴가 없다)(<http://localhost:3010/admin/permissions>). 사람별 팀·직급과 "누가 무엇을 보나" 표(실제 판정 결과)를 볼 수 있다. 팀·직급은 화면에서 바꾸지 않는다.
 
-끄려면 두 줄을 지우고 `docker compose --profile casbin down` 뒤 다시 띄운다. 넣어둔 팀·직급은 DB에 남는다. 단, 기존 대화 절체를 마치고 완료 표지가 기록된 DB에서는 끌 수 없다(아래「v0.2에서 올릴 때」).
+**팀·직급을 바꿀 때**: `infra/config/members/members.csv`를 고치고 `docker compose -f infra/docker-compose.yml restart casbin`을 한다. 다음 판정 때 BFF가 파일을 다시 읽어 적재하고, 팀·직급이 바뀌거나 빠진 사람의 협업방 구독과 진행 중인 협업방 AI 응답을 바로 거둔다(다시 들어오면 새 팀·직급으로 판정한다). BFF 로그의 `사람 속성 적재`로 반영을 확인한다. 파일이 틀리면(없는 팀·직급, 같은 아이디 두 번 등) 적재하지 않고 BFF 로그에 틀린 줄이 모두 찍힌다. casbin을 재시작한 뒤라면 남은 적재가 없어 **모든 판정을 거부**한다 — 고친 뒤 다시 casbin을 재시작한다. (파일이 틀린 채로 권한 관리 화면에서 규칙을 바꾸면 이전 적재가 남은 채 그 고객사의 판정과 관리 변경만 막히고, 파일을 고칠 때까지 몇 초~30초 간격으로 다시 시도한다.) 이미 있던 배포에서 올리면 예전에 DB에 넣어 둔 배정은 마이그레이션으로 지워지므로 같은 내용을 이 파일에 옮겨 적는다.
+
+끄려면 두 줄을 지우고 `docker compose --profile casbin down` 뒤 다시 띄운다. 단, 기존 대화 절체를 마치고 완료 표지가 기록된 DB에서는 끌 수 없다(아래「v0.2에서 올릴 때」).
 
 ---
 
@@ -249,7 +251,7 @@ node scripts/import-members.mjs infra/config/demo-members.csv --apply
 
 BFF는 Keycloak에서 사람 목록·표시 이름을 읽고, 누가 언제 누구에게 `PLATFORM_ADMIN`(권한 관리 화면·API를 여는 역할)을 줬는지·계정을 언제 끄고 지웠는지를 1분마다 읽어 DB에 지울 수 없는 기록으로 남긴다. 그룹 가입이나 복합 역할처럼 역할을 직접 붙이지 않고 권한을 얻는 경로와, 역할을 줄 수 있는 관리 권한(`realm-management`)도 함께 남는다. 처음 수집할 때는 그 시점에 이미 권한을 가진 사람을 한 번 기록한다.
 
-이 조회는 **BFF 전용 관리 클라이언트 `ogjg-bff`**(`KEYCLOAK_BFF_CLIENT_ID`)로 한다. 로그인 클라이언트 `ogjg-client`의 secret은 프론트에도 있어서, 거기에 관리 권한을 붙이면 프론트 서버가 침해될 때 전체 계정 목록과 관리 이력이 함께 샌다. 그래서 로그인 클라이언트에는 서비스 계정이 없다. 저장소 스크립트(`scripts/import-members.mjs`)는 secret 없는 `ogjg-cli` 클라이언트로 브라우저 로그인을 한다.
+이 조회는 **BFF 전용 관리 클라이언트 `ogjg-bff`**(`KEYCLOAK_BFF_CLIENT_ID`)로 한다. 로그인 클라이언트 `ogjg-client`의 secret은 프론트에도 있어서, 거기에 관리 권한을 붙이면 프론트 서버가 침해될 때 전체 계정 목록과 관리 이력이 함께 샌다. 그래서 로그인 클라이언트에는 서비스 계정이 없다.
 
 **새로 띄우는 환경은 할 일이 없다.** 로그인 설정 파일(`infra/config/realm-app.json`)이 이벤트 저장, 세 클라이언트, 수집 권한을 갖춘 realm을 만든다.
 
@@ -266,7 +268,7 @@ BFF는 Keycloak에서 사람 목록·표시 이름을 읽고, 누가 언제 누�
    ```bash
    read -rs S && curl -s --data-urlencode "client_secret=$S" -d "grant_type=client_credentials&client_id=ogjg-client" http://localhost:8081/realms/app-realm/protocol/openid-connect/token; unset S
    ```
-8. (`import-members.mjs`를 쓸 때만) **Clients → Create client**: Client ID `ogjg-cli`, *Client authentication* 끔, *OAuth 2.0 Device Authorization Grant*만 켬, *Consent required* 켬. 그 클라이언트 → **Client scopes → ogjg-cli-dedicated → Configure a new mapper → Audience**에서 *Included Client Audience*를 `ogjg-client`(`KEYCLOAK_CLIENT_ID` 값)로, *Add to access token*을 켜고 저장한다. **평소에는 꺼 둔다**(클라이언트 상세 화면 맨 위의 *Enabled* 토글) — 켜 두면 누구나 승인 코드를 받아 관리자에게 승인을 유도할 수 있다(device code 피싱). 스크립트를 쓸 때만 켜고 끝나면 끈다. 새로 만든 realm에는 꺼진 채로 이미 있다. (선택) 같은 클라이언트 → **Advanced**에서 *Access Token Lifespan*을 5분으로, *Use refresh tokens*를 끄면 새 realm과 같아진다.
+8. (예전에 만든 realm만) **Clients → `ogjg-cli`**가 있으면 지운다(*Action → Delete*). 팀·직급 CSV 스크립트용 클라이언트였는데 팀·직급을 파일(`infra/config/members/members.csv`)로 넣게 되어 더는 쓰지 않는다. realm 파일에서 뺀 것은 이미 만든 realm에 반영되지 않으므로 직접 지운다. 꺼진 채로 남겨 둬도 동작에는 문제가 없다.
 9. (선택) **로그인 secret 재발급**: 6단계로 이 secret의 관리 권한은 이미 사라졌으므로 필수는 아니다. `.env.example`의 공개 기본값을 그대로 쓰거나 침해가 의심되면 `ogjg-client` → **Credentials → Regenerate** → `infra/.env`의 `KEYCLOAK_CLIENT_SECRET` 교체 → 곧바로 `docker compose up -d nextjs`(그 전까지는 새 로그인과 토큰 갱신이 실패한다). 로그인한 사용자는 다시 로그인해야 한다.
 
 앱은 6단계를 빠뜨렸는지 알아채지 못한다 — 7단계 확인이 유일한 점검이다. 2·3단계의 역할 부여가 권한 변경 감사에 `MANAGEMENT_ROLE_GRANTED` 행으로 남는 것은 정상이다. 6단계로 로그인 서비스 계정의 역할이 함께 사라지는 것은 역할 해제가 아니라 클라이언트 설정 변경이라 역할 해제 행으로 남지 않는다.
@@ -303,7 +305,7 @@ docker compose up -d --build bff
 
 **✅ 성공**: BFF 로그에 `RBAC bootstrap 완료`가 찍히고 처리된 Tenant에 `ogjg`가 보인다. 기본 고객사(`ogjg`)와 공용 공간이 만들어졌다. 대화는 아직 그대로다.
 
-**3. Flyway를 끝까지 적용해 띄운다.** 권한 판정(`prod,casbin`)을 켤 운영 DB라면 이 단계 전에 PLATFORM_ADMIN 계정으로 `POST /api/platform/rbac/cutover-validation`을 호출해 응답의 `failures`가 비어 있는지 확인한다(팀 배정 누락, 공용 공간 밖 대화 등을 알려 준다). 그다음 2단계에서 넣은 줄을 지우고(지우지 않으면 이후 migration이 조용히 적용되지 않는다) 다시 띄우면, 이번엔 migration이 기존 대화를 공용 공간에 놓고 스키마를 마무리한다.
+**3. Flyway를 끝까지 적용해 띄운다.** 권한 판정(`prod,casbin`)을 켤 운영 DB라면 이 단계 전에 PLATFORM_ADMIN 계정으로 `POST /api/platform/rbac/cutover-validation`을 호출해 응답의 `failures`가 비어 있는지 확인한다(팀 배정 누락, 공용 공간 밖 대화 등을 알려 준다). 팀 배정은 `infra/config/members/members.csv`에서 오므로, 대화에 참여한 활성 계정을 먼저 이 파일에 적어 둔다. 사람 속성이 아직 적재되지 않았으면 검증은 503으로 끝난다. 그다음 2단계에서 넣은 줄을 지우고(지우지 않으면 이후 migration이 조용히 적용되지 않는다) 다시 띄우면, 이번엔 migration이 기존 대화를 공용 공간에 놓고 스키마를 마무리한다.
 
 ```bash
 docker compose up -d bff

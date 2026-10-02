@@ -12,11 +12,11 @@
 - `config/realm-app.json` — Keycloak realm·client·역할·계정 최초 기동 시 자동 임포트
 - `config/workspace-setup.default.yml` — 기본 조직 구조. 고객사(`ogjg`) 하나만 만든다. 모든 대화가 놓일 곳이 있어야 해서 권한 기능을 켜지 않은 기본 배포도 bff가 기동 때 읽는다. `casbin` 프로필을 켜지 않으면 이 파일을 읽는다.
 - `config/workspace-setup.yml` — 조직 구조(고객사·팀·워크스페이스·팀 규칙·직급 규칙). `SPRING_PROFILE=prod,casbin`으로 권한 기능을 켜면 이 파일을 읽는다(두 파일 모두 bff에 읽기 전용으로 마운트된다). 구조를 바꿀 때는 `reconcile.dpl_id`를 새 값으로 바꾼다(같은 값은 한 번만 적용된다)
-- `config/demo-members.csv` — 시험 계정 `demo1`~`demo6`의 팀·직급. `scripts/import-members.mjs`로 넣는다
+- `config/members/members.csv` — 사람의 팀·직급(`username,team,rank`). 시험 계정 `demo1`~`demo6`과 테스트 계정 `appuser`가 적혀 있다. `casbin` 프로필에서 bff가 읽어 casbin-server에 적재한다 — 우리 DB에는 두지 않는다. 폴더째 bff에 읽기 전용으로 마운트되고, 고친 뒤 casbin을 재시작하면 반영된다
 
 서비스끼리는 compose가 만드는 `app-net`(bridge)으로 통신한다. `proxy-net`(`external: true`)은 **caddy 프로필에만** 걸려 있다 — 다른 compose 스택을 이 caddy 뒤에 붙이기 위한 공용 네트워크라, caddy를 켤 때만 `docker network create proxy-net`이 한 번 필요하다.
 브라우저가 보는 공개 주소와 컨테이너끼리 쓰는 내부 주소는 분리돼 있다 — nextjs는 Keycloak을 `KEYCLOAK_INTERNAL_ISSUER`(`http://keycloak:8080`), BFF를 `BFF_INTERNAL_URL`(`http://bff:8090`)로 부른다. 덕분에 `.env`의 공개 주소를 `localhost`로 둬도 서버 쪽 호출이 깨지지 않는다.
-casbin 서비스는 인증이 없는 gRPC라 호스트 포트를 열지 않고 `app-net` 안에서 bff만 부른다(`casbin:50051`). 켜는 법은 루트 [`INSTALL.md`](../INSTALL.md)의 「권한 기능 켜기」에 있다.
+casbin 서비스는 인증이 없는 gRPC라 호스트 포트를 열지 않고 `app-net` 안에서 bff만 부른다(`casbin:50051`). 규칙뿐 아니라 사람의 팀·직급도 들고 있으므로 포트를 열지 않는다. 켜는 법은 루트 [`INSTALL.md`](../INSTALL.md)의 「권한 기능 켜기」에 있다.
 elasticsearch는 인증·TLS를 끈 채라 호스트의 `127.0.0.1:9200`에만 열린다. 켜려면 `.env`에 `COMPOSE_PROFILES=elasticsearch`(다른 프로필과 함께면 쉼표로 잇는다)를 넣고, 힙은 `ES_HEAP`(기본 `1g`)으로 정한다.
 `caddy-local-root.crt`만 커밋되지 않는다 — caddy 프로필을 켤 때 인증서를 추출해 만든다(브라우저 신뢰 등록용).
 

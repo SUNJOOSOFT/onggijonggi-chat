@@ -8,8 +8,9 @@
 # app.rbac.workspace-setup-path(환경변수 APP_RBAC_WORKSPACE_SETUP_PATH)로 준다. 경로가 비어 있으면 아무것도 만들지 않는다(prod 프로필은 기본으로 workspace-setup.default.yml을 준다).
 # 서버를 켤 때만 읽는다 — 이 파일을 바꾸면 bff를 다시 켜야 반영된다.
 #
-# 팀·직급의 정본은 이 DB다. Keycloak은 USER 역할만 주고 팀·직급을 모른다. 사람의 팀·직급 배정은 이 파일이 아니라
-# CSV 임포트나 데모 배정 화면으로 넣는다. 판정에는 팀 규칙의 role을 쓰지 않는다 — 부여가 있으면 그 팀이 그 노드를 본다.
+# 팀·규칙의 정본은 이 DB다. Keycloak은 USER 역할만 주고 팀·직급을 모른다. 사람의 팀·직급은 이 파일도 DB도 아니라
+# infra/config/members/members.csv(username,team,rank)에 적고, bff가 casbin-server에 적재한다.
+# 판정에는 팀 규칙의 role을 쓰지 않는다 — 부여가 있으면 그 팀이 그 노드를 본다.
 #
 # 규칙 요약
 #  - ROOT·COMMON은 Tenant를 만들 때 자동으로 만들어지므로 선언하지 않는다(node_key root·common은 예약).
@@ -28,16 +29,18 @@
 #    dpl_id는 배포마다 새로 만든다(예: 날짜-순번).
 # 2026-09-22-02: 팀 관리자급 방 이름을 "간부방"에서 "관리자방"으로 바꿨다. 표시명은 reconcile로만 바뀐다.
 # 2026-09-28-01: 고객사 이름을 가상의 "ACME"로 바꿨다. 협업 채널 트리의 맨 위에 이 이름이 나온다.
+# 2026-10-02-01: 테스트 계정용 팀 free를 더했다(공용 공간 CONTRIBUTOR — 1:1과 공용 공간 협업방).
+#                전사 공지는 팀을 정하지 않은 직급 규칙(S 이상)이라 free도 본다.
 reconcile:
   enabled: true
-  dpl_id: "2026-09-28-01"
+  dpl_id: "2026-10-02-01"
 
 tenants:
   - tnn_key: ogjg            # 불변 slug([a-z][a-z0-9-]{0,62})
     name: ACME               # 표시명(바꿔도 권한에는 영향이 없다). 협업 채널 트리의 맨 위에 나온다
     status: ACTIVE           # ACTIVE | INACTIVE
     org_units:
-      - key: hr              # 불변 slug. CSV 임포트의 team 값과 같다
+      - key: hr              # 불변 slug. members.csv의 team 값과 같다
         name: 인사팀
         status: ACTIVE
       - key: legal
@@ -45,6 +48,9 @@ tenants:
         status: ACTIVE
       - key: fin
         name: 재무팀
+        status: ACTIVE
+      - key: free            # 테스트 계정(appuser). 1:1·공용 공간(협업방 만들기 포함)·전사 공지만 쓴다
+        name: 테스트 계정
         status: ACTIVE
     nodes:
       - node_key: hr
@@ -99,6 +105,8 @@ tenants:
       - { org_unit: hr, role: VIEWER, node: common }
       - { org_unit: legal, role: VIEWER, node: common }
       - { org_unit: fin, role: VIEWER, node: common }
+      - { org_unit: free, role: VIEWER, node: common }
+      - { org_unit: free, role: CONTRIBUTOR, node: common }
       # 최상위 노드마다 ADMIN 부여(필수). 팀마다 자기 팀 워크스페이스를 본다.
       - { org_unit: hr, role: ADMIN, node: hr }
       - { org_unit: legal, role: ADMIN, node: legal }

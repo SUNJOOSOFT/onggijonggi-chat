@@ -14,7 +14,7 @@
       },
       {
         "name": "PLATFORM_ADMIN",
-        "description": "control plane 운영 권한. 조직·직급 배정, CSV 임포트, bootstrap 재시도, 절체 사전 검증(/api/platform/**)을 부른다. 채팅·워크스페이스 데이터 접근권은 주지 않는다."
+        "description": "control plane 운영 권한. 권한 관리 화면(팀·직급 조회), bootstrap 재시도, 절체 사전 검증(/api/platform/**)을 부른다. 채팅·워크스페이스 데이터 접근권은 주지 않는다."
       }
     ]
   },
@@ -79,34 +79,6 @@
       "directAccessGrantsEnabled": false,
       "serviceAccountsEnabled": true,
       "secret": "${KEYCLOAK_BFF_CLIENT_SECRET}"
-    },
-    {
-      "clientId": "ogjg-cli",
-      "description": "scripts/import-members.mjs의 브라우저 로그인(device flow) 전용. secret·password grant 없음. 켜 두면 device code 피싱 경로라 꺼진 채 만들고 쓸 때만 켠다.",
-      "enabled": false,
-      "publicClient": true,
-      "consentRequired": true,
-      "fullScopeAllowed": true,
-      "standardFlowEnabled": false,
-      "implicitFlowEnabled": false,
-      "directAccessGrantsEnabled": false,
-      "serviceAccountsEnabled": false,
-      "attributes": {
-        "oauth2.device.authorization.grant.enabled": "true",
-        "access.token.lifespan": "300",
-        "use.refresh.tokens": "false"
-      },
-      "protocolMappers": [
-        {
-          "name": "audience-mapper",
-          "protocol": "openid-connect",
-          "protocolMapper": "oidc-audience-mapper",
-          "config": {
-            "included.client.audience": "${KEYCLOAK_CLIENT_ID}",
-            "access.token.claim": "true"
-          }
-        }
-      ]
     }
   ]
 }
