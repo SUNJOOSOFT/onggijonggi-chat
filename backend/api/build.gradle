@@ -14,6 +14,8 @@ dependencies {
 	implementation 'org.springframework.ai:spring-ai-starter-model-openai'
 	// 03·CORE — 채팅 첨부 파일(txt·md·csv·PDF·DOCX)에서 텍스트를 뽑는다. Apache Tika를 감싼 리더다.
 	implementation 'org.springframework.ai:spring-ai-tika-document-reader'
+	// 03·CORE — AI 턴의 웹 검색(DuckDuckGo HTML 결과)·웹 읽기(본문 글자)에서 HTML을 해석한다. Tika가 이미 같은 판을 끌어온다.
+	implementation 'org.jsoup:jsoup:1.22.2'
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'
 	implementation 'org.springframework.boot:spring-boot-starter-security'
 	implementation 'org.springframework.boot:spring-boot-starter-security-oauth2-resource-server'

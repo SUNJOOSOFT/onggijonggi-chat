@@ -231,7 +231,7 @@ public class ThreadMessageDispatcher {
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
 				msgId, command.files(), command.traceId(), command.from(), command.fromSubject(),
 				command.fromDisplayName(), TurnRef.of(command.turnId(), command.connectionId()), command.model(),
-				context, direct ? reserved : null, queued.terminalPersisted());
+				command.timeZone(), context, direct ? reserved : null, queued.terminalPersisted());
 		ActiveTurn turnToStart = null;
 		boolean admitted = false;
 		// 등록 해제와 대기열 추가를 한 락 안에서 한다 — 사이가 벌어지면 그 틈에 온 취소가 어디서도
@@ -570,7 +570,7 @@ public class ThreadMessageDispatcher {
 					}
 					return withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 							new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
-									messages))));
+									messages, activeTurn.turn.timeZone()))));
 				})
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
@@ -1022,12 +1022,13 @@ public class ThreadMessageDispatcher {
 	/**
 	* ref는 취소 지목 키다(이슈 #160). model이 null이면 서버 기본값을 쓴다. reservedTurn은 DIRECT만
 	* 채운다 — `DirectChatTurnService`가 이미 만든 PENDING AGENT를 가리킨다(이슈 #162). humanMsgId·files는
-	* 이 턴을 부른 발화의 msg id와 첨부다 — 프롬프트에 첨부를 붙일 때 쓴다.
+	* 이 턴을 부른 발화의 msg id와 첨부다 — 프롬프트에 첨부를 붙일 때 쓴다. timeZone은 그 발화자의 브라우저
+	* 시간대다 — 협업방에서도 턴을 부른 사람 기준으로 현재 시각 도구가 답한다.
 	*/
 	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, UUID humanMsgId,
 			List<MsgFile> files, String traceId, UUID fromUserId, String fromSubject, String fromDisplayName,
-			TurnRef ref, String model, Mono<List<Msg>> context, ChatMessageCommand.ReservedTurn reservedTurn,
-			AtomicBoolean terminalPersisted) {
+			TurnRef ref, String model, String timeZone, Mono<List<Msg>> context,
+			ChatMessageCommand.ReservedTurn reservedTurn, AtomicBoolean terminalPersisted) {
 
 		UUID turnId() {
 			return ref == null ? null : ref.turnId();

@@ -94,6 +94,23 @@ class ThreadMessageDispatcherTest {
 		assertThat(((ChatMessageFrame) room.frames.get(0)).seq()).isEqualTo(0L);
 	}
 
+	/** 턴을 부른 발화의 브라우저 시간대가 LLM 요청까지 간다 — 현재 시각 도구가 그 시간대로 답한다. */
+	@Test
+	void passesTheSendersTimeZoneToTheLlm() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(new ChatMessageCommand(room.threadId, ThrKind.COLLAB, room.userId,
+				room.participant.subject(), room.participant.displayName(), "@AI 지금 몇 시야", List.of(), null,
+				"America/New_York", null, null, room.connectionId, "trace", null), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().timeZone()).isEqualTo("America/New_York");
+	}
+
 	@Test
 	void broadcastsOrdinaryMessagesWithoutCallingTheLlm() {
 		TestRoom room = new TestRoom();
@@ -579,7 +596,7 @@ class ThreadMessageDispatcherTest {
 
 		dispatcher.dispatch(new ChatMessageCommand(room.threadId, ThrKind.COLLAB, room.userId,
 				room.participant.subject(), room.participant.displayName(), "@AI 요약해줘", List.of(currentFile), null,
-				null, null, room.connectionId, "trace", null), room.membership.generation());
+				null, null, null, room.connectionId, "trace", null), room.membership.generation());
 
 		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
 		verify(llm, timeout(1000)).streamChat(request.capture());
@@ -607,7 +624,7 @@ class ThreadMessageDispatcherTest {
 		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
 
 		dispatcher.dispatch(new ChatMessageCommand(room.threadId, ThrKind.DIRECT, room.userId,
-				room.participant.subject(), room.participant.displayName(), "요약해줘", List.of(file), null, null, null,
+				room.participant.subject(), room.participant.displayName(), "요약해줘", List.of(file), null, null, null, null,
 				room.connectionId, "trace", reserved), room.membership.generation());
 
 		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
@@ -1313,8 +1330,8 @@ class ThreadMessageDispatcherTest {
 	private static ChatMessageCommand directCommand(TestRoom room, String content, UUID turnId,
 			ChatMessageCommand.ReservedTurn reserved) {
 		return new ChatMessageCommand(room.threadId, ThrKind.DIRECT, room.userId, room.participant.subject(),
-				room.participant.displayName(), content, List.of(), null, null, turnId, room.connectionId, "trace",
-				reserved);
+				room.participant.displayName(), content, List.of(), null, null, null, turnId, room.connectionId,
+				"trace", reserved);
 	}
 
 	private static ChatMessageCommand command(TestRoom room, String content) {
@@ -1329,8 +1346,8 @@ class ThreadMessageDispatcherTest {
 	private static ChatMessageCommand command(TestRoom room, String content, String clientMsgId, UUID turnId,
 			String model) {
 		return new ChatMessageCommand(room.threadId, ThrKind.COLLAB, room.userId, room.participant.subject(),
-				room.participant.displayName(), content, List.of(), model, clientMsgId, turnId, room.connectionId,
-				"trace", null);
+				room.participant.displayName(), content, List.of(), model, null, clientMsgId, turnId,
+				room.connectionId, "trace", null);
 	}
 
 	/**

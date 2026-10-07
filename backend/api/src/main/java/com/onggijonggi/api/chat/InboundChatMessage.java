@@ -30,15 +30,20 @@ import java.util.UUID;
  *               attachmentIds는 POST /api/attachments로 미리 올린 첨부다. 본인이 올렸고 아직 다른
  *               발화에 실리지 않은 것만 받는다. 첨부가 있으면 content가 비어도 된다.
  *
+ *               timeZone은 보낸 사람 브라우저의 시간대(IANA 이름, 예: Asia/Seoul)다. 이 발화가 부른 턴의
+ *               현재 시각 도구가 쓴다. 서버가 미리 거르지 않는다 — 없거나 해석할 수 없으면 도구가 서버
+ *               기본값을 쓴다(CurrentTimeTool).
+ *
  * @param threadId 발화할 방
  * @param content 발화 원문
  * @param model 이 턴에 쓸 게이트웨이 모델 별칭. null이면 서버 기본값
  * @param clientMsgId 클라이언트가 만든 임시 메시지 id. 서버는 형식을 가리지 않는다(이슈 #224)
  * @param turnId 클라이언트가 만든 턴 식별자
  * @param attachmentIds 이 발화에 실을 첨부 id. 없으면 null이나 빈 배열
+ * @param timeZone 보낸 사람 브라우저의 시간대. null이면 서버 기본값
  */
 @JsonIgnoreProperties(ignoreUnknown = true)
 public record InboundChatMessage(UUID threadId, String content, String model, String clientMsgId, UUID turnId,
-		List<UUID> attachmentIds)
+		List<UUID> attachmentIds, String timeZone)
 		implements InboundFrame {
 }

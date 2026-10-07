@@ -20,6 +20,8 @@ import java.util.UUID;
  * @param fromDisplayName 작성자의 표시 이름
  * @param files 이 발화에 실린 첨부. WS 핸들러가 본인 것인지 확인을 마친 것이다. 없으면 빈 리스트
  * @param model {@code @AI} 턴에 쓸 게이트웨이 모델 별칭. null이면 서버 기본값(이슈 #160)
+ * @param timeZone 보낸 사람 브라우저의 시간대(IANA 이름). {@code @AI} 턴의 현재 시각 도구가 쓴다.
+ *                 null이거나 틀리면 서버 기본값(CurrentTimeTool)
  * @param clientMsgId 클라이언트가 만든 임시 메시지 id. 에코에 돌려준다(이슈 #160). 서버는 해석하지
  *                     않는 불투명 문자열로 다룬다 — UUID로 좁히지 않는다(이슈 #224)
  * @param turnId 클라이언트가 만든 턴 식별자. 에코·답변·대기 프레임에 돌려주고 취소 지목에 쓴다(이슈 #160)
@@ -28,7 +30,7 @@ import java.util.UUID;
  *                      msgId·seq — dispatcher가 새로 만들지 않고 그대로 재사용한다(이슈 #162)
  */
 record ChatMessageCommand(UUID threadId, ThrKind kind, UUID from, String fromSubject, String fromDisplayName,
-		String content, List<MsgFile> files, String model, String clientMsgId, UUID turnId, UUID connectionId,
+		String content, List<MsgFile> files, String model, String timeZone, String clientMsgId, UUID turnId, UUID connectionId,
 		String traceId, ReservedTurn reservedTurn) {
 
 	List<UUID> fileIds() {

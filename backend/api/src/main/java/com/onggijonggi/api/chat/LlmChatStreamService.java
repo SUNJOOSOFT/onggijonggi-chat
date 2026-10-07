@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.web.WebTools;
 import com.openai.errors.OpenAIServiceException;
 import org.springframework.ai.chat.client.ChatClient;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -10,7 +11,9 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 /**
  * Class Name : LlmChatStreamService.java
@@ -22,9 +25,13 @@ import java.util.List;
 public class LlmChatStreamService {
 
 	private final ChatClient chatClient;
+	private final CurrentTimeTool currentTimeTool;
+	private final WebTools webTools;
 
-	public LlmChatStreamService(ChatClient.Builder chatClientBuilder) {
+	public LlmChatStreamService(ChatClient.Builder chatClientBuilder, CurrentTimeTool currentTimeTool, WebTools webTools) {
 		this.chatClient = chatClientBuilder.build();
+		this.currentTimeTool = currentTimeTool;
+		this.webTools = webTools;
 	}
 
 	/**
@@ -37,9 +44,22 @@ public class LlmChatStreamService {
 				.map(this::toSpringAiMessage)
 				.toList();
 
+		// toolContext는 요청마다 새로 만든다 — 웹 읽기 허락 목록이 이 턴에만 쌓인다.
+		Map<String, Object> toolContext = new HashMap<>(currentTimeTool.context(request.timeZone()));
+		Object[] tools = {currentTimeTool};
+		if (webTools.enabled()) {
+			toolContext.putAll(webTools.context(request.messages().stream()
+					.filter(message -> isUser(message.role()))
+					.map(ChatMessage::content)
+					.toList()));
+			tools = new Object[] {currentTimeTool, webTools};
+		}
+
 		return chatClient.prompt()
 				.messages(messages)
 				.options(ChatOptions.builder().model(request.modelId()))
+				.tools(tools)
+				.toolContext(toolContext)
 				.advisors()
 				.stream()
 				.content()
@@ -61,6 +81,12 @@ public class LlmChatStreamService {
 			current = current.getCause() == current ? null : current.getCause();
 		}
 		return error;
+	}
+
+	/** toSpringAiMessage와 같은 규칙 — assistant·system이 아니면 user다. */
+	private static boolean isUser(String role) {
+		String lower = role.toLowerCase();
+		return !lower.equals("assistant") && !lower.equals("system");
 	}
 
 	/** role이 "assistant"/"system"이 아니면 무조건 user로 취급한다(알 수 없는 role도 안전하게 처리). */

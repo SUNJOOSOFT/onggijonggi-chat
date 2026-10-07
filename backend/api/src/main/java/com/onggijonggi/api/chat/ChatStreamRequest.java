@@ -12,6 +12,8 @@ import java.util.UUID;
  * @param modelId 게이트웨이 model_list의 model_name(별칭). 화면에서 고른 값이 그대로 오고,
  *                유효성은 게이트웨이가 판정한다(LlmChatStreamService 참조)
  * @param messages 전체 대화 이력({role, content}만 포함하는 최소 스키마)
+ * @param timeZone 턴을 부른 발화자의 브라우저 시간대(IANA 이름). null이거나 틀리면 현재 시각 도구가
+ *                 서버 기본값을 쓴다(CurrentTimeTool 참조)
  */
-public record ChatStreamRequest(UUID sessionId, String modelId, List<ChatMessage> messages) {
+public record ChatStreamRequest(UUID sessionId, String modelId, List<ChatMessage> messages, String timeZone) {
 }

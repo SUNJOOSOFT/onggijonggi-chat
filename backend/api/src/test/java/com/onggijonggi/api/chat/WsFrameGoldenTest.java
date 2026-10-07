@@ -86,7 +86,7 @@ class WsFrameGoldenTest {
 	private static Map<String, InboundFrame> inboundSamples() {
 		Map<String, InboundFrame> samples = new LinkedHashMap<>();
 		samples.put("chat.message", new InboundChatMessage(THREAD_ID, "@AI 요약해줘", "gemini-3.6-flash", CLIENT_MSG_ID,
-				TURN_ID, List.of(FILE_ID)));
+				TURN_ID, List.of(FILE_ID), "Asia/Seoul"));
 		samples.put("chat.cancel", new InboundChatCancel(THREAD_ID, TURN_ID));
 		samples.put("room.subscribe", new InboundRoomSubscribe(THREAD_ID));
 		samples.put("room.unsubscribe", new InboundRoomUnsubscribe(THREAD_ID));

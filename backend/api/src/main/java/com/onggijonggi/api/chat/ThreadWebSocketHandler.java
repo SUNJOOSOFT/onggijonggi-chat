@@ -333,8 +333,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 										: rejectIfLocked(
 												new ChatMessageCommand(threadId, kind.get(), connection.userId(),
 														actor.subject(), actor.displayName(), inbound.content(),
-														files, inbound.model(), inbound.clientMsgId(),
-														inbound.turnId(), connection.id(), traceId,
+														files, inbound.model(), inbound.timeZone(),
+														inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId,
 														toReservedTurn(stored)),
 												roomGeneration.get(), traceId))
 								.onErrorResume(IdempotencyKeyConflictException.class,
@@ -346,7 +346,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 					}
 					ChatMessageCommand command = new ChatMessageCommand(threadId, kind.get(), connection.userId(),
 							actor.subject(), actor.displayName(), inbound.content(), files, inbound.model(),
-							inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, null);
+							inbound.timeZone(), inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, null);
 					// 구독 뒤에 워크스페이스를 못 보게 된 사람(인사이동 등)도 참가자 재확인과 같은 이유로 여기서 막는다.
 					return threadMembershipService.canEnterWorkspace(threadId, actor.subject())
 							.flatMap(inWorkspace -> inWorkspace
@@ -461,8 +461,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.subscribeOn(Schedulers.boundedElastic())
 				.flatMap(fresh -> rejectIfLocked(
 						new ChatMessageCommand(threadId, ThrKind.DIRECT, connection.userId(), actor.subject(),
-								actor.displayName(), inbound.content(), files, inbound.model(), inbound.clientMsgId(),
-								inbound.turnId(), connection.id(), traceId, toReservedTurn(fresh)),
+								actor.displayName(), inbound.content(), files, inbound.model(), inbound.timeZone(),
+								inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, toReservedTurn(fresh)),
 						roomGeneration, traceId))
 				.onErrorResume(error -> reportDirectReserveFailure(threadId, roomGeneration, inbound.turnId(),
 						traceId, error));
@@ -546,7 +546,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		}
 		ChatMessageCommand command = new ChatMessageCommand(threadId, ThrKind.DIRECT, connection.userId(),
 				actor.subject(), actor.displayName(), inbound.content(), files, inbound.model(),
-				inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId, toReservedTurn(stored));
+				inbound.timeZone(), inbound.clientMsgId(), inbound.turnId(), connection.id(), traceId,
+				toReservedTurn(stored));
 		return rejectIfLocked(command, generation.get(), traceId);
 	}
 

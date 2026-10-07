@@ -166,11 +166,11 @@ class WsFrameTest {
 		UUID threadId = UUID.randomUUID();
 
 		assertThat(objectMapper.readValue("""
-				{"type":"chat.message","threadId":"%s","content":"@AI 질문","model":"gpt","clientMsgId":"%s","turnId":"%s"}"""
+				{"type":"chat.message","threadId":"%s","content":"@AI 질문","model":"gpt","clientMsgId":"%s","turnId":"%s","timeZone":"Asia/Seoul"}"""
 				.formatted(threadId, clientMsgId, turnId), InboundFrame.class))
-				.isEqualTo(new InboundChatMessage(threadId, "@AI 질문", "gpt", clientMsgId, turnId, null));
+				.isEqualTo(new InboundChatMessage(threadId, "@AI 질문", "gpt", clientMsgId, turnId, null, "Asia/Seoul"));
 		assertThat(objectMapper.readValue("{\"type\":\"chat.message\",\"content\":\"hi\"}", InboundFrame.class))
-				.isEqualTo(new InboundChatMessage(null, "hi", null, null, null, null));
+				.isEqualTo(new InboundChatMessage(null, "hi", null, null, null, null, null));
 		assertThat(objectMapper.readValue("{\"type\":\"chat.cancel\",\"threadId\":\"%s\",\"turnId\":\"%s\"}"
 				.formatted(threadId, turnId), InboundFrame.class)).isEqualTo(new InboundChatCancel(threadId, turnId));
 		assertThat(objectMapper.readValue("{\"type\":\"room.subscribe\",\"threadId\":\"%s\"}".formatted(threadId),
