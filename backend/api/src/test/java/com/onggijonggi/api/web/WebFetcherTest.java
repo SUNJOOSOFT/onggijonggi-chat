@@ -16,7 +16,11 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
-/** 로컬 HTTP 서버로 읽기를 확인한다. 주소 검사는 따로 테스트하므로(PublicUrlGuardTest) 여기서는 경로로 거부를 흉내 낸다. */
+/**
+ * Class Name : WebFetcherTest.java
+ * Description : 로컬 HTTP 서버로 웹 읽기를 검증한다(HTML 글자 추출, meta 문자셋, 바이트 상한, 리다이렉트마다 재검사, 형식·상태 거부).
+ *               주소 검사는 PublicUrlGuardTest가 따로 보므로 여기서는 경로로 거부를 흉내 낸다.
+ */
 class WebFetcherTest {
 
 	private HttpServer server;

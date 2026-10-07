@@ -25,7 +25,10 @@ import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 import reactor.core.publisher.Flux;
 
-/** LlmChatStreamService가 웹 도구를 모델에 넘기는지, 사용자 발화의 주소만 허락 목록에 넣는지 본다. */
+/**
+ * Class Name : LlmChatStreamServiceWebToolsTest.java
+ * Description : LlmChatStreamService가 웹 도구를 모델에 넘기는지, 사용자 발화의 주소만 허락 목록에 넣는지, 꺼지면 빼는지 검증한다.
+ */
 class LlmChatStreamServiceWebToolsTest {
 
 	private static final WebProperties ENABLED = new Binder(new MapConfigurationPropertySource())

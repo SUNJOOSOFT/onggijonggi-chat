@@ -13,6 +13,11 @@ import org.springframework.boot.context.properties.bind.Bindable;
 import org.springframework.boot.context.properties.bind.Binder;
 import org.springframework.boot.context.properties.source.MapConfigurationPropertySource;
 
+/**
+ * Class Name : WebToolsTest.java
+ * Description : 웹 도구의 허락 목록을 검증한다 — 사용자 발화와 같은 턴의 검색 결과 주소만 읽고, 지어낸 주소는 거부하며, 턴끼리 섞이지 않는다.
+ *               실패를 사유 문장으로 돌려주는 것과 본문 글자 수 자르기도 본다.
+ */
 class WebToolsTest {
 
 	private static final WebProperties PROPERTIES = new Binder(new MapConfigurationPropertySource())

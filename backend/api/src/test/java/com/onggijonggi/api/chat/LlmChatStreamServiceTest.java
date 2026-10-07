@@ -24,6 +24,11 @@ import org.springframework.ai.model.tool.ToolCallingChatOptions;
 import org.springframework.ai.tool.ToolCallback;
 import reactor.core.publisher.Flux;
 
+/**
+ * Class Name : LlmChatStreamServiceTest.java
+ * Description : LlmChatStreamService가 모델에 넘기는 Prompt에 현재 시각 도구와 발화자의 시간대(toolContext)가 실리는지 검증한다.
+ *               도구 실행은 모델 구현(ToolCallingManager)이 맡으므로, 여기서는 실린 도구를 직접 불러 결과를 본다.
+ */
 class LlmChatStreamServiceTest {
 
 	/** 모델에 넘어간 Prompt에 현재 시각 도구와 발화자의 시간대가 함께 실린다. 도구 실행은 모델 구현(ToolCallingManager)이 맡는다. */

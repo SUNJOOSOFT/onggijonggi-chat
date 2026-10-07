@@ -6,7 +6,11 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import org.junit.jupiter.api.Test;
 import tools.jackson.databind.ObjectMapper;
 
-/** 검색 공급자 응답 해석. DuckDuckGo 표본은 실제 html.duckduckgo.com/html 결과 페이지의 구조를 줄인 것이다. */
+/**
+ * Class Name : SearchProviderParseTest.java
+ * Description : 검색 공급자 응답 해석을 검증한다. DuckDuckGo 표본은 실제 html.duckduckgo.com/html 결과 페이지의 구조를 줄인 것이다.
+ *               봇 확인 페이지·구조 변경은 결과 0건이 아니라 실패여야 한다.
+ */
 class SearchProviderParseTest {
 
 	private static final String DDG = """

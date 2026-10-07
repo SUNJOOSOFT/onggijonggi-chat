@@ -9,6 +9,10 @@ import java.time.ZoneOffset;
 import org.junit.jupiter.api.Test;
 import org.springframework.ai.chat.model.ToolContext;
 
+/**
+ * Class Name : CurrentTimeToolTest.java
+ * Description : 현재 시각 도구가 같은 순간을 브라우저 시간대로 바꾸고, 시간대가 없거나 틀리면 서버 기본값을 쓰는지 검증한다.
+ */
 class CurrentTimeToolTest {
 
 	/** 2026-10-07T06:00:00Z — 서울은 15:00 수요일, 뉴욕은 02:00 수요일이다. */

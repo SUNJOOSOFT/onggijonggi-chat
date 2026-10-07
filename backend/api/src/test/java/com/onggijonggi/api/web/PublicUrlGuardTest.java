@@ -9,6 +9,10 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.ValueSource;
 
+/**
+ * Class Name : PublicUrlGuardTest.java
+ * Description : 웹 읽기 주소 검사가 내부 주소·기본이 아닌 포트·http·https 외 scheme·사용자 정보가 든 주소를 거부하는지 검증한다.
+ */
 class PublicUrlGuardTest {
 
 	/** DNS 없이 호스트 이름을 정한 주소로 바꾼다. IP 리터럴은 그대로 해석된다. */
