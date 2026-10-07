@@ -257,6 +257,8 @@ export type WsFrameType = WsFrame['type'];
  * attachmentIds는 POST /api/attachments로 미리 올린 첨부다 — 본인이 올렸고 아직 다른 발화에 실리지
  * 않은 것만 받는다. 첨부가 있으면 content가 비어도 된다.
  * threadId는 말할 방이다(이슈 #161) — 이 커넥션이 구독한 방이어야 하고, 아니면 NOT_SUBSCRIBED가 온다.
+ * timeZone은 브라우저의 시간대(IANA 이름, 예: Asia/Seoul)다. 이 발화가 부른 AI 턴이 현재 시각을 답할 때
+ * 쓰고, 생략하거나 서버가 해석하지 못하면 서버 기본 시간대를 쓴다.
  */
 export interface ClientChatMessageFrame {
   type: 'chat.message';
@@ -266,6 +268,7 @@ export interface ClientChatMessageFrame {
   clientMsgId?: string;
   turnId?: string;
   attachmentIds?: string[];
+  timeZone?: string;
 }
 
 /** 진행 중이거나 기다리는 @AI 턴을 멈춘다. 그 턴을 부른 발화의 turnId로 가리킨다. 서버는 이

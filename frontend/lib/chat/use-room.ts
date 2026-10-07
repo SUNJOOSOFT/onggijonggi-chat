@@ -375,6 +375,7 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
         model,
         ...ids,
         ...(attachmentIds && attachmentIds.length > 0 ? { attachmentIds } : {}),
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       if (!sent) return null;
       myTurnIdsRef.current.add(ids.turnId);
