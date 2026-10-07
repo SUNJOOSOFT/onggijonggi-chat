@@ -1,5 +1,7 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.rag.SearchResult;
+import com.onggijonggi.api.rag.ThreadDocumentSearch;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
@@ -22,8 +24,10 @@ import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
+import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.test.scheduler.VirtualTimeScheduler;
+import tools.jackson.databind.ObjectMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -526,7 +530,7 @@ class ThreadMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI hi"), room.membership.generation());
 
-		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "hello world");
+		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "hello world", null);
 	}
 
 	@Test
@@ -613,6 +617,51 @@ class ThreadMessageDispatcherTest {
 				new ChatMessage("user", "요약해줘"));
 	}
 
+	/** 방 문서 검색(#344)이 FOUND면 근거가 프롬프트에 끼워 들어가고, 완료 프레임·저장 둘 다에
+	 * citations가 채워진다(이슈 #347). */
+	@Test
+	void includesDocumentSearchCitationsWhenFound() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(pending);
+		UUID docId = UUID.randomUUID();
+		SearchResult.Chunk chunk = new SearchResult.Chunk("doc:1:0", docId, "규정.pdf", 1, 0, "page=1",
+				"연차는 사흘 전에 신청한다.", 0.9, null);
+		SearchResult found = new SearchResult(SearchResult.Status.FOUND, null, "first", false, List.of(chunk));
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.search(eq(room.threadId), any(), any(), any(), any())).thenReturn(Mono.just(found));
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService,
+				documents, new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20,
+				VirtualTimeScheduler.create());
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().messages()).anySatisfy(message -> {
+			assertThat(message.role()).isEqualTo("system");
+			assertThat(message.content()).contains("규정.pdf").contains("연차는 사흘 전에 신청한다.");
+		});
+
+		awaitFrameCount(room.frames, 2);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.map(ChatAnswerFrame.class::cast)
+				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
+				.extracting(frame -> frame.citations())
+				.first()
+				.satisfies(citations -> assertThat((List<Citation>) citations).containsExactly(
+						new Citation(docId.toString(), "규정.pdf", "연차는 사흘 전에 신청한다.", 0.9)));
+
+		ArgumentCaptor<String> citationsJson = ArgumentCaptor.forClass(String.class);
+		verify(msgPersistenceService, timeout(1000)).completeBlocking(eq(pending.getId()), eq("답"),
+				citationsJson.capture());
+		assertThat(citationsJson.getValue()).contains(docId.toString()).contains("규정.pdf");
+	}
+
 	@Test
 	void marksAgentMessageFailedWhenTurnErrors() {
 		TestRoom room = new TestRoom();
@@ -675,7 +724,7 @@ class ThreadMessageDispatcherTest {
 		// 오가는 경로라 스케줄링 편차가 누적되는데, 같은 JVM에서 클래스 전체를 연달아 돌리는 CI에서는
 		// 1초 창이 빠듯해 10회 중 1~2회 간헐 실패했다. 프로덕션 순서·로직 결함이 아니라는 것은
 		// 이슈에서 반복 측정으로 확인됐다(#207, Refs #197).
-		verify(msgPersistenceService, timeout(5000)).completeBlocking(pending.getId(), "answer");
+		verify(msgPersistenceService, timeout(5000)).completeBlocking(pending.getId(), "answer", null);
 		verify(msgPersistenceService, never()).cancelBlocking(eq(pending.getId()), any());
 	}
 
@@ -1207,18 +1256,20 @@ class ThreadMessageDispatcherTest {
 		VirtualTimeScheduler scheduler = VirtualTimeScheduler.create();
 
 		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		ThreadDocumentSearch documents = noOpDocumentSearch();
+		ObjectMapper json = new ObjectMapper();
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, " ",
-						Duration.ofSeconds(1), 0, 20, scheduler));
+				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, documents, json,
+						" ", Duration.ofSeconds(1), 0, 20, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, "model",
-						Duration.ZERO, 0, 20, scheduler));
+				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, documents, json,
+						"model", Duration.ZERO, 0, 20, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, "model",
-						Duration.ofSeconds(1), -1, 20, scheduler));
+				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, documents, json,
+						"model", Duration.ofSeconds(1), -1, 20, scheduler));
 		org.assertj.core.api.Assertions.assertThatIllegalArgumentException()
-				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, "model",
-						Duration.ofSeconds(1), 0, -1, scheduler));
+				.isThrownBy(() -> new ThreadMessageDispatcher(registry, llm, msgPersistenceService, documents, json,
+						"model", Duration.ofSeconds(1), 0, -1, scheduler));
 	}
 
 	private static ThreadMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm) {
@@ -1227,8 +1278,18 @@ class ThreadMessageDispatcherTest {
 
 	private static ThreadMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
 			Duration timeout, int maxPending, VirtualTimeScheduler scheduler) {
-		return new ThreadMessageDispatcher(registry, llm, mock(MsgPersistenceService.class), "test-model", timeout,
-				maxPending, 20, scheduler);
+		return new ThreadMessageDispatcher(registry, llm, mock(MsgPersistenceService.class), noOpDocumentSearch(),
+				new ObjectMapper(), "test-model", timeout, maxPending, 20, scheduler);
+	}
+
+	/** 이 파일의 테스트는 RAG 검색을 다루지 않는다 — 항상 근거 없음으로 답해서 messages를 안
+	 * 건드리게 한다(이슈 #347 도입분). */
+	private static ThreadDocumentSearch noOpDocumentSearch() {
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.search(any(), any(), any(), any(), any())).thenReturn(Mono.just(
+				new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_PINNED_DOCUMENTS, "", false,
+						List.of())));
+		return documents;
 	}
 
 	private static ThreadMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
@@ -1238,8 +1299,9 @@ class ThreadMessageDispatcherTest {
 
 	private static ThreadMessageDispatcher dispatcher(RoomSessionRegistry registry, LlmChatStreamService llm,
 			MsgPersistenceService msgPersistenceService, int maxPending) {
-		return new ThreadMessageDispatcher(registry, llm, msgPersistenceService, "test-model",
-				Duration.ofSeconds(120), maxPending, 20, VirtualTimeScheduler.create());
+		return new ThreadMessageDispatcher(registry, llm, msgPersistenceService, noOpDocumentSearch(),
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), maxPending, 20,
+				VirtualTimeScheduler.create());
 	}
 
 	/** DIRECT 전용 — bootstrap 또는 비동기 저장이 미리 예약해뒀다고 가정하는 HUMAN·AGENT 자리. */

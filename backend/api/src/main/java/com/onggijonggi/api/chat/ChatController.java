@@ -26,6 +26,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : ChatController.java
@@ -43,14 +44,16 @@ public class ChatController {
 	private final MsgRepository msgRepository;
 	private final CurrentActorProvider currentActorProvider;
 	private final MsgFileService msgFileService;
+	private final ObjectMapper objectMapper;
 
 	public ChatController(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository, MsgRepository msgRepository,
-			CurrentActorProvider currentActorProvider, MsgFileService msgFileService) {
+			CurrentActorProvider currentActorProvider, MsgFileService msgFileService, ObjectMapper objectMapper) {
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.msgRepository = msgRepository;
 		this.currentActorProvider = currentActorProvider;
 		this.msgFileService = msgFileService;
+		this.objectMapper = objectMapper;
 	}
 
 	@GetMapping("/api/chat/sessions")
@@ -117,7 +120,7 @@ public class ChatController {
 				messages.stream().map(Msg::getId).toList());
 		return messages.stream()
 				.map(msg -> ChatMsgItem.from(msg, filesByMsgId.getOrDefault(msg.getId(), List.of()).stream()
-						.map(MsgFileView::from).toList()))
+						.map(MsgFileView::from).toList(), objectMapper))
 				.toList();
 	}
 

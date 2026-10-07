@@ -20,6 +20,7 @@ import org.springframework.web.server.ResponseStatusException;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : ThreadMessageQueryService.java
@@ -43,15 +44,17 @@ public class ThreadMessageQueryService {
 	private final AppUserRepository appUserRepository;
 	private final RankedDisplayNames rankedDisplayNames;
 	private final MsgFileService msgFileService;
+	private final ObjectMapper objectMapper;
 
 	public ThreadMessageQueryService(MsgRepository msgRepository, ThrMbrRepository thrMbrRepository,
 			AppUserRepository appUserRepository, RankedDisplayNames rankedDisplayNames,
-			MsgFileService msgFileService) {
+			MsgFileService msgFileService, ObjectMapper objectMapper) {
 		this.msgRepository = msgRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.appUserRepository = appUserRepository;
 		this.rankedDisplayNames = rankedDisplayNames;
 		this.msgFileService = msgFileService;
+		this.objectMapper = objectMapper;
 	}
 
 	/**
@@ -100,7 +103,8 @@ public class ThreadMessageQueryService {
 									.map(msg -> MsgItem.from(msg, subjectByThrMbrId.get(msg.getThrMbrId()),
 											displayNameFor(msg, subjectByThrMbrId, displayNameBySubject),
 											filesByMsgId.getOrDefault(msg.getId(), List.of()).stream()
-													.map(MsgFileView::from).toList()))
+													.map(MsgFileView::from).toList(),
+											objectMapper))
 									.toList());
 				});
 	}

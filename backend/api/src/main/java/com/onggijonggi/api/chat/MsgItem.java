@@ -4,6 +4,7 @@ import com.onggijonggi.common.chat.domain.Msg;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : MsgItem.java
@@ -21,6 +22,8 @@ import java.util.UUID;
  * @param createdAt 메시지 생성 시각
  * @param completedAt 완료 시각(PENDING이면 null)
  * @param attachments HUMAN 메시지에 실린 첨부. 없으면 빈 배열이다. WS chat.message의 같은 필드와 짝이다
+ * @param citations 방 문서 검색으로 찾은 근거(이슈 #347). 근거 없이 답했거나 HUMAN·SYSTEM 메시지면
+ *        빈 배열이다 — 실시간 스트리밍 DONE 프레임과 같은 값을 이력 조회에서도 복원한다
  */
 public record MsgItem(
 		UUID id,
@@ -32,13 +35,15 @@ public record MsgItem(
 		String authorDisplayName,
 		Instant createdAt,
 		Instant completedAt,
-		List<MsgFileView> attachments
+		List<MsgFileView> attachments,
+		List<Citation> citations
 ) {
 
-	static MsgItem from(Msg msg, String authorSubject, String authorDisplayName, List<MsgFileView> attachments) {
+	static MsgItem from(Msg msg, String authorSubject, String authorDisplayName, List<MsgFileView> attachments,
+			ObjectMapper objectMapper) {
 		return new MsgItem(msg.getId(), msg.getSeq(), msg.getAthKind().name(), msg.getStatus().name(),
 				msg.getContent(), authorSubject, authorDisplayName, msg.getCreatedAt(), msg.getCompletedAt(),
-				attachments);
+				attachments, Citation.fromSrcJson(objectMapper, msg.getSrcJson()));
 	}
 
 }

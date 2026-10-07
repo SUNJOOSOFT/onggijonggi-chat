@@ -8,6 +8,8 @@ import jakarta.persistence.Id;
 import jakarta.persistence.Table;
 import java.time.Instant;
 import java.util.UUID;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 /**
  * Class Name : Msg.java
@@ -59,6 +61,13 @@ public class Msg {
 	@Column(name = "completed_at")
 	private Instant completedAt;
 
+	/** 방 문서 검색(#344)으로 찾은 근거(Citation 목록)를 직렬화해 둔다(이슈 #347) — HUMAN·대부분의
+	 * AGENT 메시지는 null이다. jsonb 컬럼에 문자열을 그대로 넣으면 PostgreSQL이 받아들이지 않아
+	 * JSON 타입으로 바인딩한다(AuthorizationAudit와 같은 이유). */
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "src_json")
+	private String srcJson;
+
 	protected Msg() {
 	}
 
@@ -103,7 +112,13 @@ public class Msg {
 	}
 
 	public void complete(String content) {
+		complete(content, null);
+	}
+
+	/** citationsJson은 방 문서 검색으로 찾은 근거를 직렬화한 것이다(이슈 #347) — 없으면 null. */
+	public void complete(String content, String citationsJson) {
 		this.content = content;
+		this.srcJson = citationsJson;
 		this.status = MsgStatus.COMPLETE;
 		this.completedAt = Instant.now();
 	}
@@ -157,6 +172,10 @@ public class Msg {
 
 	public String getContent() {
 		return content;
+	}
+
+	public String getSrcJson() {
+		return srcJson;
 	}
 
 	public Instant getCreatedAt() {

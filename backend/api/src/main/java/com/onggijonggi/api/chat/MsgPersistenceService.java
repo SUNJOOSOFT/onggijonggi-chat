@@ -120,8 +120,14 @@ public class MsgPersistenceService {
 	/** msgId 행이 이미 없거나(DB 문제로 저장이 안 됐던 경우) 다른 이유로 못 찾으면 조용히 넘어간다. */
 	@Transactional
 	public void completeBlocking(UUID msgId, String content) {
+		completeBlocking(msgId, content, null);
+	}
+
+	/** citationsJson은 방 문서 검색(#344)으로 찾은 근거를 직렬화한 것이다(이슈 #347) — 없으면 null. */
+	@Transactional
+	public void completeBlocking(UUID msgId, String content, String citationsJson) {
 		msgRepository.findById(msgId).ifPresent(msg -> {
-			msg.complete(content);
+			msg.complete(content, citationsJson);
 			msgRepository.save(msg);
 		});
 	}

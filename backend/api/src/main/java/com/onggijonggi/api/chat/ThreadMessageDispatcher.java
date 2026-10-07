@@ -1,5 +1,8 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.auth.CurrentActor;
+import com.onggijonggi.api.rag.SearchResult;
+import com.onggijonggi.api.rag.ThreadDocumentSearch;
 import com.onggijonggi.common.chat.domain.AthKind;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.MsgFile;
@@ -33,6 +36,7 @@ import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Scheduler;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : ThreadMessageDispatcher.java
@@ -48,6 +52,10 @@ public class ThreadMessageDispatcher {
 	private final LlmChatStreamService llmChatStreamService;
 
 	private final MsgPersistenceService msgPersistenceService;
+
+	private final ThreadDocumentSearch threadDocumentSearch;
+
+	private final ObjectMapper json;
 
 	private final String modelId;
 
@@ -80,17 +88,20 @@ public class ThreadMessageDispatcher {
 	public ThreadMessageDispatcher(RoomSessionRegistry roomSessionRegistry,
 			LlmChatStreamService llmChatStreamService,
 			MsgPersistenceService msgPersistenceService,
+			ThreadDocumentSearch threadDocumentSearch,
+			ObjectMapper json,
 			@Value("${app.thread.ai.model:${spring.ai.openai.chat.options.model}}") String modelId,
 			@Value("${app.thread.ai.turn-timeout:120s}") Duration turnTimeout,
 			@Value("${app.thread.ai.max-pending-per-room:20}") int maxPendingPerRoom,
 			@Value("${app.thread.ai.max-context-messages:20}") int maxContextMessages) {
-		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, modelId, turnTimeout,
-				maxPendingPerRoom, maxContextMessages, Schedulers.parallel());
+		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, threadDocumentSearch, json, modelId,
+				turnTimeout, maxPendingPerRoom, maxContextMessages, Schedulers.parallel());
 	}
 
 	ThreadMessageDispatcher(RoomSessionRegistry roomSessionRegistry, LlmChatStreamService llmChatStreamService,
-			MsgPersistenceService msgPersistenceService, String modelId, Duration turnTimeout,
-			int maxPendingPerRoom, int maxContextMessages, Scheduler deadlineScheduler) {
+			MsgPersistenceService msgPersistenceService, ThreadDocumentSearch threadDocumentSearch, ObjectMapper json,
+			String modelId, Duration turnTimeout, int maxPendingPerRoom, int maxContextMessages,
+			Scheduler deadlineScheduler) {
 		if (modelId == null || modelId.isBlank()) {
 			throw new IllegalArgumentException("app.thread.ai.model must not be blank");
 		}
@@ -106,6 +117,8 @@ public class ThreadMessageDispatcher {
 		this.roomSessionRegistry = roomSessionRegistry;
 		this.llmChatStreamService = llmChatStreamService;
 		this.msgPersistenceService = msgPersistenceService;
+		this.threadDocumentSearch = threadDocumentSearch;
+		this.json = json;
 		this.modelId = modelId;
 		this.turnTimeout = turnTimeout;
 		this.maxPendingPerRoom = maxPendingPerRoom;
@@ -216,9 +229,9 @@ public class ThreadMessageDispatcher {
 				? fetchContextOnlyBlocking(command.threadId())
 				: persistHumanMessageAndFetchContext(msgId, seq, command);
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
-				msgId, command.files(), command.traceId(), command.fromSubject(),
-				TurnRef.of(command.turnId(), command.connectionId()), command.model(), context,
-				direct ? reserved : null, queued.terminalPersisted());
+				msgId, command.files(), command.traceId(), command.from(), command.fromSubject(),
+				command.fromDisplayName(), TurnRef.of(command.turnId(), command.connectionId()), command.model(),
+				context, direct ? reserved : null, queued.terminalPersisted());
 		ActiveTurn turnToStart = null;
 		boolean admitted = false;
 		// 등록 해제와 대기열 추가를 한 락 안에서 한다 — 사이가 벌어지면 그 틈에 온 취소가 어디서도
@@ -550,6 +563,7 @@ public class ThreadMessageDispatcher {
 
 		Disposable subscription = activeTurn.turn.context()
 				.flatMap(context -> promptMessages(activeTurn.turn, context))
+				.flatMap(messages -> augmentWithDocumentSearch(activeTurn, messages))
 				.flatMapMany(messages -> {
 					if (abandoned(activeTurn)) {
 						return Flux.<String>never();
@@ -610,6 +624,57 @@ public class ThreadMessageDispatcher {
 					return Mono.just(Map.of());
 				})
 				.map(files -> buildPromptMessages(context, files, turn));
+	}
+
+	/**
+	* 방에 고정·READY 문서가 있으면 방 문서 검색(#344)을 불러 근거를 프롬프트 맨 끝(이번 발화 바로
+	* 앞)에 system 메시지로 끼워 넣고, 실제로 쓰인 청크를 activeTurn.citations에 채운다(이슈 #347).
+	* buildPromptMessages가 항상 맨 끝에 이번 발화 하나만 user로 붙이므로, 그 앞까지가 "이번 발화
+	* 이전의 대화 history"다.
+	*
+	* FOUND가 아니면(NO_EVIDENCE·UNAVAILABLE) messages를 그대로 돌려준다 — 검색 실패가 답변 자체를
+	* 막지 않는다(UNAVAILABLE은 로그에만 남기고 사용자에게 노출하지 않는다). 검색 호출 자체가
+	* 예기치 않게 에러를 던져도 같은 이유로 삼킨다.
+	*/
+	private Mono<List<ChatMessage>> augmentWithDocumentSearch(ActiveTurn activeTurn, List<ChatMessage> messages) {
+		PendingTurn turn = activeTurn.turn;
+		List<ChatMessage> history = messages.subList(0, messages.size() - 1);
+		CurrentActor actor = new CurrentActor(turn.fromUserId(), turn.fromSubject(), turn.fromDisplayName());
+		return threadDocumentSearch.search(turn.threadId(), actor, turn.prompt(), history, modelIdFor(turn))
+				.map(result -> {
+					if (result.status() != SearchResult.Status.FOUND) {
+						if (result.status() == SearchResult.Status.UNAVAILABLE) {
+							log.warn("방 문서 검색을 끝내지 못해 근거 없이 답변한다 threadId={} traceId={} reason={}",
+									turn.threadId(), turn.traceId(), result.reason());
+						}
+						return messages;
+					}
+					activeTurn.citations = result.chunks().stream().map(this::toCitation).toList();
+					List<ChatMessage> withGrounding = new ArrayList<>(messages);
+					withGrounding.add(messages.size() - 1, new ChatMessage("system", groundingPrompt(result)));
+					return withGrounding;
+				})
+				.onErrorResume(error -> {
+					log.error("방 문서 검색 호출 실패 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
+					return Mono.just(messages);
+				});
+	}
+
+	private static String groundingPrompt(SearchResult result) {
+		StringBuilder prompt = new StringBuilder(
+				"다음은 이 방에 고정된 문서에서 찾은 근거입니다. 답변에 참고하되, 근거에 없는 내용은 추측하지 마세요.\n");
+		for (SearchResult.Chunk chunk : result.chunks()) {
+			prompt.append("- [").append(chunk.fileName()).append(' ').append(chunk.loc()).append("] ")
+					.append(chunk.content()).append('\n');
+		}
+		return prompt.toString();
+	}
+
+	/** 화면·재접속 복구가 쓸 citations 형태로 좁힌다 — 점수는 통과한 채널 것(둘 다 있으면 벡터)을 쓴다. */
+	private Citation toCitation(SearchResult.Chunk chunk) {
+		Double score = chunk.vectorScore() != null ? chunk.vectorScore() : chunk.keywordScore();
+		return new Citation(chunk.documentId().toString(), chunk.fileName(), chunk.content(),
+				score == null ? 0.0 : score);
 	}
 
 	/**
@@ -682,7 +747,8 @@ public class ThreadMessageDispatcher {
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
-							modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE))) {
+							modelIdFor(activeTurn.turn), activeTurn.seq, "", activeTurn.citations, false,
+							ChatAnswerStatus.DONE))) {
 				persistAgentCompletion(activeTurn, content);
 				closeGeneration(key, state);
 				return;
@@ -853,12 +919,24 @@ public class ThreadMessageDispatcher {
 		if (!activeTurn.terminalPersisted.compareAndSet(false, true)) {
 			return;
 		}
+		String citationsJson = citationsJson(activeTurn.citations);
 		activeTurn.pendingMsgId
-				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.completeBlocking(msgId, content))
+				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.completeBlocking(msgId, content, citationsJson))
 						.subscribeOn(Schedulers.boundedElastic())
 						.doOnError(e -> log.error("agent 메시지 완료 저장 실패 msgId={}", msgId, e)))
 				.onErrorComplete()
 				.subscribe();
+	}
+
+	/** 비어 있으면 null — 재접속 복구(ThreadWebSocketHandler)가 null을 "출처 없음"으로 본다. */
+	private String citationsJson(List<Citation> citations) {
+		if (citations.isEmpty()) return null;
+		try {
+			return json.writeValueAsString(citations);
+		} catch (RuntimeException e) {
+			log.error("citations 직렬화 실패", e);
+			return null;
+		}
 	}
 
 	private void persistAgentFailure(ActiveTurn activeTurn, MsgStatus terminalStatus) {
@@ -947,8 +1025,8 @@ public class ThreadMessageDispatcher {
 	* 이 턴을 부른 발화의 msg id와 첨부다 — 프롬프트에 첨부를 붙일 때 쓴다.
 	*/
 	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, UUID humanMsgId,
-			List<MsgFile> files, String traceId, String fromSubject, TurnRef ref,
-			String model, Mono<List<Msg>> context, ChatMessageCommand.ReservedTurn reservedTurn,
+			List<MsgFile> files, String traceId, UUID fromUserId, String fromSubject, String fromDisplayName,
+			TurnRef ref, String model, Mono<List<Msg>> context, ChatMessageCommand.ReservedTurn reservedTurn,
 			AtomicBoolean terminalPersisted) {
 
 		UUID turnId() {
@@ -970,6 +1048,10 @@ public class ThreadMessageDispatcher {
 
 		/** 지금까지 생성된 답변. 스트림 스레드가 쓰고 취소하는 스레드가 읽어서 StringBuffer다(이슈 #160). */
 		private final StringBuffer content = new StringBuffer();
+
+		/** 방 문서 검색(FOUND)으로 찾은 근거. LLM 호출 전에 한 번만 채워지고 그 뒤 완료 프레임이
+		 * 읽기만 하므로 volatile로 충분하다(이슈 #347). */
+		private volatile List<Citation> citations = List.of();
 
 		/**
 		* PENDING 행 생성 결과(성공 시 msgId, 실패 시 empty)를 캐시해 여러 번 구독해도 한 번만

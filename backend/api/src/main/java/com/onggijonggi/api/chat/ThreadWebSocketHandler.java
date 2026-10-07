@@ -430,7 +430,9 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 					.subscribeOn(Schedulers.boundedElastic())
 					.map(msg -> (WsFrame) new ChatAnswerFrame(threadId, stored.agentMessageId(), inbound.turnId(),
 							threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(),
-							msg.map(Msg::getContent).orElse(""), List.of(), false, ChatAnswerStatus.DONE));
+							msg.map(Msg::getContent).orElse(""),
+							msg.map(m -> Citation.fromSrcJson(objectMapper, m.getSrcJson())).orElse(List.of()), false,
+							ChatAnswerStatus.DONE));
 			case CANCELLED -> Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(),
 					inbound.turnId(), threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), "",
 					List.of(), false, ChatAnswerStatus.CANCELLED));

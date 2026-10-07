@@ -4,6 +4,7 @@ import com.onggijonggi.common.chat.domain.Msg;
 import java.time.Instant;
 import java.util.List;
 import java.util.UUID;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : ChatMsgItem.java
@@ -13,21 +14,23 @@ import java.util.UUID;
  * @param content 메시지 본문
  * @param createdAt 메시지 생성 시각
  * @param attachments user 메시지에 실린 첨부. 없으면 빈 배열이다
+ * @param citations 방 문서 검색으로 찾은 근거(이슈 #347). 근거 없이 답했거나 user·system 메시지면 빈 배열이다
  */
 public record ChatMsgItem(
 		UUID id,
 		String role,
 		String content,
 		Instant createdAt,
-		List<MsgFileView> attachments
+		List<MsgFileView> attachments,
+		List<Citation> citations
 ) {
 
-	static ChatMsgItem from(Msg msg, List<MsgFileView> attachments) {
+	static ChatMsgItem from(Msg msg, List<MsgFileView> attachments, ObjectMapper objectMapper) {
 		return new ChatMsgItem(msg.getId(), switch (msg.getAthKind()) {
 			case HUMAN -> "user";
 			case AGENT -> "assistant";
 			case SYSTEM -> "system";
-		}, msg.getContent(), msg.getCreatedAt(), attachments);
+		}, msg.getContent(), msg.getCreatedAt(), attachments, Citation.fromSrcJson(objectMapper, msg.getSrcJson()));
 	}
 
 }

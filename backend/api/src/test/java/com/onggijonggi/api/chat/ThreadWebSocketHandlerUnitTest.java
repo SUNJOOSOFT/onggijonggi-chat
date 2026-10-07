@@ -2,6 +2,8 @@ package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.authz.MemberAttribute;
 import com.onggijonggi.api.authz.MemberAttributes;
+import com.onggijonggi.api.rag.SearchResult;
+import com.onggijonggi.api.rag.ThreadDocumentSearch;
 import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
@@ -34,6 +36,7 @@ import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
 import reactor.core.publisher.Sinks;
 import reactor.core.scheduler.Schedulers;
+import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.json.JsonMapper;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -424,8 +427,8 @@ class ThreadWebSocketHandlerUnitTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
-				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
-				Schedulers.parallel());
+				mock(MsgPersistenceService.class), noOpDocumentSearch(), new ObjectMapper(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
 				provisioning, membership, directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
@@ -489,8 +492,8 @@ class ThreadWebSocketHandlerUnitTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
-				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
-				Schedulers.parallel());
+				mock(MsgPersistenceService.class), noOpDocumentSearch(), new ObjectMapper(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
 				provisioning, membership, directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
@@ -641,8 +644,8 @@ class ThreadWebSocketHandlerUnitTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
-				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
-				Schedulers.parallel());
+				mock(MsgPersistenceService.class), noOpDocumentSearch(), new ObjectMapper(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
 		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher),
 				provisioning, membership, mock(DirectChatTurnService.class), noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
@@ -822,8 +825,8 @@ class ThreadWebSocketHandlerUnitTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
-				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
-				Schedulers.parallel());
+				mock(MsgPersistenceService.class), noOpDocumentSearch(), new ObjectMapper(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
 		CollabAuthorizationRevoker revoker = new CollabAuthorizationRevoker(registry, dispatcher);
 		configure.accept(revoker);
 		Mono<Void> handling = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
@@ -887,11 +890,21 @@ class ThreadWebSocketHandlerUnitTest {
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.never());
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
-				mock(MsgPersistenceService.class), "test-model", Duration.ofSeconds(120), 20, 20,
-				Schedulers.parallel());
+				mock(MsgPersistenceService.class), noOpDocumentSearch(), new ObjectMapper(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
 		return new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
 				new CollabAuthorizationRevoker(registry, dispatcher), provisioning,
 				admittingMembership(), directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS, messagesPerWindow);
+	}
+
+	/** 이 파일의 테스트는 RAG 검색을 다루지 않는다 — 항상 근거 없음으로 답해서 messages를 안
+	 * 건드리게 한다(이슈 #347 도입분). */
+	private static ThreadDocumentSearch noOpDocumentSearch() {
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.search(any(), any(), any(), any(), any())).thenReturn(Mono.just(
+				new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_PINNED_DOCUMENTS, "", false,
+						List.of())));
+		return documents;
 	}
 
 }
