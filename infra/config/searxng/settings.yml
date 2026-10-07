@@ -1,0 +1,14 @@
+# SearXNG 설정 — bff의 웹 검색 도구(app.web.search.provider=searxng)가 JSON으로 부른다.
+# 나머지는 SearXNG 기본값을 쓴다(use_default_settings). secret_key는 compose가 SEARXNG_SECRET 환경변수로 넣는다.
+use_default_settings: true
+
+server:
+  # bff만 app-net 안에서 부르고 밖으로 열지 않으므로 봇 제한(limiter)과 이미지 프록시는 끈다.
+  limiter: false
+  image_proxy: false
+
+search:
+  # json이 없으면 /search?format=json이 403이다.
+  formats:
+    - html
+    - json

@@ -209,6 +209,21 @@ services:
     networks:
       - app-net
 
+  searxng:
+    image: searxng/searxng:2026.10.4-d48c4b555
+    container_name: infra-searxng
+    # 웹 검색 공급자(선택). .env에 COMPOSE_PROFILES=searxng와 WEB_SEARCH_PROVIDER=searxng를 넣어야 쓴다.
+    profiles:
+      - searxng
+    restart: unless-stopped
+    # 포트를 밖으로 열지 않는다. bff만 app-net 안에서 searxng:8080으로 부른다. 외부 검색엔진으로 나가는 통신은 필요하다.
+    environment:
+      SEARXNG_SECRET: ${SEARXNG_SECRET:-}
+    volumes:
+      - ./config/searxng/settings.yml:/etc/searxng/settings.yml:ro
+    networks:
+      - app-net
+
   bff:
     build:
       context: ../backend
@@ -250,6 +265,11 @@ services:
       APP_RAG_EMBEDDING_MODEL: ${EMBEDDING_MODEL:-bge-m3}
       APP_RAG_REWRITE_MODEL: ${RAG_REWRITE_MODEL:-}
       APP_RAG_SEARCH_API_ENABLED: ${RAG_SEARCH_API_ENABLED:-true}
+      # AI 턴의 웹 검색·웹 읽기 도구. 기본 공급자 duckduckgo는 키가 필요 없지만 비공식이라 차단될 수 있다.
+      # searxng로 바꾸려면 COMPOSE_PROFILES에 searxng를 넣고 WEB_SEARCH_PROVIDER=searxng로 둔다.
+      APP_WEB_ENABLED: ${WEB_TOOLS_ENABLED:-true}
+      APP_WEB_SEARCH_PROVIDER: ${WEB_SEARCH_PROVIDER:-duckduckgo}
+      APP_WEB_SEARXNG_URL: http://searxng:8080
       APP_CORS_ALLOWED_ORIGINS: ${PUBLIC_FRONTEND_URL:-http://localhost:3010}
     volumes:
       # 조직 구조 설정. 두 파일을 모두 마운트하고 프로필이 고른다(application-prod / application-casbin.properties).
