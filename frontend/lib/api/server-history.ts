@@ -34,10 +34,10 @@ export interface ChatMsgItem {
 }
 
 /**
- * 인증 세션의 accessToken을 Bearer로 붙여 BFF를 GET한다. 세션이 없으면 null,
- * 리프레시 실패(session.error)나 401 응답이면 REAUTH_REQUIRED를 반환한다 — 둘 다
- * "재인증 필요"를 뜻하지만 세션이 아예 없는 경우(미들웨어가 이미 걸러내는 경로)와는
- * 구분해둔다.
+ * 인증 세션의 accessToken을 Bearer로 붙여 BFF를 GET한다. 세션이 없거나 BFF에 연결 자체가
+ * 안 되면(이슈 #313) null, 리프레시 실패(session.error)나 401 응답이면 REAUTH_REQUIRED를
+ * 반환한다 — REAUTH_REQUIRED는 "재인증 필요"를 뜻하지만 세션이 아예 없는 경우(미들웨어가
+ * 이미 걸러내는 경로)와는 구분해둔다.
  */
 async function authorizedGet(
   path: string,
@@ -46,10 +46,17 @@ async function authorizedGet(
   if (!session?.accessToken) return null;
   // 리프레시가 이미 실패로 확정된 세션은 401로 왕복할 뿐이니 요청 자체를 생략한다.
   if (session.error === 'RefreshAccessTokenError') return REAUTH_REQUIRED;
-  const res = await fetch(serverBffUrl(path), {
-    headers: { Authorization: `Bearer ${session.accessToken}` },
-    cache: 'no-store',
-  });
+  let res: Response;
+  try {
+    res = await fetch(serverBffUrl(path), {
+      headers: { Authorization: `Bearer ${session.accessToken}` },
+      cache: 'no-store',
+    });
+  } catch {
+    // BFF가 응답조차 못 하면(연결 거부 등) fetch()가 던진다 — 4xx/5xx 응답과 같은 경로로
+    // 흡수해 서버 컴포넌트가 그대로 죽지 않게 한다(이슈 #313).
+    return null;
+  }
   if (res.status === 401) return REAUTH_REQUIRED;
   return res;
 }

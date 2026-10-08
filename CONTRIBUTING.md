@@ -108,8 +108,8 @@ docs: 빠른 시작 누락 단계 보완
 
 `dev`로 보낸다. 저장소 기본 브랜치가 `dev`라 PR을 열면 대상이 자동으로 잡힌다 — `main`으로
 바뀌어 있으면 되돌린다. **PR 제목도 커밋과 같은 `타입(scope): 요약` 규칙으로 쓴다** — squash
-머지라 제목이 그대로 `dev`의 커밋 메시지가 된다. 그 제목이 릴리스 버전을 정하므로(아래
-"릴리스") 타입을 정확히 쓴다.
+머지라 제목이 그대로 `dev`의 커밋 메시지가 된다. 타입은 커밋 이력을 읽기 쉽게 하려는 것이고,
+릴리스 버전은 타입이 아니라 아래 "릴리스"의 규칙으로 정해진다.
 
 본문의 `Closes #`에 이슈 번호를 적으면 머지될 때 이슈가 함께 닫힌다. 이슈를 닫는 PR이 아니면
 `Refs #`로 바꾼다.
@@ -131,9 +131,14 @@ PR을 열면 `static-checks`가 마이그레이션 SQL의 용어집·설계 불�
 머지해 릴리스한다.
 
 태깅은 자동이다. `main`에 푸시되면 `release-tag.yml`이 `scripts/compute-next-version.mjs`로
-다음 버전을 계산해 태그와 GitHub Release를 만든다 — 계산 근거가 커밋 제목의 conventional
-commit 타입이라 규칙을 지키지 않으면 버전이 틀어진다. `dev`에 푸시되면
+다음 버전을 계산해 태그와 GitHub Release를 만든다. `dev`에 푸시되면
 `dev-prerelease-tag.yml`이 `vX.Y.Z-dev.N` 형태의 prerelease 태그를 붙인다.
+
+버전은 `feat`·`fix` 구분 없이 마지막 정식 태그에서 **patch만** 올라간다. minor는 한 차수를
+마치고 정식 배포할 때만 올리며, 그때 저장소 루트의 `release-as` 파일에 올릴 버전(예: `v0.4.0`)을
+적어 `dev`에 넣는다. 그 버전이 마지막 정식 태그보다 클 때만 쓰이고, 릴리스된 뒤에는 지우지
+않아도 저절로 무시된다. 형식이 `vX.Y.Z`가 아니면 계산이 실패한다. 그래서 `vN.0.0`처럼 minor가
+오른 릴리스는 한 차수를 마친 정식 배포다.
 
 ### 긴급 수정(hotfix)
 
@@ -148,7 +153,7 @@ git checkout -b 57-token-audience-npe upstream/main   # dev가 아니라 main에
 PR을 열 때 **대상 브랜치를 `main`으로 직접 바꾼다.** 기본 브랜치가 `dev`라 그대로 두면 `dev`로
 올라가고, 그러면 긴급 수정이 아니라 평범한 PR이 된다.
 
-머지되면 `release-tag.yml`이 patch 버전을 자동 태깅한다(`fix:`는 patch bump).
+머지되면 `release-tag.yml`이 patch 버전을 자동 태깅한다(`feat`·`fix` 모두 patch).
 
 **머지 뒤 메인테이너가 `main`을 `dev`로 역머지한다.** 이걸 빼먹으면 `dev`에서는 그 태그가
 도달 불가라, `compute-next-version.mjs`가 이미 나간 버전을 다음 버전으로 다시 계산한다 —

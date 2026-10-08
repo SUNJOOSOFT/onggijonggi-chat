@@ -36,7 +36,7 @@ jobs:
         run: node scripts/validate-invariants.mjs backend/common/src/main/resources/db/migration/*.sql
 
       - name: Flyway migration 검사 테스트
-        run: node --test scripts/validate-flyway-migrations.test.mjs scripts/flyway-migration.test.mjs
+        run: node --test scripts/validate-flyway-migrations.test.mjs scripts/flyway-migration.test.mjs scripts/compute-next-version.test.mjs
 
       - name: Flyway migration 버전 검사
         run: |
