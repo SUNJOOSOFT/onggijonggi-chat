@@ -1,5 +1,8 @@
-// compute-next-version.mjs가 커밋 타입으로 minor·major를 올리지 않고 release-as로만 올리는지 검증한다.
-// `node --test`로 실행되는 테스트 파일이므로 CLI가 아니며 shebang을 붙이지 않는다.
+/********************************************************
+ 파일명 : compute-next-version.test.mjs
+ 설 명 : compute-next-version.mjs가 커밋 타입으로 minor·major를 올리지 않고 release-as로만
+ 올리는지 검증한다. `node --test`로 실행한다.
+ *********************************************************/
 
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';

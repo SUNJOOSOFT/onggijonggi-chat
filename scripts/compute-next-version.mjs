@@ -1,4 +1,10 @@
 #!/usr/bin/env node
+/********************************************************
+ 파일명 : compute-next-version.mjs
+ 설 명 : 마지막 정식 태그에서 다음 릴리스 버전을 계산한다. 항상 patch만 올리고, minor·major는
+ 저장소 루트의 release-as 파일에 적은 버전으로만 올린다. release-tag.yml과
+ dev-prerelease-tag.yml이 출력(JSON)을 읽는다.
+ *********************************************************/
 import { execFileSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';

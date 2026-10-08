@@ -153,7 +153,7 @@ git checkout -b 57-token-audience-npe upstream/main   # dev가 아니라 main에
 PR을 열 때 **대상 브랜치를 `main`으로 직접 바꾼다.** 기본 브랜치가 `dev`라 그대로 두면 `dev`로
 올라가고, 그러면 긴급 수정이 아니라 평범한 PR이 된다.
 
-머지되면 `release-tag.yml`이 patch 버전을 자동 태깅한다(`fix:`는 patch bump).
+머지되면 `release-tag.yml`이 patch 버전을 자동 태깅한다(`feat`·`fix` 모두 patch).
 
 **머지 뒤 메인테이너가 `main`을 `dev`로 역머지한다.** 이걸 빼먹으면 `dev`에서는 그 태그가
 도달 불가라, `compute-next-version.mjs`가 이미 나간 버전을 다음 버전으로 다시 계산한다 —
