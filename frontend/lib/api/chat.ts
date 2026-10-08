@@ -28,6 +28,10 @@ export interface Citation {
   title: string;
   snippet: string;
   score: number;
+  /** 이 근거가 나온 청크의 식별자(이슈 #352). 같은 문서에서 청크 여러 개가 근거로 쓰이면
+   * docId가 같아지므로, 화면이 항목을 구분하는 키로 쓴다. 위치 필드가 없던 과거 메시지의
+   * citations에는 없을 수 있다. */
+  chunkId?: string;
   /** 문서 내 위치(PDF는 "page=N", 그 외는 "para=N", 이슈 #352). 위치 필드가 없던 과거
    * 메시지의 citations에는 없을 수 있다. */
   loc?: string;

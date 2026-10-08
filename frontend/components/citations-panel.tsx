@@ -7,6 +7,8 @@
  restrictedResultsOmitted는 건수·제목 없이 제네릭 문구만 덧붙인다(판정은 서버 몫).
  score는 숫자 그대로 보여주고 색으로 등급화하지 않는다 — 등급 판정은 CLIENT 몫이 아니다.
  loc은 "N쪽"·"N번째 문단"으로 바꿔 보여주고, 과거 메시지처럼 없거나 모양이 다르면 생략한다(이슈 #352).
+ 같은 문서에서 청크 여러 개가 근거로 쓰이면 docId가 같아지므로, 목록 key는 chunkId를 우선
+ 쓰고 없으면(과거 메시지) 배열 index로 보강한다.
  *********************************************************/
 
 import { AnimatePresence, motion } from 'framer-motion';
@@ -84,11 +86,11 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
             transition={{ duration: 0.15 }}
             className="flex flex-col gap-2 px-2 pb-2 max-w-md overflow-hidden"
           >
-            {citations.map((citation) => {
+            {citations.map((citation, index) => {
               const loc = formatLoc(citation.loc);
               return (
                 <li
-                  key={citation.docId}
+                  key={citation.chunkId ?? `${citation.docId}-${index}`}
                   className="rounded-md border bg-muted/40 p-2 text-muted-foreground"
                 >
                   <div className="font-medium text-foreground">

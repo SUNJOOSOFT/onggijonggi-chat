@@ -11,6 +11,7 @@
     "title" : "제목",
     "snippet" : "발췌",
     "score" : 0.91,
+    "chunkId" : "chunk-001",
     "loc" : "page=1"
   } ],
   "restrictedResultsOmitted" : false,

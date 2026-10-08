@@ -14,6 +14,9 @@ const citationSchema = z.object({
   title: z.string(),
   snippet: z.string(),
   score: z.number(),
+  /** 같은 문서에서 청크 여러 개가 근거로 쓰이면 docId가 같아지므로, 화면이 항목을 구분하는
+   * 키로 쓴다. 위치가 없던 과거 메시지의 citations에는 없을 수 있다(이슈 #352). */
+  chunkId: z.string().optional(),
   /** 위치가 없던 과거 메시지의 citations에는 없을 수 있다(이슈 #352). */
   loc: z.string().optional(),
 });
