@@ -123,6 +123,7 @@ PR을 열면 `static-checks`가 마이그레이션 SQL의 용어집·설계 불�
 `flyway-postgres`는 빈 PostgreSQL 16에 전체 migration을 실제 적용한다. Hibernate 매핑과 SQL 제약의 의미는 별도 절차로 확인한다.
 
 승인 1명이면 메인테이너가 **squash**로 머지한다 — PR 하나가 `dev`에 커밋 하나로 남는다.
+(릴리스 PR과 역머지 PR만 예외로 merge commit이다. 아래 "릴리스" 참고.)
 리뷰가 오래 조용하면 PR에 댓글로 깨워주면 된다.
 
 ## 릴리스
@@ -139,6 +140,23 @@ PR을 열면 `static-checks`가 마이그레이션 SQL의 용어집·설계 불�
 적어 `dev`에 넣는다. 그 버전이 마지막 정식 태그보다 클 때만 쓰이고, 릴리스된 뒤에는 지우지
 않아도 저절로 무시된다. 형식이 `vX.Y.Z`가 아니면 계산이 실패한다. 그래서 `vN.0.0`처럼 minor가
 오른 릴리스는 한 차수를 마친 정식 배포다.
+
+### 릴리스 PR과 역머지 PR
+
+- 릴리스 PR(`dev`→`main`)과 `main`→`dev` 역머지 PR은 **Create a merge commit**으로 머지한다.
+  squash는 `dev`행 PR과 hotfix PR(`main`행)에만 쓴다. 릴리스 PR을 squash로 머지하면 `dev`의 커밋이 `main`의
+  조상이 되지 않아 `compute-next-version.mjs`가 정식 태그를 찾지 못하고, 이미 나간 번호를 다시
+  계산해 릴리스가 실패한다.
+- 한 차수의 중간 시점으로 릴리스해야 하면(`dev`에 다음 차수 작업이 이미 섞인 경우) 그 시점
+  커밋에서 `<이슈번호>-release-vX.Y.Z` 브랜치를 따서 `main`으로 PR을 연다.
+- 역머지 PR의 `Update branch`는 "Update with merge commit"으로 한다. rebase는 이력을 다시 써서
+  정식 태그가 도달하는 관계를 깨뜨릴 수 있다.
+- 릴리스·역머지가 끝나기 전에는 `dev`에 다른 PR을 머지하지 않는다. dev 태그 번호가 기존 태그
+  개수에 1을 더해 정해져서, 거의 동시에 머지되면 같은 번호를 만들려다 한쪽이 실패할 수 있다.
+- 정식 태그(`vX.Y.Z`)는 지우거나 옮기지 않는다. dev 태그 이름을 정리해야 하면 새 이름을 먼저
+  만들어 확인한 뒤 옛 태그를 지우고, 팀원은 `git fetch --prune --prune-tags upstream`으로
+  정리한다.
+- Releases 목록에는 정식 릴리스만 보이고, dev 태그는 Tags(Code → Tags)에서만 보인다.
 
 ### 긴급 수정(hotfix)
 
