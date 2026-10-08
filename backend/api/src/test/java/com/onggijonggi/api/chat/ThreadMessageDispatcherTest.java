@@ -671,7 +671,7 @@ class ThreadMessageDispatcherTest {
 				.extracting(frame -> frame.citations())
 				.first()
 				.satisfies(citations -> assertThat((List<Citation>) citations).containsExactly(
-						new Citation(docId.toString(), "규정.pdf", "연차는 사흘 전에 신청한다.", 0.9)));
+						new Citation(docId.toString(), "규정.pdf", "연차는 사흘 전에 신청한다.", 0.9, "page=1")));
 
 		ArgumentCaptor<String> citationsJson = ArgumentCaptor.forClass(String.class);
 		verify(msgPersistenceService, timeout(1000)).completeBlocking(eq(pending.getId()), eq("답"),

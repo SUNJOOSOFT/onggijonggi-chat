@@ -14,6 +14,8 @@ const citationSchema = z.object({
   title: z.string(),
   snippet: z.string(),
   score: z.number(),
+  /** 위치가 없던 과거 메시지의 citations에는 없을 수 있다(이슈 #352). */
+  loc: z.string().optional(),
 });
 
 /** 이슈 #10 코멘트에서 확정된 통합 답변 패킷 — chat.token/chat.done/(제안했던)chat.citation을

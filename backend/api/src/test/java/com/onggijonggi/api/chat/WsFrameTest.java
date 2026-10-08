@@ -35,7 +35,7 @@ class WsFrameTest {
 	@Test
 	void citationOnlyAnswerFrameIsValid() throws Exception {
 		UUID threadId = UUID.randomUUID();
-		List<Citation> citations = List.of(new Citation("doc-001", "제목", "발췌", 0.91));
+		List<Citation> citations = List.of(new Citation("doc-001", "제목", "발췌", 0.91, "page=1"));
 		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "", citations, false, ChatAnswerStatus.STREAMING);
 
 		String json = objectMapper.writeValueAsString(frame);
@@ -114,7 +114,7 @@ class WsFrameTest {
 		PresenceParticipant participant = new PresenceParticipant("kc-1", "주성민");
 		List<WsFrame> frames = List.of(
 				new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "delta",
-						List.of(new Citation("doc-001", "제목", "발췌", 0.91)), false, ChatAnswerStatus.DONE),
+						List.of(new Citation("doc-001", "제목", "발췌", 0.91, "page=1")), false, ChatAnswerStatus.DONE),
 				new PresenceJoinFrame(threadId, participant.subject(), participant.displayName()),
 				new PresenceLeaveFrame(threadId, participant.subject(), participant.displayName()),
 				new PresenceSnapshotFrame(threadId, List.of(participant)),

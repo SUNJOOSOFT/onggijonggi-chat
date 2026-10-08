@@ -10,8 +10,10 @@ import tools.jackson.databind.ObjectMapper;
  * Description : 근거 인용 문서 한 건. ChatAnswerFrame.citations의 원소 타입이다. 프론트엔드
  *               CitationsResponse 타입(frontend/lib/api/chat.ts)의 citation 항목과 필드
  *               구성이 같다.
+ * @param loc 그 청크의 문서 내 위치(PDF는 "page=N", 그 외는 "para=N", 이슈 #352). 위치 필드가
+ *        없던 과거 메시지의 역직렬화 호환을 위해 null을 허용한다.
  */
-public record Citation(String docId, String title, String snippet, double score) {
+public record Citation(String docId, String title, String snippet, double score, String loc) {
 
 	private static final Logger log = LoggerFactory.getLogger(Citation.class);
 

@@ -28,6 +28,9 @@ export interface Citation {
   title: string;
   snippet: string;
   score: number;
+  /** 문서 내 위치(PDF는 "page=N", 그 외는 "para=N", 이슈 #352). 위치 필드가 없던 과거
+   * 메시지의 citations에는 없을 수 있다. */
+  loc?: string;
 }
 
 export interface CitationsResponse {

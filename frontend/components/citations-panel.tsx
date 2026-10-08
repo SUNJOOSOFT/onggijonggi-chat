@@ -6,6 +6,7 @@
  채팅의 병렬 조회 loading과 협업방 `chat.answer`의 즉시 success 상태를 함께 표현한다.
  restrictedResultsOmitted는 건수·제목 없이 제네릭 문구만 덧붙인다(판정은 서버 몫).
  score는 숫자 그대로 보여주고 색으로 등급화하지 않는다 — 등급 판정은 CLIENT 몫이 아니다.
+ loc은 "N쪽"·"N번째 문단"으로 바꿔 보여주고, 과거 메시지처럼 없거나 모양이 다르면 생략한다(이슈 #352).
  *********************************************************/
 
 import { AnimatePresence, motion } from 'framer-motion';
@@ -13,6 +14,17 @@ import { useId, useState } from 'react';
 
 import type { Citation } from '@/lib/api/chat';
 import { ChevronDownIcon, LoaderIcon, LockIcon } from './icons';
+
+/** loc("page=N"·"para=N")을 사람이 읽는 위치 문구로 바꾼다(이슈 #352). 모양이 다르거나
+ * 없으면(과거 메시지) null — 호출부가 위치 표시 자체를 건너뛴다. */
+function formatLoc(loc: string | undefined): string | null {
+  if (!loc) return null;
+  const page = loc.match(/^page=(\d+)$/);
+  if (page) return `${page[1]}쪽`;
+  const para = loc.match(/^para=(\d+)$/);
+  if (para) return `${para[1]}번째 문단`;
+  return null;
+}
 
 export interface CitationsState {
   status: 'loading' | 'error' | 'success';
@@ -72,20 +84,26 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
             transition={{ duration: 0.15 }}
             className="flex flex-col gap-2 px-2 pb-2 max-w-md overflow-hidden"
           >
-            {citations.map((citation) => (
-              <li
-                key={citation.docId}
-                className="rounded-md border bg-muted/40 p-2 text-muted-foreground"
-              >
-                <div className="font-medium text-foreground">
-                  {citation.title}{' '}
-                  <span className="text-muted-foreground">
-                    ({Math.round(citation.score * 100)}%)
-                  </span>
-                </div>
-                <div>{citation.snippet}</div>
-              </li>
-            ))}
+            {citations.map((citation) => {
+              const loc = formatLoc(citation.loc);
+              return (
+                <li
+                  key={citation.docId}
+                  className="rounded-md border bg-muted/40 p-2 text-muted-foreground"
+                >
+                  <div className="font-medium text-foreground">
+                    {citation.title}
+                    {loc && (
+                      <span className="text-muted-foreground"> · {loc}</span>
+                    )}{' '}
+                    <span className="text-muted-foreground">
+                      ({Math.round(citation.score * 100)}%)
+                    </span>
+                  </div>
+                  <div>{citation.snippet}</div>
+                </li>
+              );
+            })}
           </motion.ul>
         )}
       </AnimatePresence>

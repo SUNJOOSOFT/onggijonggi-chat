@@ -674,7 +674,7 @@ public class ThreadMessageDispatcher {
 	private Citation toCitation(SearchResult.Chunk chunk) {
 		Double score = chunk.vectorScore() != null ? chunk.vectorScore() : chunk.keywordScore();
 		return new Citation(chunk.documentId().toString(), chunk.fileName(), chunk.content(),
-				score == null ? 0.0 : score);
+				score == null ? 0.0 : score, chunk.loc());
 	}
 
 	/**
