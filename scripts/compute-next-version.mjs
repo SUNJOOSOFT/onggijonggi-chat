@@ -1,5 +1,9 @@
 #!/usr/bin/env node
 import { execFileSync } from 'node:child_process';
+import { existsSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+
+const STABLE_TAG = /^v\d+\.\d+\.\d+$/;
 
 function git(args) {
   return execFileSync('git', args, { encoding: 'utf8' }).trim();
@@ -14,38 +18,34 @@ function compareSemver(a, b) {
   return 0;
 }
 
+// minor·major는 커밋 타입으로 올리지 않는다. 한 차수를 마치고 정식 배포할 때 저장소 루트의
+// release-as 파일에 올릴 버전(예: v0.4.0)을 적는다. 마지막 정식 태그보다 클 때만 쓰이므로,
+// 릴리스된 뒤에는 지우지 않아도 저절로 무시된다.
+function readReleaseAs() {
+  const path = join(git(['rev-parse', '--show-toplevel']), 'release-as');
+  if (!existsSync(path)) return null;
+  const value = readFileSync(path, 'utf8').trim();
+  if (!STABLE_TAG.test(value)) {
+    throw new Error(`release-as 형식이 vX.Y.Z가 아니다: "${value}"`);
+  }
+  return value;
+}
+
 const stableTags = git(['tag', '--merged', 'HEAD', '--list', 'v*'])
   .split('\n')
-  .filter((tag) => /^v\d+\.\d+\.\d+$/.test(tag))
+  .filter((tag) => STABLE_TAG.test(tag))
   .sort(compareSemver);
 
 const lastTag = stableTags.at(-1) ?? 'v0.0.0';
-const range = stableTags.length ? `${lastTag}..HEAD` : 'HEAD';
-
-const hashes = git(['log', range, '--format=%H']).split('\n').filter(Boolean);
+const [major, minor, patch] = lastTag.slice(1).split('.').map(Number);
 
 let bump = 'patch';
-for (const hash of hashes) {
-  const subject = git(['log', '-1', '--format=%s', hash]);
-  const body = git(['log', '-1', '--format=%B', hash]);
-  const isBreaking = /^[a-zA-Z]+(\([^)]*\))?!:/.test(subject) || /^BREAKING CHANGE:/m.test(body);
-  if (isBreaking) {
-    bump = 'major';
-    break;
-  }
-  if (/^feat(\([^)]*\))?:/.test(subject)) {
-    bump = 'minor';
-  }
+let nextVersion = `v${major}.${minor}.${patch + 1}`;
+
+const releaseAs = readReleaseAs();
+if (releaseAs && compareSemver(releaseAs, lastTag) > 0) {
+  bump = 'release-as';
+  nextVersion = releaseAs;
 }
 
-const [major, minor, patch] = lastTag.slice(1).split('.').map(Number);
-const next =
-  bump === 'major'
-    ? [major + 1, 0, 0]
-    : bump === 'minor'
-      ? [major, minor + 1, 0]
-      : [major, minor, patch + 1];
-
-process.stdout.write(
-  JSON.stringify({ lastTag, bump, nextVersion: `v${next.join('.')}` }),
-);
+process.stdout.write(JSON.stringify({ lastTag, bump, nextVersion }));
