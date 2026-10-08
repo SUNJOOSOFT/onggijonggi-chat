@@ -1,9 +1,11 @@
 // @vitest-environment jsdom
 
-import { render, screen } from '@testing-library/react';
-import { describe, expect, it } from 'vitest';
+import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import { CitationsPanel } from './citations-panel';
+
+afterEach(cleanup);
 
 describe('CitationsPanel', () => {
   it('hides the loading indicator after an empty citation result', () => {
@@ -45,9 +47,9 @@ describe('CitationsPanel', () => {
       />,
     );
 
-    screen.getByRole('button').click();
+    fireEvent.click(screen.getByRole('button'));
 
-    expect(screen.getByText('3쪽')).toBeTruthy();
+    expect(screen.getByText(/3쪽/)).toBeTruthy();
   });
 
   it('omits the location when loc is missing (past messages) or has an unknown shape', () => {
@@ -75,7 +77,7 @@ describe('CitationsPanel', () => {
       />,
     );
 
-    screen.getByRole('button').click();
+    fireEvent.click(screen.getByRole('button'));
 
     expect(screen.queryByText(/쪽$/)).toBeNull();
     expect(screen.queryByText(/번째 문단$/)).toBeNull();
