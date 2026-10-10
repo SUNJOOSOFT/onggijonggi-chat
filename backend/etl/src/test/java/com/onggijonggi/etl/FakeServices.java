@@ -18,7 +18,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 /**
  * Class Name : FakeServices.java
- * Description : 통합 테스트용 가짜 문서 워커(원본 GET)와 OpenAI 호환 임베딩 서버. 일시 장애·차원 불일치·응답 지연을 테스트가 조절한다.
+ * Description : 통합 테스트용 가짜 문서 워커(원본 GET)와 OpenAI 호환 임베딩·대화(태깅) 서버. 일시 장애·차원 불일치·응답 지연을 테스트가 조절한다.
  */
 final class FakeServices implements AutoCloseable {
 
@@ -32,6 +32,11 @@ final class FakeServices implements AutoCloseable {
 	/** null이 아니면 임베딩 응답을 이 래치가 풀릴 때까지 미룬다. */
 	volatile CountDownLatch embeddingGate;
 	final AtomicInteger embeddingCalls = new AtomicInteger();
+	/** 0보다 크면 그만큼 태깅(대화) 요청에 503을 준다. */
+	final AtomicInteger chatFailures = new AtomicInteger();
+	final AtomicInteger chatCalls = new AtomicInteger();
+	/** 태깅 응답 본문(모델이 돌려준 content). */
+	volatile String chatAnswer = "{\"category\":\"인사·총무\",\"keywords\":[\"연차\",\"이월\"],\"summary\":\"휴가 규정이다.\"}";
 
 	private final HttpServer server;
 	private final java.util.concurrent.ExecutorService executor = java.util.concurrent.Executors.newCachedThreadPool();
@@ -41,6 +46,7 @@ final class FakeServices implements AutoCloseable {
 		server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
 		server.createContext("/api/v1/thread-sources/", this::source);
 		server.createContext("/v1/embeddings", this::embeddings);
+		server.createContext("/v1/chat/completions", this::chat);
 		server.setExecutor(executor);
 		server.start();
 	}
@@ -94,6 +100,17 @@ final class FakeServices implements AutoCloseable {
 			data.add(Map.of("object", "embedding", "index", i, "embedding", vector));
 		}
 		respond(exchange, 200, json.writeValueAsString(Map.of("object", "list", "model", request.path("model").asString(), "data", data)));
+	}
+
+	private void chat(HttpExchange exchange) throws IOException {
+		chatCalls.incrementAndGet();
+		exchange.getRequestBody().readAllBytes();
+		if (chatFailures.getAndUpdate(n -> Math.max(0, n - 1)) > 0) {
+			respond(exchange, 503, "{\"error\":\"busy\"}");
+			return;
+		}
+		respond(exchange, 200, json.writeValueAsString(Map.of("choices", List.of(Map.of("index", 0, "finish_reason", "stop",
+				"message", Map.of("role", "assistant", "content", chatAnswer))))));
 	}
 
 	private static void respond(HttpExchange exchange, int status, String body) throws IOException {

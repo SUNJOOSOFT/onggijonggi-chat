@@ -95,7 +95,7 @@ class ChunkIndexMigrationTest {
 		es.put().uri("/manual_current").contentType(MediaType.APPLICATION_JSON).body(v1).retrieve().toBodilessEntity();
 		es.put().uri("/manual_old/_alias/manual_alias").retrieve().toBodilessEntity();
 		es.put().uri("/manual_current/_alias/manual_alias").retrieve().toBodilessEntity();
-		var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(url(), "manual_alias", "manual_current", 200), null,
+		var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(url(), "manual_alias", "manual_current", 200, "thr_doc_tag", "thr_doc_tag_v1"), null,
 				new EtlProperties.Chunk(800, 1200, 100), 1, Duration.ofSeconds(1), Duration.ofMinutes(1), List.of(), Duration.ofSeconds(30));
 
 		new ChunkIndex(properties, json).ensure();
@@ -107,7 +107,7 @@ class ChunkIndexMigrationTest {
 	}
 
 	private ChunkIndex index(String name) {
-		var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(url(), ALIAS, name, 200), null,
+		var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(url(), ALIAS, name, 200, "thr_doc_tag", "thr_doc_tag_v1"), null,
 				new EtlProperties.Chunk(800, 1200, 100), 1, Duration.ofSeconds(1), Duration.ofMinutes(1), List.of(), Duration.ofSeconds(30));
 		return new ChunkIndex(properties, json);
 	}

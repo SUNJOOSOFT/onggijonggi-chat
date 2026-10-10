@@ -49,5 +49,46 @@
    "history": [{"role": "user", "content": "연차 이월 규정 알려줘"}, {"role": "assistant", "content": "쓰지 못한 연차는 다음 해 3월 말까지 이월할 수 있습니다."}]},
 
   {"id": "choice-1", "type": "choice", "question": "보안 지침의 비밀번호 규칙", "document": "security.md", "contains": "12자"},
-  {"id": "choice-2", "type": "choice", "question": "출장비 규정에서 당일 출장 일비", "document": "travel.md", "contains": "2만 원"}
+  {"id": "choice-2", "type": "choice", "question": "출장비 규정에서 당일 출장 일비", "document": "travel.md", "contains": "2만 원"},
+
+  {"id": "tag-1", "type": "tag", "question": "회사 IT 자산은 어떻게 관리돼?", "document": "equipment.md"},
+  {"id": "tag-2", "type": "tag", "question": "사내 정보 보호 수칙 정리해줘", "document": "security.md"},
+  {"id": "tag-3", "type": "tag", "question": "쉬는 날 관련 제도에는 뭐가 있어?", "document": "leave.md"},
+  {"id": "tag-4", "type": "tag", "question": "외근 경비 처리 방법", "document": "travel.md"},
+  {"id": "tag-5", "type": "tag", "question": "원격 근무 제도 개요", "document": "remote-work.md"},
+  {"id": "tag-6", "type": "tag", "question": "직원 복리후생 중 휴무 관련 내용", "document": "leave.md"},
+  {"id": "tag-7", "type": "tag", "question": "업무용 기기 지급 기준", "document": "equipment.md"},
+  {"id": "tag-8", "type": "tag", "question": "올해 남은 연차 휴가를 쓰려면 어떤 절차로 신청하는지 알려주실 수 있나요", "document": "leave.md"},
+  {"id": "tag-9", "type": "tag", "question": "회사에서 받은 노트북이랑 모니터는 평소에 어떻게 관리해야 하는 건지 궁금해요", "document": "equipment.md"},
+  {"id": "tag-10", "type": "tag", "question": "출장 다녀와서 쓴 비용은 언제까지 어떻게 처리해야 되는 거야", "document": "travel.md"},
+
+  {"id": "unrelated-7", "type": "unrelated", "question": "사내 카페 운영 시간"},
+  {"id": "unrelated-8", "type": "unrelated", "question": "회의실 예약 방법"},
+  {"id": "unrelated-9", "type": "unrelated", "question": "명함 신청 방법"},
+  {"id": "unrelated-10", "type": "unrelated", "question": "택배 받는 곳"},
+  {"id": "unrelated-11", "type": "unrelated", "question": "회사 창립 기념일"},
+  {"id": "unrelated-12", "type": "unrelated", "question": "사무실 냉난방 온도"},
+  {"id": "unrelated-13", "type": "unrelated", "question": "사내 방송 듣는 법"},
+  {"id": "unrelated-14", "type": "unrelated", "question": "엘리베이터 점검 일정"},
+
+  {"id": "direct-14", "type": "direct", "question": "복지 포인트는 1년에 얼마 줘?", "document": "benefits.md", "contains": "120만"},
+  {"id": "direct-15", "type": "direct", "question": "공통 근무 시간이 언제야?", "document": "attendance.md", "contains": "오후 4시"},
+  {"id": "direct-16", "type": "direct", "question": "대외비 자료는 어디에 둬야 해?", "document": "info-assets.md", "contains": "곳간"},
+  {"id": "direct-17", "type": "direct", "question": "사내 회의 다과비 한도가 얼마야?", "document": "expenses.md", "contains": "1만 원"},
+  {"id": "direct-18", "type": "direct", "question": "개인정보가 유출되면 며칠 안에 피해자에게 알려야 해?", "document": "privacy.md", "contains": "72시간"},
+  {"id": "direct-19", "type": "direct", "question": "사내 식당 이름이 뭐야?", "document": "benefits.md", "contains": "한솥마루"},
+  {"id": "direct-20", "type": "direct", "question": "동호회 활동비는 얼마 지원돼?", "document": "benefits.md", "contains": "2만 원"},
+  {"id": "direct-21", "type": "direct", "question": "회사 주차장 배정은 어떻게 해?", "document": "benefits.md", "contains": "추첨"},
+
+  {"id": "paraphrase-7", "type": "paraphrase", "question": "다 못 쓴 복지 포인트는 연말에 어떻게 돼?", "document": "benefits.md", "contains": "사라진다"},
+  {"id": "paraphrase-8", "type": "paraphrase", "question": "밤늦게까지 일하면 돈을 더 받아?", "document": "attendance.md", "contains": "1.5배"},
+  {"id": "paraphrase-9", "type": "paraphrase", "question": "그만둔 사람이 쓰던 프로그램 사용권은 어떻게 처리해?", "document": "info-assets.md", "contains": "회수"},
+  {"id": "paraphrase-10", "type": "paraphrase", "question": "내 카드로 먼저 계산한 업무 비용 돌려받으려면?", "document": "expenses.md", "contains": "환급"},
+  {"id": "paraphrase-11", "type": "paraphrase", "question": "고객 정보가 들어 있는 파일을 밖으로 보낼 때 조심할 점", "document": "privacy.md", "contains": "암호"},
+
+  {"id": "tag-11", "type": "tag", "question": "직원 혜택 제도에는 뭐가 있어", "document": "benefits.md"},
+  {"id": "tag-12", "type": "tag", "question": "출퇴근 관리 규칙 요약해줘", "document": "attendance.md"},
+  {"id": "tag-13", "type": "tag", "question": "회사 소프트웨어랑 데이터 관리 방침", "document": "info-assets.md"},
+  {"id": "tag-14", "type": "tag", "question": "업무비 쓸 때 지켜야 하는 기준", "document": "expenses.md"},
+  {"id": "tag-15", "type": "tag", "question": "고객 정보 보호 원칙 정리", "document": "privacy.md"}
 ]

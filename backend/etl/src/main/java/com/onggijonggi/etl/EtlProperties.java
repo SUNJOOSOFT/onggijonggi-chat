@@ -2,6 +2,7 @@ package com.onggijonggi.etl;
 
 import com.onggijonggi.common.document.ChunkIndexContract;
 import com.onggijonggi.common.document.Chunker;
+import com.onggijonggi.common.document.TagIndexContract;
 import java.time.Duration;
 import java.util.List;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -33,7 +34,10 @@ public record EtlProperties(
 	public record Elasticsearch(String url, @DefaultValue(ChunkIndexContract.ALIAS) String alias,
 			@DefaultValue("thr_doc_chunk_v2") String index,
 			/** bulk 한 요청에 담는 청크 수. */
-			@DefaultValue("200") int bulkSize) { }
+			@DefaultValue("200") int bulkSize,
+			/** 문서 태그 검색 인덱스(#362)의 별칭과 이름(버전). 쓰기·검색은 별칭으로 한다. */
+			@DefaultValue(TagIndexContract.ALIAS) String tagAlias,
+			@DefaultValue("thr_doc_tag_v1") String tagIndex) { }
 
 	public record Embedding(@DefaultValue("") String url, @DefaultValue("bge-m3") String model,
 			@DefaultValue("1024") int dimensions, @DefaultValue("32") int batchSize) { }

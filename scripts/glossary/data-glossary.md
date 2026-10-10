@@ -22,6 +22,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `bfr` | `before` | 이전 | 알고리즘 | - |
 | `by` | `by` | 주체 | 알고리즘 | - |
 | `cnc` | `cancelled` | 취소됨 | 알고리즘 | - |
+| `ctg` | `category` | 카테고리 | 알고리즘 | - |
 | `chat` | `chat` | 대화 | 알고리즘 | - |
 | `chc` | `checked` | 확인됨 | 알고리즘 | - |
 | `chunk` | `chunk` | 조각 | 예외 | 알고리즘 `chn`은 의미가 불명확 |
@@ -60,6 +61,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `json` | `json` | JSON | 알고리즘 | - |
 | `key` | `key` | 키 | 알고리즘 | - |
 | `keycloak` | `keycloak` | - | 예외 | 고유명사 — 축약하지 않음 |
+| `kyw` | `keyword` | 핵심어 | 알고리즘 | - |
 | `kind` | `kind` | 종류 | 알고리즘 | - |
 | `last` | `last` | 마지막 | 알고리즘 | - |
 | `loc` | `location` | 위치 | 예외 | 관용어 — 알고리즘은 `lct` |
@@ -97,6 +99,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `stg` | `staging` | 사전 적재 | 알고리즘 | - |
 | `status` | `status` | - | 예외 | 관용 유지 — 알고리즘 결과 `stt`가 부자연스러움(`content`·`title`과 같은 패턴) |
 | `subj` | `subject` | 주체 식별자 | 예외 | 관용어 — 알고리즘은 `sbj` |
+| `smm` | `summary` | 요약 | 알고리즘 | - |
 | `tag` | `tag` | 태그 | 알고리즘 | - |
 | `trg` | `target` | 대상 | 알고리즘 | - |
 | `tnn` | `tenant` | 테넌트 | 알고리즘 | - |

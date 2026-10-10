@@ -29,7 +29,7 @@ class ChunkIndexTest {
 	@BeforeEach
 	void setUp() throws Exception {
 		es = new StubHttpServer().reply("/_alias/", 200, "{\"thr_doc_chunk_v1\":{\"aliases\":{\"thr_doc_chunk\":{}}}}");
-		var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(es.url(), "thr_doc_chunk", "thr_doc_chunk_v1", 200),
+		var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(es.url(), "thr_doc_chunk", "thr_doc_chunk_v1", 200, "thr_doc_tag", "thr_doc_tag_v1"),
 				null, new EtlProperties.Chunk(800, 1200, 100), 1, Duration.ofSeconds(1), Duration.ofMinutes(1), List.of(), Duration.ofSeconds(5));
 		index = new ChunkIndex(properties, JsonMapper.builder().build());
 	}
@@ -109,7 +109,7 @@ class ChunkIndexTest {
 					.reply("/thr_doc_chunk_v2", 200, "{}")
 					.reply("/_reindex", 200, "{\"task\":\"node:1\"}")
 					.reply("/_tasks/", 200, "{\"completed\":true,\"error\":{\"type\":\"search_phase_execution_exception\"}}");
-			var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(migrating.url(), "thr_doc_chunk", "thr_doc_chunk_v2", 200),
+			var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(migrating.url(), "thr_doc_chunk", "thr_doc_chunk_v2", 200, "thr_doc_tag", "thr_doc_tag_v1"),
 					null, new EtlProperties.Chunk(800, 1200, 100), 1, Duration.ofSeconds(1), Duration.ofMinutes(1), List.of(), Duration.ofSeconds(5));
 			assertThatThrownBy(() -> new ChunkIndex(properties, JsonMapper.builder().build()).ensure())
 					.isInstanceOfSatisfying(EtlFailure.class, failure -> assertThat(failure.permanent()).isFalse());
@@ -133,7 +133,7 @@ class ChunkIndexTest {
 					.reply("/thr_doc_chunk_v2", 200, "{}")
 					.reply("/_reindex", 200, "{\"task\":\"node:1\"}")
 					.reply("/_tasks/", 503, "{}");
-			var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(migrating.url(), "thr_doc_chunk", "thr_doc_chunk_v2", 200),
+			var properties = new EtlProperties(null, new EtlProperties.Elasticsearch(migrating.url(), "thr_doc_chunk", "thr_doc_chunk_v2", 200, "thr_doc_tag", "thr_doc_tag_v1"),
 					null, new EtlProperties.Chunk(800, 1200, 100), 1, Duration.ofSeconds(1), Duration.ofMinutes(1), List.of(), Duration.ofSeconds(5));
 			ChunkIndex migratingIndex = new ChunkIndex(properties, JsonMapper.builder().build());
 			assertThatThrownBy(migratingIndex::ensure).isInstanceOfSatisfying(EtlFailure.class, failure -> assertThat(failure.permanent()).isFalse());

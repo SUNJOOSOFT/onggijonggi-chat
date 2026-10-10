@@ -12,7 +12,7 @@ import reactor.core.scheduler.Schedulers;
  *               기다리므로 BFF 공용 boundedElastic에서 돌면 ES·임베딩이 느려질 때 채팅·로그인의 DB 호출까지 밀린다(격벽).
  */
 @Configuration
-@EnableConfigurationProperties(RagProperties.class)
+@EnableConfigurationProperties({RagProperties.class, RagTagProperties.class})
 class RagConfiguration {
 
 	@Bean(destroyMethod = "dispose")
