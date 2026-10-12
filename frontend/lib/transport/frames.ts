@@ -221,6 +221,19 @@ export interface PongFrame {
   type: 'pong';
 }
 
+/**
+ * 같은 방의 다른 사람이 입력 중이거나 멈췄음을 알린다. 서버는 저장하지 않고, 입력한 본인(같은 사람의
+ * 다른 탭 포함)에게는 보내지 않는다. active=false가 유실될 수 있어 받는 쪽은 갱신이 끊기면 스스로
+ * 지운다(lib/chat/typing.ts).
+ */
+export interface ChatTypingFrame {
+  type: 'chat.typing';
+  threadId: string;
+  subject: string;
+  displayName: string;
+  active: boolean;
+}
+
 /** 서버 WsFrame과 대응하는 전체 유니온. 새 타입이 추가되면 여기 한 곳만 넓히면 되고,
  * frame-router.ts의 exhaustive switch가 미처리 케이스를 컴파일 타임에 잡아준다. */
 export type WsFrame =
@@ -233,7 +246,8 @@ export type WsFrame =
   | SystemNoticeFrame
   | WsErrorFrame
   | ChatQueuedFrame
-  | PongFrame;
+  | PongFrame
+  | ChatTypingFrame;
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */
 export type WsFrameType = WsFrame['type'];
@@ -298,10 +312,19 @@ export interface ClientPingFrame {
   type: 'ping';
 }
 
+/** 협업방에서 지금 입력 중인지 알린다. 누구인지는 서버가 커넥션으로 채운다. 1:1 방이나 구독하지 않은
+ * 방이면 서버가 조용히 버린다. */
+export interface ClientChatTypingFrame {
+  type: 'chat.typing';
+  threadId: string;
+  active: boolean;
+}
+
 /** 서버 InboundFrame과 대응하는 전체 유니온. */
 export type ClientFrame =
   | ClientChatMessageFrame
   | ClientChatCancelFrame
   | ClientRoomSubscribeFrame
   | ClientRoomUnsubscribeFrame
-  | ClientPingFrame;
+  | ClientPingFrame
+  | ClientChatTypingFrame;

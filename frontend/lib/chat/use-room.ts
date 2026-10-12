@@ -41,6 +41,12 @@ import {
   isPresenceNotice,
   noticeMessage,
 } from '@/lib/chat/room-state';
+import {
+  TYPING_RESEND_MS,
+  type TypingPeer,
+  applyTypingFrame,
+  pruneTyping,
+} from '@/lib/chat/typing';
 
 /** 첫 연결이 이만큼 지나도 열리지 않으면 화면이 "붙지 못하고 있다"고 말한다. #4의 백오프가
  * 0·1·3초에 재시도하므로, 5초면 세 번은 두드려 본 뒤다. */
@@ -127,6 +133,14 @@ export interface Room {
    * 전한다. 값의 크기에는 의미가 없다.
    */
   participantsRevision: number;
+  /** 지금 입력 중인 다른 사람(협업방). 1:1 방에는 서버가 보내지 않아 늘 비어 있다. */
+  typing: TypingPeer[];
+  /**
+   * 내 입력창이 비었는지 바뀔 때마다 부른다. 입력 중이면 TYPING_RESEND_MS에 한 번만 알리고, 비면
+   * 멈췄다고 한 번 알린다 — 키를 누를 때마다 불러도 프레임이 그만큼 나가지 않는다. 메시지를 보내면
+   * 받는 쪽이 그 메시지로 지우므로 따로 멈춤을 알리지 않는다.
+   */
+  setTyping: (active: boolean) => void;
 }
 
 export function useRoom(threadId: string, options: UseRoomOptions): Room {
@@ -153,6 +167,12 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
   /** 따라잡기 요청에 실을 커서. WS 콜백이 최신 값을 봐야 해서 ref로 따로 둔다. */
   const lastSeqRef = useRef<number | null>(null);
   const [participantsRevision, setParticipantsRevision] = useState(0);
+  const [typing, setTypingPeers] = useState<TypingPeer[]>([]);
+  /** 마지막으로 알린 입력 상태와 그 시각. 다시 알릴지 판단하는 데만 쓴다. */
+  const typingSentRef = useRef<{ active: boolean; at: number }>({
+    active: false,
+    at: 0,
+  });
 
   /**
    * 이력 로딩(REST)과 WS 연결을 한 이펙트에 묶는다. 원래는 둘로 나뉘어 있었지만(#190),
@@ -169,6 +189,9 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
     let historyLoaded = false;
     let wsOpenedOnce = false;
     let initialCatchUpFired = false;
+    // 방을 바꾸면 이전 방에서 입력 중이던 사람을 지운다.
+    setTypingPeers([]);
+    typingSentRef.current = { active: false, at: 0 };
     // 재연결의 따라잡기는 최초 연결 따라잡기와 별개다 — 여기서 세는 것은 "그 뒤에 다시
     // 붙었는가"뿐이다(이슈 #190).
     let reconnected = false;
@@ -292,6 +315,9 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
           setParticipantsRevision((current) => current + 1);
         }
         setState((current) => applyFrame(current, frame));
+        setTypingPeers((current) =>
+          applyTypingFrame(current, frame, Date.now()),
+        );
       },
       onOpenChange: (open) => {
         setConnection(open ? 'open' : 'reconnecting');
@@ -341,6 +367,17 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
     }
   }, [state.error]);
 
+  // 입력 중인 사람이 있으면 가장 먼저 만료될 때 한 번 깨어나 지운다. 갱신이 오면 목록이 바뀌어 다시 잡힌다.
+  useEffect(() => {
+    if (typing.length === 0) return;
+    const next = Math.min(...typing.map((peer) => peer.until));
+    const timer = setTimeout(
+      () => setTypingPeers((current) => pruneTyping(current, Date.now())),
+      Math.max(0, next - Date.now()),
+    );
+    return () => clearTimeout(timer);
+  }, [typing]);
+
   useEffect(() => {
     if (connection !== 'connecting') return;
     const timer = setTimeout(() => setConnection('stalled'), STALLED_MS);
@@ -378,12 +415,31 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
         timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
       });
       if (!sent) return null;
+      // 받는 쪽은 이 메시지로 "입력 중"을 지운다. 다음 입력은 처음처럼 바로 알린다.
+      typingSentRef.current = { active: false, at: 0 };
       myTurnIdsRef.current.add(ids.turnId);
       // bootstrap 승격은 "내가 보낸 발화의 에코"만 근거로 삼는다(이슈 #162, §2.1) — 남의
       // 발화 에코로 승격하면 서버가 이 커넥션을 구독시켰다는 보장이 없다. 이미 승격된
       // 방에서도 담아 두지만 onFrame이 곧바로 지우므로 쌓이지 않는다.
       pendingEchoesRef.current.add(ids.clientMsgId);
       return ids;
+    },
+    [sendFrame, threadId],
+  );
+
+  const setTyping = useCallback(
+    (active: boolean) => {
+      const last = typingSentRef.current;
+      const now = Date.now();
+      if (
+        active === last.active &&
+        (!active || now - last.at < TYPING_RESEND_MS)
+      ) {
+        return;
+      }
+      if (sendFrame({ type: 'chat.typing', threadId, active })) {
+        typingSentRef.current = { active, at: now };
+      }
     },
     [sendFrame, threadId],
   );
@@ -432,5 +488,7 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
     dismissError,
     dismissNotice,
     participantsRevision,
+    typing,
+    setTyping,
   };
 }

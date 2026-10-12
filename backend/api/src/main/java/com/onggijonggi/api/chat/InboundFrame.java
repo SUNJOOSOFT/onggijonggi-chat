@@ -21,8 +21,10 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 		@JsonSubTypes.Type(value = InboundChatCancel.class, name = "chat.cancel"),
 		@JsonSubTypes.Type(value = InboundRoomSubscribe.class, name = "room.subscribe"),
 		@JsonSubTypes.Type(value = InboundRoomUnsubscribe.class, name = "room.unsubscribe"),
-		@JsonSubTypes.Type(value = InboundPing.class, name = "ping")
+		@JsonSubTypes.Type(value = InboundPing.class, name = "ping"),
+		@JsonSubTypes.Type(value = InboundChatTyping.class, name = "chat.typing")
 })
 public sealed interface InboundFrame
-		permits InboundChatMessage, InboundChatCancel, InboundRoomSubscribe, InboundRoomUnsubscribe, InboundPing {
+		permits InboundChatMessage, InboundChatCancel, InboundRoomSubscribe, InboundRoomUnsubscribe, InboundPing,
+		InboundChatTyping {
 }

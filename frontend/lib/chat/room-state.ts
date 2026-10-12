@@ -527,6 +527,10 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
     case 'pong':
       return state;
 
+    // 입력 중 표시는 만료 시각이 있어 이 순수 상태에 두지 않는다 — use-room이 typing.ts로 따로 든다.
+    case 'chat.typing':
+      return state;
+
     case 'chat.message':
       // 같은 메시지가 이력으로도 실시간으로도 올 수 있다 — msgId로 한 번만 남긴다(이슈 #190).
       if (messageIndexById(state, frame.msgId) !== null) return state;

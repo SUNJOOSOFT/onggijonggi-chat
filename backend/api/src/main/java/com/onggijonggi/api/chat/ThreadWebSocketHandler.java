@@ -65,6 +65,10 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	 * 그 경로의 close 프레임은 degraded일 수 있으나 그 상황은 클라이언트가 읽지 않는 상태다. */
 	private static final Duration CLOSE_DRAIN_GRACE_PERIOD = Duration.ofMillis(500);
 
+	/** 입력 중 알림의 창당 한도. 클라이언트는 입력하는 동안 몇 초에 한 번만 보내므로(use-collab-room.ts)
+	 * 정상 사용으로는 닿지 않는다. 넘친 프레임은 오류 없이 버린다 — 부가 정보라 알릴 가치가 없다. */
+	private static final int TYPING_PER_WINDOW = 60;
+
 	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join",
 			"presence.leave", "presence.snapshot", "error", "system.notice", "chat.queued", "pong");
 
@@ -94,6 +98,10 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	 */
 	private final FixedWindowRateLimiter messageRateLimiter;
 
+	/** 입력 중 알림은 발화 한도({@link #messageRateLimiter})와 따로 센다 — 같이 세면 입력하는 동안 보낸
+	 * 알림이 정작 메시지 전송을 막는다. */
+	private final FixedWindowRateLimiter typingRateLimiter;
+
 	public ThreadWebSocketHandler(ObjectMapper objectMapper, RoomSessionRegistry roomSessionRegistry,
 			ThreadMessageDispatcher threadMessageDispatcher, CollabAuthorizationRevoker collabAuthorizationRevoker,
 			UserIdentityService userIdentityService,
@@ -112,6 +120,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		this.msgFileService = msgFileService;
 		this.messageRateLimiter =
 				new FixedWindowRateLimiter(rateLimitClock, rateLimitWindowSeconds, wsMessagePerMinute);
+		this.typingRateLimiter =
+				new FixedWindowRateLimiter(rateLimitClock, rateLimitWindowSeconds, TYPING_PER_WINDOW);
 	}
 
 	@Override
@@ -257,11 +267,32 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		if (inbound instanceof InboundRoomUnsubscribe unsubscribe) {
 			return handleUnsubscribe(unsubscribe.threadId(), connection, traceId);
 		}
+		if (inbound instanceof InboundChatTyping typing) {
+			return handleTyping(typing, connection, traceId);
+		}
 		if (inbound instanceof InboundPing) {
 			// 주기적으로 묻고 무응답이면 다시 붙는 판단은 클라이언트가 한다(ws-connection.ts) — 서버는 답만 한다.
 			return Mono.just(new PongFrame());
 		}
 		return Mono.just(malformed(null, traceId));
+	}
+
+	/**
+	* 입력 중 알림을 방에 전한다. 구독하지 않은 방·1:1 방·한도 초과는 조용히 버린다 — 응답을 기다리는
+	* 요청이 아니라서 오류를 돌려줘도 클라이언트가 할 일이 없다. 참가자 재확인은 하지 않는다. 구독 중이면
+	* 참가자이고, 빠지면 구독이 강제로 풀린다(이슈 #135).
+	*/
+	private Mono<WsFrame> handleTyping(InboundChatTyping typing, Connection connection, String traceId) {
+		if (typing.threadId() == null) {
+			return Mono.just(malformed(null, traceId));
+		}
+		PresenceParticipant actor = connection.actor();
+		if (!typingRateLimiter.tryAcquire(actor.subject())) {
+			return Mono.empty();
+		}
+		roomSessionRegistry.notifyTyping(connection.id(),
+				new ChatTypingFrame(typing.threadId(), actor.subject(), actor.displayName(), typing.active()));
+		return Mono.empty();
 	}
 
 	private Mono<WsFrame> handleChatMessage(InboundChatMessage inbound, Connection connection, String traceId) {
@@ -668,7 +699,12 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		}
 
 		Sinks.One<Void> overflow = Sinks.one();
-		Flux<WsFrame> roomFrames = bufferForRoom(membership.frames(), overflow)
+		// 입력 중 알림은 본인(같은 사람의 다른 탭 포함)에게 돌려보내지 않는다 — 방송은 sink 하나를 방 전체가
+		// 공유하므로 받는 쪽에서 거른다.
+		String subject = connection.actor().subject();
+		Flux<WsFrame> roomFrames = bufferForRoom(membership.frames()
+				.filter(frame -> !(frame instanceof ChatTypingFrame typing && typing.subject().equals(subject))),
+				overflow)
 				.takeUntilOther(Mono.firstWithSignal(membership.left(), membership.kicked()));
 		connection.attach(presenceEnabled ? roomFrames.startWith(membership.snapshot()) : roomFrames);
 

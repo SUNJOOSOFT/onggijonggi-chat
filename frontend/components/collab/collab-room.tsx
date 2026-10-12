@@ -38,6 +38,7 @@ import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import { fetchCollabThreads } from '@/lib/api/collab';
 import type { RoomMessage, RoomPresenceNotice } from '@/lib/chat/room-state';
 import { isForbidden, isPresenceNotice } from '@/lib/chat/room-state';
+import { typingLabel } from '@/lib/chat/typing';
 import {
   type RoomConnection,
   useCollabRoom,
@@ -152,6 +153,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
     dismissError,
     dismissNotice,
     participantsRevision,
+    typing,
+    setTyping,
   } = useCollabRoom(threadId);
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
   const title = useThreadTitle(threadId);
@@ -245,6 +248,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
               onSend={(content, attachmentIds) =>
                 send(content, undefined, undefined, attachmentIds) !== null
               }
+              typingLabel={typingLabel(typing)}
+              onTyping={setTyping}
               onCancel={
                 cancellableTurnId === null
                   ? undefined

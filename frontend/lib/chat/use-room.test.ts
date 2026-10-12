@@ -161,3 +161,71 @@ describe('useRoom — 이력 실패', () => {
     expect(onHistoryError).toHaveBeenCalledWith(failure);
   });
 });
+
+describe('useRoom — 입력 중 알림', () => {
+  function sentFrames() {
+    const subscription = mocks.subscribeRoom.mock.results.at(-1)?.value as {
+      send: ReturnType<typeof vi.fn>;
+    };
+    return subscription.send.mock.calls
+      .map(([frame]) => frame)
+      .filter((frame) => frame.type === 'chat.typing');
+  }
+
+  it('입력 중은 다시 알리는 간격에 한 번만, 멈춤은 바뀔 때 한 번만 보낸다', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() =>
+        useRoom(THREAD, { fetchHistory: emptyHistory }),
+      );
+
+      act(() => {
+        result.current.setTyping(true);
+        result.current.setTyping(true);
+      });
+      vi.advanceTimersByTime(3_000);
+      act(() => {
+        result.current.setTyping(true);
+        result.current.setTyping(false);
+        result.current.setTyping(false);
+      });
+
+      expect(sentFrames()).toEqual([
+        { type: 'chat.typing', threadId: THREAD, active: true },
+        { type: 'chat.typing', threadId: THREAD, active: true },
+        { type: 'chat.typing', threadId: THREAD, active: false },
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('받은 알림으로 입력 중인 사람을 보이고, 갱신이 끊기면 지운다', () => {
+    vi.useFakeTimers();
+    try {
+      const { result } = renderHook(() =>
+        useRoom(THREAD, { fetchHistory: emptyHistory }),
+      );
+
+      act(() => {
+        latestListener().onFrame({
+          type: 'chat.typing',
+          threadId: THREAD,
+          subject: 'kc-2',
+          displayName: '이한결',
+          active: true,
+        });
+      });
+      expect(result.current.typing.map((peer) => peer.displayName)).toEqual([
+        '이한결',
+      ]);
+
+      act(() => {
+        vi.advanceTimersByTime(6_000);
+      });
+      expect(result.current.typing).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});

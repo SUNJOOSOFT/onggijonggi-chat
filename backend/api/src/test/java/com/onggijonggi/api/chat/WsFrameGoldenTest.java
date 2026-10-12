@@ -79,6 +79,8 @@ class WsFrameGoldenTest {
 				"kc-2", "이한결"));
 		samples.put("chat.queued", new ChatQueuedFrame(THREAD_ID, TURN_ID, ChatQueuedStatus.QUEUED));
 		samples.put("pong", new PongFrame());
+		samples.put("chat.typing", new ChatTypingFrame(THREAD_ID, participant.subject(), participant.displayName(),
+				true));
 		return samples;
 	}
 
@@ -91,6 +93,7 @@ class WsFrameGoldenTest {
 		samples.put("room.subscribe", new InboundRoomSubscribe(THREAD_ID));
 		samples.put("room.unsubscribe", new InboundRoomUnsubscribe(THREAD_ID));
 		samples.put("ping", new InboundPing());
+		samples.put("chat.typing", new InboundChatTyping(THREAD_ID, true));
 		return samples;
 	}
 
