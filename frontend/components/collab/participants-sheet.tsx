@@ -247,9 +247,14 @@ export function ParticipantsSheet({
         }}
       >
         <SheetTrigger asChild>
-          <Button variant="ghost" size="sm" className="gap-1.5">
+          <Button
+            variant="ghost"
+            size="sm"
+            className="gap-1.5"
+            aria-label="참여자 관리"
+          >
             <Users className="h-4 w-4" />
-            참여자 관리
+            <span className="hidden sm:inline">참여자 관리</span>
           </Button>
         </SheetTrigger>
         <SheetContent>

@@ -1,0 +1,26 @@
+{
+  "settings": {
+    "analysis": {
+      "analyzer": {
+        "korean": {
+          "type": "custom",
+          "tokenizer": "nori_tokenizer",
+          "filter": ["nori_part_of_speech", "nori_readingform", "lowercase"]
+        }
+      }
+    }
+  },
+  "mappings": {
+    "dynamic": "strict",
+    "properties": {
+      "doc_id": { "type": "keyword" },
+      "thr_id": { "type": "keyword" },
+      "tnn_id": { "type": "keyword" },
+      "run_seq": { "type": "integer" },
+      "ctg": { "type": "keyword" },
+      "kyw": { "type": "text", "analyzer": "korean" },
+      "smm": { "type": "text", "analyzer": "korean" },
+      "tag_cnf": { "type": "keyword" }
+    }
+  }
+}

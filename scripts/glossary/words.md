@@ -26,6 +26,7 @@
 | `after` | 이후 |
 | `reference` | 참조 |
 | `before` | 이전 |
+| `category` | 카테고리 |
 | `configuration` | 구성 |
 | `current` | 현재 |
 | `cutover` | 절체 |
@@ -76,6 +77,7 @@
 | `invitation` | 초대 |
 | `json` | JSON |
 | `key` | 키 |
+| `keyword` | 핵심어 |
 | `kind` | 종류 |
 | `last` | 마지막 |
 | `location` | 위치 |
@@ -99,6 +101,7 @@
 | `reason` | 사유 |
 | `rebuild` | 다시 만들기 |
 | `reply` | 답글 |
+| `summary` | 요약 |
 | `requester` | 요청자 |
 | `risk` | 위험 |
 | `role` | 역할 |

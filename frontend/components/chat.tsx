@@ -23,9 +23,12 @@ import { toast } from 'sonner';
 
 import { saveModelId } from '@/app/(chat)/actions';
 import { ChatHeader } from '@/components/chat-header';
-import { ThreadDocuments } from '@/components/thread-documents';
 import { LoaderIcon } from '@/components/icons';
 import { NoticeBanner } from '@/components/notice-banner';
+import {
+  ThreadDocumentsProvider,
+  ThreadDocumentsPanel,
+} from '@/components/thread-documents';
 import { friendlyMessageForCode } from '@/lib/api/errors';
 import {
   type ThreadMessageItem,
@@ -477,56 +480,61 @@ function ChatSession({
   }, [cancel, cancellableTurnId]);
 
   return (
-    <div className="flex flex-col min-w-0 h-dvh bg-background">
-      <ChatHeader
-        availableModels={availableModels}
-        selectedModelId={modelId}
-        onModelChange={handleModelChange}
-      />
-
-      {!isInaccessible && (
-        <ThreadDocuments
-          threadId={id}
-          available={
-            !isNewDraft || roomMessages.some((message) => message.from !== null)
-          }
+    <ThreadDocumentsProvider
+      threadId={id}
+      available={
+        !isInaccessible &&
+        (!isNewDraft || roomMessages.some((message) => message.from !== null))
+      }
+    >
+      <div className="flex flex-col min-w-0 h-dvh bg-background">
+        <ChatHeader
+          availableModels={availableModels}
+          selectedModelId={modelId}
+          onModelChange={handleModelChange}
+          showDocuments={!isInaccessible}
         />
-      )}
 
-      {/* 같은 code는 한 건뿐이라(room-state의 upsertNotice) key가 겹치지 않는다. */}
-      {room.state.notices.map((notice) => (
-        <NoticeBanner
-          key={notice.code}
-          notice={notice}
-          onDismiss={() => dismissNotice(notice.code)}
-        />
-      ))}
+        <div className="flex min-h-0 flex-1">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col">
+            {/* 같은 code는 한 건뿐이라(room-state의 upsertNotice) key가 겹치지 않는다. */}
+            {room.state.notices.map((notice) => (
+              <NoticeBanner
+                key={notice.code}
+                notice={notice}
+                onDismiss={() => dismissNotice(notice.code)}
+              />
+            ))}
 
-      <Messages
-        chatId={id}
-        isLoading={isLoading}
-        messages={renderedMessages}
-        citationsByMessageId={citationsByMessageId}
-        terminalStatusByMessageId={terminalStatusByMessageId}
-        failedMessageIds={failedMessageIds}
-        onResendFailedMessage={handleResendFailedMessage}
-        onAppendTurn={sendTurn}
-      />
+            <Messages
+              chatId={id}
+              isLoading={isLoading}
+              messages={renderedMessages}
+              citationsByMessageId={citationsByMessageId}
+              terminalStatusByMessageId={terminalStatusByMessageId}
+              failedMessageIds={failedMessageIds}
+              onResendFailedMessage={handleResendFailedMessage}
+              onAppendTurn={sendTurn}
+            />
 
-      {isInaccessible && (
-        <div className="mx-auto w-full max-w-3xl px-4 pb-3 text-sm text-destructive">
-          이 대화에 접근할 수 없거나 존재하지 않습니다.
+            {isInaccessible && (
+              <div className="mx-auto w-full max-w-3xl px-4 pb-3 text-sm text-destructive">
+                이 대화에 접근할 수 없거나 존재하지 않습니다.
+              </div>
+            )}
+
+            <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
+              <MultimodalInput
+                chatId={id}
+                onSend={handleSend}
+                isLoading={isLoading || isInaccessible}
+                stop={stop}
+              />
+            </form>
+          </div>
+          {!isInaccessible && <ThreadDocumentsPanel />}
         </div>
-      )}
-
-      <form className="flex mx-auto px-4 bg-background pb-4 md:pb-6 gap-2 w-full md:max-w-3xl">
-        <MultimodalInput
-          chatId={id}
-          onSend={handleSend}
-          isLoading={isLoading || isInaccessible}
-          stop={stop}
-        />
-      </form>
-    </div>
+      </div>
+    </ThreadDocumentsProvider>
   );
 }

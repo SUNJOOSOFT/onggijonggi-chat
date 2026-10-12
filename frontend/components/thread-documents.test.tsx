@@ -8,7 +8,11 @@ import {
   act,
 } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { ThreadDocuments } from './thread-documents';
+import {
+  ThreadDocumentsButton,
+  ThreadDocumentsProvider,
+  ThreadDocumentsPanel,
+} from './thread-documents';
 import * as api from '@/lib/api/thread-documents';
 
 vi.mock('@/lib/api/thread-documents', () => ({
@@ -36,11 +40,37 @@ const listing: api.ThreadDocumentsListing = {
   canUpload: true,
   documents: [doc],
 };
+/** 좁은 화면 구성: 헤더 버튼으로 여는 시트. */
+function room(threadId: string, available = true) {
+  return (
+    <ThreadDocumentsProvider threadId={threadId} available={available}>
+      <ThreadDocumentsButton />
+    </ThreadDocumentsProvider>
+  );
+}
 function denied() {
   return Object.assign(new Error('접근 불가'), { status: 404 });
 }
 function open() {
   fireEvent.click(screen.getByRole('button', { name: /방 문서/ }));
+}
+function close() {
+  fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+}
+/** 문서 행의 ⋯ 메뉴를 키보드로 연다(jsdom에는 Radix 메뉴가 쓰는 포인터 이벤트가 없다). */
+async function menu(item: string) {
+  fireEvent.keyDown(screen.getByRole('button', { name: '문서 작업' }), {
+    key: 'Enter',
+  });
+  return screen.findByRole('menuitem', { name: item });
+}
+async function choose(item: string) {
+  fireEvent.click(await menu(item));
+}
+function select(file: File) {
+  fireEvent.change(screen.getByLabelText('등록할 방 문서'), {
+    target: { files: [file] },
+  });
 }
 beforeEach(() => {
   vi.resetAllMocks();
@@ -50,7 +80,7 @@ beforeEach(() => {
 afterEach(cleanup);
 
 describe('패널 접기와 진행 중 업로드', () => {
-  it('접힌 동안 성공한 업로드는 다시 펼쳐도 이전 파일을 재전송하지 않는다', async () => {
+  it('닫힌 동안 성공한 업로드는 다시 열어도 이전 파일을 재전송하지 않는다', async () => {
     let resolveUpload!: (value: api.ThreadDocument) => void;
     vi.mocked(api.uploadThreadDocument).mockImplementation(
       () =>
@@ -58,26 +88,20 @@ describe('패널 접기와 진행 중 업로드', () => {
           resolveUpload = resolve;
         }),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
-    fireEvent.change(screen.getByLabelText('등록할 방 문서'), {
-      target: { files: [new File(['text'], 'new.txt')] },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '문서 등록' }));
-    open();
+    select(new File(['text'], 'new.txt'));
+    close();
     await act(async () => resolveUpload(doc));
     open();
     await screen.findByText('guide.txt');
-    const submit = screen.getByRole('button', {
-      name: '문서 등록',
-    }) as HTMLButtonElement;
-    expect(submit.disabled).toBe(true);
-    fireEvent.click(submit);
+    expect(screen.queryByText('new.txt')).toBeNull();
+    expect(screen.queryByRole('button', { name: '다시 시도' })).toBeNull();
     expect(api.uploadThreadDocument).toHaveBeenCalledTimes(1);
   });
 
-  it('접었다 다시 펼친 동안 실패하면 입력과 재시도 UUID를 유지하고 오류를 표시한다', async () => {
+  it('닫았다 다시 연 동안 실패하면 파일과 재시도 UUID를 유지하고 오류를 표시한다', async () => {
     let rejectUpload!: (error: Error) => void;
     vi.mocked(api.uploadThreadDocument).mockImplementationOnce(
       () =>
@@ -85,20 +109,17 @@ describe('패널 접기와 진행 중 업로드', () => {
           rejectUpload = reject;
         }),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
-    fireEvent.change(screen.getByLabelText('등록할 방 문서'), {
-      target: { files: [new File(['text'], 'new.txt')] },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '문서 등록' }));
+    select(new File(['text'], 'new.txt'));
     const id = vi.mocked(api.uploadThreadDocument).mock.calls[0][1];
-    open();
+    close();
     open();
     await screen.findByText('guide.txt');
     await act(async () => rejectUpload(new Error('업로드 실패')));
     expect(screen.getByRole('alert').textContent).toContain('업로드 실패');
-    fireEvent.click(screen.getByRole('button', { name: '문서 등록' }));
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
     await waitFor(() =>
       expect(api.uploadThreadDocument).toHaveBeenCalledTimes(2),
     );
@@ -117,7 +138,7 @@ describe('방 문서 실제 UI', () => {
       vi.mocked(api.changeThreadDocument)
         .mockRejectedValueOnce(new Error('응답 유실'))
         .mockResolvedValue();
-      render(<ThreadDocuments threadId="room" />);
+      render(room('room'));
       open();
       await screen.findByText('guide.txt');
       const label =
@@ -126,8 +147,7 @@ describe('방 문서 실제 UI', () => {
           : action === 'unpin'
             ? '고정 해제'
             : '삭제 확인';
-      if (action === 'delete')
-        fireEvent.click(screen.getByRole('button', { name: '삭제' }));
+      if (action === 'delete') await choose('삭제');
       fireEvent.click(screen.getByRole('button', { name: label }));
       await screen.findByText('응답 유실');
       fireEvent.click(screen.getByRole('button', { name: label }));
@@ -139,12 +159,12 @@ describe('방 문서 실제 UI', () => {
     },
   );
   it('성공이 확인된 뒤 새 변경은 새 요청 UUID를 사용한다', async () => {
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
     await waitFor(() =>
-      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2),
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(3),
     );
     await waitFor(() =>
       expect(
@@ -166,7 +186,7 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.changeThreadDocument).mockRejectedValueOnce(
       new Error('응답 유실'),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
@@ -188,12 +208,12 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.changeThreadDocument).mockRejectedValueOnce(
       new Error('응답 유실'),
     );
-    const { rerender } = render(<ThreadDocuments threadId="old" />);
+    const { rerender } = render(room('old'));
     open();
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
     await screen.findByText('응답 유실');
-    rerender(<ThreadDocuments threadId="new" />);
+    rerender(room('new'));
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
     await waitFor(() =>
@@ -206,10 +226,10 @@ describe('방 문서 실제 UI', () => {
   it.each(['locked', 'missing', 'denied'] as const)(
     '삭제 확인 중 최신 조회가 %s이면 확인창을 닫는다',
     async (state) => {
-      render(<ThreadDocuments threadId="room" />);
+      render(room('room'));
       open();
       await screen.findByText('guide.txt');
-      fireEvent.click(screen.getByRole('button', { name: '삭제' }));
+      await choose('삭제');
       expect(screen.getByRole('alertdialog')).toBeTruthy();
       if (state === 'denied')
         vi.mocked(api.listThreadDocuments).mockRejectedValue(denied());
@@ -236,12 +256,12 @@ describe('방 문서 실제 UI', () => {
       ...listing,
       documents: [{ ...doc, status }],
     });
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText(new RegExp(label));
   });
   it('draft는 서버 조회·업로드 없이 기존 첨부 안내만 표시한다', () => {
-    render(<ThreadDocuments threadId="draft" available={false} />);
+    render(room('draft', false));
     open();
     expect(screen.getByText(/첫 메시지를 보내/)).toBeTruthy();
     expect(api.listThreadDocuments).not.toHaveBeenCalled();
@@ -249,14 +269,11 @@ describe('방 문서 실제 UI', () => {
   });
   it('열린 실제 방에서 처리 상태를 표시하고 등록은 고정과 분리한다', async () => {
     vi.mocked(api.uploadThreadDocument).mockResolvedValue(doc);
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     const file = new File(['text'], 'new.txt', { type: 'text/plain' });
-    fireEvent.change(screen.getByLabelText('등록할 방 문서'), {
-      target: { files: [file] },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '문서 등록' }));
+    select(file);
     await waitFor(() =>
       expect(api.uploadThreadDocument).toHaveBeenCalledWith(
         'room',
@@ -271,16 +288,13 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.uploadThreadDocument).mockRejectedValue(
       new Error('저장 실패'),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
-    const file = new File(['text'], 'new.txt');
-    fireEvent.change(screen.getByLabelText('등록할 방 문서'), {
-      target: { files: [file] },
-    });
-    fireEvent.click(screen.getByRole('button', { name: '문서 등록' }));
+    select(new File(['text'], 'new.txt'));
     await screen.findByText('저장 실패');
-    fireEvent.click(screen.getByRole('button', { name: '문서 등록' }));
+    expect(screen.getByText('new.txt')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '다시 시도' }));
     await waitFor(() =>
       expect(api.uploadThreadDocument).toHaveBeenCalledTimes(2),
     );
@@ -289,10 +303,10 @@ describe('방 문서 실제 UI', () => {
     );
   });
   it('삭제는 확인 후 실행하고 성공 뒤 조회 실패를 저장 실패로 처리하지 않는다', async () => {
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
-    fireEvent.click(screen.getByRole('button', { name: '삭제' }));
+    await choose('삭제');
     expect(api.changeThreadDocument).not.toHaveBeenCalled();
     vi.mocked(api.listThreadDocuments).mockRejectedValue(
       new Error('조회 실패'),
@@ -313,14 +327,14 @@ describe('방 문서 실제 UI', () => {
       canUpload: false,
       documents: [{ ...doc, canPin: false, canUnpin: false, canDelete: false }],
     });
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     expect(screen.getByText('이 방은 읽기 전용입니다.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: '고정' })).toBeNull();
-    expect(screen.queryByRole('button', { name: '삭제' })).toBeNull();
     expect(screen.queryByLabelText('등록할 방 문서')).toBeNull();
-    expect(screen.getByRole('button', { name: '원본' })).toBeTruthy();
+    expect(await menu('원본 내려받기')).toBeTruthy();
+    expect(screen.queryByRole('menuitem', { name: '삭제' })).toBeNull();
   });
   it('늦은 이전 방 조회가 현재 방 목록을 덮지 않는다', async () => {
     let resolveOld!: (value: api.ThreadDocumentsListing) => void;
@@ -330,9 +344,9 @@ describe('방 문서 실제 UI', () => {
           resolveOld = resolve;
         }),
     );
-    const { rerender } = render(<ThreadDocuments threadId="old" />);
+    const { rerender } = render(room('old'));
     open();
-    rerender(<ThreadDocuments threadId="new" />);
+    rerender(room('new'));
     await screen.findByText('guide.txt');
     await act(async () =>
       resolveOld({ ...listing, documents: [{ ...doc, fileName: 'old.txt' }] }),
@@ -340,7 +354,7 @@ describe('방 문서 실제 UI', () => {
     expect(screen.queryByText('old.txt')).toBeNull();
   });
   it('현재 권한을 서버가 회수하면 기존 목록과 작업 버튼을 제거한다', async () => {
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     vi.mocked(api.listThreadDocuments).mockRejectedValue(denied());
@@ -349,10 +363,10 @@ describe('방 문서 실제 UI', () => {
     expect(screen.queryByText('guide.txt')).toBeNull();
   });
   it('일시적인 조회 실패는 마지막 목록과 확인창을 유지한다', async () => {
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
-    fireEvent.click(screen.getByRole('button', { name: '삭제' }));
+    await choose('삭제');
     vi.mocked(api.listThreadDocuments).mockRejectedValue(
       Object.assign(new Error('저장소 장애'), { status: 503 }),
     );
@@ -367,14 +381,14 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.changeThreadDocument).mockRejectedValueOnce(
       new Error('상태가 바뀜'),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
     await screen.findByText('상태가 바뀜');
     fireEvent.click(screen.getByRole('button', { name: '목록 다시 조회' }));
     await waitFor(() =>
-      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2),
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(3),
     );
     expect(screen.getByText('상태가 바뀜')).toBeTruthy();
   });
@@ -382,14 +396,14 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.changeThreadDocument).mockRejectedValueOnce(
       new Error('응답 유실'),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
     await screen.findByText('응답 유실');
     fireEvent.click(screen.getByRole('button', { name: '목록 다시 조회' }));
     await waitFor(() =>
-      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2),
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(3),
     );
     fireEvent.click(await screen.findByRole('button', { name: '고정' }));
     await waitFor(() =>
@@ -402,17 +416,18 @@ describe('방 문서 실제 UI', () => {
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
     const visibility = vi.spyOn(document, 'visibilityState', 'get');
     try {
-      render(<ThreadDocuments threadId="room" />);
+      render(room('room'));
       open();
       await screen.findByText('guide.txt');
       visibility.mockReturnValue('hidden');
+      // 닫힌 동안 개수용 조회 1회 + 열 때 1회
       await act(async () => vi.advanceTimersByTime(30_000));
-      expect(api.listThreadDocuments).toHaveBeenCalledTimes(1);
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2);
       visibility.mockReturnValue('visible');
       await act(async () =>
         document.dispatchEvent(new Event('visibilitychange')),
       );
-      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2);
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(3);
     } finally {
       visibility.mockRestore();
       vi.useRealTimers();
@@ -426,7 +441,7 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.changeThreadDocument)
       .mockRejectedValueOnce(new Error('응답 유실'))
       .mockResolvedValue();
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText(/처리 실패/);
     fireEvent.click(screen.getByRole('button', { name: '다시 처리' }));
@@ -452,7 +467,7 @@ describe('방 문서 실제 UI', () => {
         ...listing,
         documents: [{ ...doc, status: 'FAILED', pinned: true, canReprocess }],
       });
-      render(<ThreadDocuments threadId="room" />);
+      render(room('room'));
       open();
       expect(await screen.findByText(notice)).toBeTruthy();
     },
@@ -463,23 +478,23 @@ describe('방 문서 실제 UI', () => {
       ...listing,
       documents: [{ ...doc, status: 'FAILED', pinned: false }],
     });
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText(/처리 실패/);
     expect(screen.queryByText(/답변에 쓰이지 않습니다/)).toBeNull();
   });
 
   it('처리 대기 문서에는 다시 처리 버튼이 없다', async () => {
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     expect(screen.queryByRole('button', { name: '다시 처리' })).toBeNull();
   });
   it('작업 버튼은 어느 문서의 것인지 설명으로 알린다', async () => {
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
-    for (const name of ['원본', '고정', '삭제'])
+    for (const name of ['고정', '문서 작업'])
       expect(
         screen.getByRole('button', { name, description: 'guide.txt' }),
       ).toBeTruthy();
@@ -488,7 +503,7 @@ describe('방 문서 실제 UI', () => {
     vi.mocked(api.changeThreadDocument).mockImplementation(
       () => new Promise(() => {}),
     );
-    render(<ThreadDocuments threadId="room" />);
+    render(room('room'));
     open();
     await screen.findByText('guide.txt');
     const pin = screen.getByRole('button', { name: '고정' });
@@ -501,6 +516,7 @@ describe('방 문서 실제 UI', () => {
     let rejectOld!: (error: Error) => void;
     vi.mocked(api.listThreadDocuments)
       .mockResolvedValueOnce(listing)
+      .mockResolvedValueOnce(listing)
       .mockImplementationOnce(
         () =>
           new Promise((_, reject) => {
@@ -508,14 +524,14 @@ describe('방 문서 실제 UI', () => {
           }),
       )
       .mockResolvedValue(listing);
-    const { rerender } = render(<ThreadDocuments threadId="old" />);
+    const { rerender } = render(room('old'));
     open();
     await screen.findByText('guide.txt');
     fireEvent.click(screen.getByRole('button', { name: '고정' }));
     await waitFor(() =>
-      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2),
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(3),
     );
-    rerender(<ThreadDocuments threadId="new" />);
+    rerender(room('new'));
     await screen.findByText('guide.txt');
     await act(async () => rejectOld(new Error('이전 방 조회 중단')));
     expect(screen.queryByRole('alert')).toBeNull();
@@ -532,13 +548,46 @@ describe('방 문서 실제 UI', () => {
         ...listing,
         documents: [{ ...doc, status: 'FAILED', canReadOriginal }],
       });
-      render(<ThreadDocuments threadId="room" />);
+      render(room('room'));
       open();
       await screen.findByText('guide.txt');
-      expect(
-        (screen.getByRole('button', { name: '원본' }) as HTMLButtonElement)
-          .disabled,
-      ).toBe(!canReadOriginal);
+      const item = await menu('원본 내려받기');
+      expect(item.getAttribute('aria-disabled') === 'true').toBe(
+        !canReadOriginal,
+      );
     },
   );
+});
+
+describe('넓은 화면 오른쪽 패널', () => {
+  beforeEach(() => {
+    // jsdom에는 matchMedia가 없다. 넓은 화면(md 이상)으로 둔다.
+    vi.stubGlobal(
+      'matchMedia',
+      vi.fn().mockImplementation((query: string) => ({
+        matches: true,
+        media: query,
+        addEventListener: vi.fn(),
+        removeEventListener: vi.fn(),
+      })),
+    );
+  });
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('넓은 화면에서는 시트를 열지 않아도 목록을 보이고 폴링한다', async () => {
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    try {
+      render(
+        <ThreadDocumentsProvider threadId="room">
+          <ThreadDocumentsPanel />
+        </ThreadDocumentsProvider>,
+      );
+      expect(await screen.findByText('guide.txt')).toBeTruthy();
+      const before = vi.mocked(api.listThreadDocuments).mock.calls.length;
+      await act(async () => vi.advanceTimersByTime(10_000));
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(before + 1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
