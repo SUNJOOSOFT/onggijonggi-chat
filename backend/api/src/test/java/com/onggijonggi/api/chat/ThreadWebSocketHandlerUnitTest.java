@@ -608,7 +608,9 @@ class ThreadWebSocketHandlerUnitTest {
 		ThreadWebSocketHandler handler = handler(registry, provisioning, MESSAGES_PER_WINDOW, directChatTurnService);
 
 		try {
-			handler.handle(session).block();
+			// 프레임 스트림이 가끔 안 끝나는 타이밍이 있어 무기한 block()이면 CI를 30분 멈춘다(#376) —
+			// 끝나야 정상인 스트림이 안 끝나는 것 자체가 테스트 실패 신호이니 짧게 끊는다.
+			handler.handle(session).block(Duration.ofSeconds(5));
 
 			// 자동 구독이 실제로 걸렸다는 것은 방금 붙은 이 연결의 발화가 기존 구독자(observer)에게
 			// broadcastIfCurrent로 도달한다는 것으로 확인한다 — 구독이 안 됐다면 generation이 안 맞아
