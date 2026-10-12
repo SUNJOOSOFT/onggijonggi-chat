@@ -44,7 +44,12 @@ import {
 } from '@/lib/collab/use-collab-room';
 import { CollabInput } from './collab-input';
 import { ParticipantsSheet } from './participants-sheet';
-import { ThreadDocuments } from '@/components/thread-documents';
+import { PresenceAvatars } from './presence-avatars';
+import {
+  ThreadDocumentsButton,
+  ThreadDocumentsPanel,
+  ThreadDocumentsProvider,
+} from '@/components/thread-documents';
 
 const CONNECTION_LABEL: Record<RoomConnection, string> = {
   connecting: '연결 중…',
@@ -175,105 +180,93 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   }
 
   return (
-    <div className="flex h-dvh flex-col">
-      {/* 패딩·정렬을 chat-header.tsx와 같은 값으로 둔다 — 1:1 채팅과 오갈 때 사이드바 토글이
+    <ThreadDocumentsProvider threadId={threadId}>
+      <div className="flex h-dvh flex-col">
+        {/* 패딩·정렬을 chat-header.tsx와 같은 값으로 둔다 — 1:1 채팅과 오갈 때 사이드바 토글이
           같은 자리에 있어야 한다. */}
-      <header className="flex sticky top-0 items-center gap-2 border-b bg-background px-2 py-1.5">
-        <SidebarToggle />
-        <h1 className="text-sm font-semibold">{title}</h1>
-        <ParticipantsSheet
-          threadId={threadId}
-          refreshSignal={participantsRevision}
-        />
-        <span className="ml-auto pr-2 text-xs text-muted-foreground">
-          {CONNECTION_LABEL[connection]}
-        </span>
-      </header>
-
-      <ThreadDocuments threadId={threadId} />
-
-      <div className="flex min-h-0 flex-1">
-        <main className="flex min-h-0 flex-1 flex-col">
-          {/* 접근 거부가 아닌 오류는 방을 닫을 이유가 아니라 위에 얹어 알린다. */}
-          {state.error && !isForbidden(state.error) && (
-            <div
-              role="alert"
-              className="flex items-center gap-3 border-b bg-muted px-4 py-2 text-xs"
-            >
-              <span className="flex-1">{state.error.message}</span>
-              <button
-                type="button"
-                className="shrink-0 underline underline-offset-2"
-                onClick={dismissError}
-              >
-                닫기
-              </button>
-            </div>
-          )}
-
-          {/* 같은 code는 한 건뿐이라(room-state.ts) key가 겹치지 않는다. */}
-          {state.notices.map((notice) => (
-            <NoticeBanner
-              key={notice.code}
-              notice={notice}
-              onDismiss={() => dismissNotice(notice.code)}
-            />
-          ))}
-
-          <div
-            ref={containerRef}
-            className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4"
-          >
-            {state.messages.length === 0 && (
-              <p className="text-sm text-muted-foreground">
-                아직 메시지가 없습니다.
-              </p>
-            )}
-            {state.messages.map((entry) =>
-              isPresenceNotice(entry) ? (
-                <PresenceRow key={entry.id} notice={entry} />
-              ) : (
-                <MessageRow key={entry.id} message={entry} />
-              ),
-            )}
-            <div ref={endRef} className="min-h-6 shrink-0" />
+        <header className="flex sticky top-0 items-center gap-2 border-b bg-background px-2 py-1.5">
+          <SidebarToggle />
+          <h1 className="min-w-0 truncate text-sm font-semibold" title={title}>
+            {title}
+          </h1>
+          <ParticipantsSheet
+            threadId={threadId}
+            refreshSignal={participantsRevision}
+          />
+          <div className="ml-auto flex items-center gap-2">
+            <PresenceAvatars participants={state.participants} />
+            <span className="whitespace-nowrap pr-2 text-xs text-muted-foreground">
+              {CONNECTION_LABEL[connection]}
+            </span>
           </div>
+          <ThreadDocumentsButton className="md:hidden" />
+        </header>
 
-          <div className="border-t p-4">
-            <CollabInput
-              canSend={connection === 'open'}
-              onSend={(content, attachmentIds) =>
-                send(content, undefined, undefined, attachmentIds) !== null
-              }
-              onCancel={
-                cancellableTurnId === null
-                  ? undefined
-                  : () => cancel(cancellableTurnId)
-              }
-            />
-          </div>
-        </main>
-
-        {/* 접속자 목록(#26) — "지금 방에 붙어 있는 사람"이다. 방에 들어올 자격이 있는
-            참여자 명단(#23)과는 다른 목록이라 같은 자리에 겹쳐 그리지 않는다.
-            이름은 프레임이 실어 온 값이고, subject는 동명이인을 가릴 수 있게 title로 남긴다. */}
-        <aside className="hidden w-56 shrink-0 flex-col gap-2 border-l p-4 sm:flex">
-          <h2 className="text-xs font-medium text-muted-foreground">
-            접속중 {state.participants.length}
-          </h2>
-          <ul className="flex flex-col gap-1">
-            {state.participants.map((participant) => (
-              <li
-                key={participant.subject}
-                title={participant.subject}
-                className="text-sm"
+        <div className="flex min-h-0 flex-1">
+          <main className="flex min-h-0 flex-1 flex-col">
+            {/* 접근 거부가 아닌 오류는 방을 닫을 이유가 아니라 위에 얹어 알린다. */}
+            {state.error && !isForbidden(state.error) && (
+              <div
+                role="alert"
+                className="flex items-center gap-3 border-b bg-muted px-4 py-2 text-xs"
               >
-                {participant.displayName}
-              </li>
+                <span className="flex-1">{state.error.message}</span>
+                <button
+                  type="button"
+                  className="shrink-0 underline underline-offset-2"
+                  onClick={dismissError}
+                >
+                  닫기
+                </button>
+              </div>
+            )}
+
+            {/* 같은 code는 한 건뿐이라(room-state.ts) key가 겹치지 않는다. */}
+            {state.notices.map((notice) => (
+              <NoticeBanner
+                key={notice.code}
+                notice={notice}
+                onDismiss={() => dismissNotice(notice.code)}
+              />
             ))}
-          </ul>
-        </aside>
+
+            <div
+              ref={containerRef}
+              className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto p-4"
+            >
+              {state.messages.length === 0 && (
+                <p className="text-sm text-muted-foreground">
+                  아직 메시지가 없습니다.
+                </p>
+              )}
+              {state.messages.map((entry) =>
+                isPresenceNotice(entry) ? (
+                  <PresenceRow key={entry.id} notice={entry} />
+                ) : (
+                  <MessageRow key={entry.id} message={entry} />
+                ),
+              )}
+              <div ref={endRef} className="min-h-6 shrink-0" />
+            </div>
+
+            <div className="border-t p-4">
+              <CollabInput
+                canSend={connection === 'open'}
+                onSend={(content, attachmentIds) =>
+                  send(content, undefined, undefined, attachmentIds) !== null
+                }
+                onCancel={
+                  cancellableTurnId === null
+                    ? undefined
+                    : () => cancel(cancellableTurnId)
+                }
+              />
+            </div>
+          </main>
+
+          <ThreadDocumentsPanel />
+        </div>
       </div>
-    </div>
+    </ThreadDocumentsProvider>
   );
 }
