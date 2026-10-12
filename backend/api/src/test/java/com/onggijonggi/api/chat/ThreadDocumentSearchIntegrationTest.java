@@ -20,6 +20,7 @@ import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.document.ChunkIndexContract;
+import com.onggijonggi.common.document.TagIndexContract;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
@@ -59,7 +60,8 @@ import tools.jackson.databind.ObjectMapper;
  * Description : 실제 PostgreSQL(Flyway)과 nori Elasticsearch, 가짜 임베딩으로 방 문서 검색(#344)을 확인한다. 다른 방·다른 고객사·
  *               고정 해제·이전 회차 청크가 섞이지 않는지, 키워드에서만 잡히는 고유명사도 채택하는지, 대상이 없으면 임베딩을 부르지
  *               않는지, 장애·모델 불일치가 근거 없음이 아니라 UNAVAILABLE인지 본다. 벡터는 축 하나만 1인 단위 벡터라 코사인 유사도가
- *               같은 축이면 1, 다른 축이면 0이다. 검색(rag) 테스트지만 chat 패키지에 둔다 — 공용 픽스처(FakeChatModelConfig 등)가
+ *               같은 축이면 1, 다른 축이면 0이다. 태그 채널(#362)을 켜 두고, 본문·키워드로는 못 찾는 표현을 태그로 찾아 그 문서의
+ *               대표 조각을 근거로 세우는지 본다(태그가 없으면 NO_MATCH). 검색(rag) 테스트지만 chat 패키지에 둔다 — 공용 픽스처(FakeChatModelConfig 등)가
  *               package-private이다.
  */
 @SpringBootTest
@@ -71,6 +73,11 @@ class ThreadDocumentSearchIntegrationTest {
 	private static final int DIMENSIONS = 1024;
 	private static final String ALIAS = "thr_doc_chunk";
 	private static final String INDEX = "thr_doc_chunk_v2";
+	private static final String TAG_INDEX = "thr_doc_tag_v1";
+	/** 이 낱말이 든 질문은 "이월" 축과 코사인 0.45인 벡터다 — 벡터 채널 기준(0.5)엔 못 미치고 태그 대표 조각 기준(0.4)은 넘는다. */
+	private static final String NEAR = "휴가";
+	/** 이 낱말까지 든 질문은 "이월" 축과 코사인 0.3이다 — 태그는 맞아도 대표 조각 기준(0.4)에 못 미친다. */
+	private static final String FAR = "문의";
 
 	@Container static final PostgreSQLContainer<?> POSTGRES = new PostgreSQLContainer<>("postgres:16-alpine")
 			.withDatabaseName("thread_search").withUsername("test").withPassword("test");
@@ -108,6 +115,7 @@ class ThreadDocumentSearchIntegrationTest {
 		r.add("app.rag.elasticsearch.url", ThreadDocumentSearchIntegrationTest::elasticsearchUrl);
 		r.add("app.rag.embedding.url", EMBEDDING::url);
 		r.add("spring.ai.openai.base-url", () -> GATEWAY.url() + "/v1");
+		r.add("app.rag.tag.enabled", () -> "true");
 	}
 
 	@AfterAll static void stopEmbedding() {
@@ -239,6 +247,35 @@ class ThreadDocumentSearchIntegrationTest {
 		assertThat(EMBEDDING.requests).isEmpty();
 	}
 
+	@Test void aDocumentFoundOnlyByItsTagsIsRepresentedByItsClosestChunk() {
+		UUID doc = readyDocument(room, true, 1);
+		index(doc, room, tenant, 1, 1, "연차는 다음 해 3월 말까지 이월할 수 있다.", 0);
+		index(doc, room, tenant, 1, 2, "보안 서약서는 입사일에 제출한다.", 1);
+		refresh();
+		String question = "남은 휴가 넘기기";
+
+		assertThat(search(question).reason()).as("본문 키워드·벡터만으로는 못 찾는다").isEqualTo(SearchResult.Reason.NO_MATCH);
+
+		tag(doc, room, tenant, 1, List.of("휴가", "연차 이월"), "남은 휴가를 다음 해로 넘기는 규정이다.");
+		// 다른 방 문서에도 같은 태그와 질문에 가까운 조각이 있다 — 범위 필터가 빠지면 이 문서가 근거로 섞인다.
+		UUID elsewhere = readyDocument(otherRoom, true, 1);
+		index(elsewhere, otherRoom, tenant, 1, 1, "다른 방의 연차 이월 규정.", 0);
+		refresh();
+		tag(elsewhere, otherRoom, tenant, 1, List.of("휴가", "연차 이월"), "남은 휴가를 다음 해로 넘기는 규정이다.");
+		SearchResult result = search(question);
+
+		assertThat(result.status()).isEqualTo(SearchResult.Status.FOUND);
+		assertThat(result.chunks()).singleElement().satisfies(chunk -> {
+			assertThat(chunk.documentId()).isEqualTo(doc);
+			assertThat(chunk.seq()).as("문서 안에서 질문과 가장 가까운 조각").isEqualTo(1);
+			assertThat(chunk.vectorScore()).isBetween(0.44, 0.46);
+			assertThat(chunk.keywordScore()).isNull();
+		});
+
+		// 태그는 맞지만 문서 안 어느 조각도 질문과 대표 조각 기준(코사인 0.4)만큼 가깝지 않으면 근거로 넣지 않는다.
+		assertThat(search("남은 휴가 넘기기 " + FAR).reason()).isEqualTo(SearchResult.Reason.NO_MATCH);
+	}
+
 	private SearchResult search(String question) {
 		return search.search(room, owner, question, List.of(), null).block();
 	}
@@ -288,28 +325,54 @@ class ThreadDocumentSearchIntegrationTest {
 				.body(json.writeValueAsString(source).getBytes(StandardCharsets.UTF_8)).retrieve().toBodilessEntity();
 	}
 
+	private void tag(UUID doc, UUID thread, UUID tagTenant, int runSeq, List<String> keywords, String summary) {
+		Map<String, Object> source = new LinkedHashMap<>();
+		source.put(TagIndexContract.DOC_ID, doc.toString());
+		source.put(TagIndexContract.THR_ID, thread.toString());
+		source.put(TagIndexContract.TNN_ID, tagTenant.toString());
+		source.put(TagIndexContract.RUN_SEQ, runSeq);
+		source.put(TagIndexContract.CATEGORY, "인사·총무");
+		source.put(TagIndexContract.KEYWORDS, keywords);
+		source.put(TagIndexContract.SUMMARY, summary);
+		source.put(TagIndexContract.CONFIG, "tag-v1:test");
+		es().put().uri("/" + TagIndexContract.ALIAS + "/_doc/{id}?refresh=true", TagIndexContract.tagId(doc, runSeq)).contentType(MediaType.APPLICATION_JSON)
+				.body(json.writeValueAsString(source).getBytes(StandardCharsets.UTF_8)).retrieve().toBodilessEntity();
+	}
+
 	private void refresh() {
 		es().post().uri("/" + ALIAS + "/_refresh").retrieve().toBodilessEntity();
 	}
 
-	/** 공용 매핑(ETL이 쓰는 것과 같은 파일)으로 인덱스와 별칭을 새로 만든다. */
 	private void recreateIndex() throws IOException {
+		recreateIndex(INDEX, ALIAS, ChunkIndexContract.MAPPING);
+		recreateIndex(TAG_INDEX, TagIndexContract.ALIAS, TagIndexContract.MAPPING);
+	}
+
+	/** 공용 매핑(ETL이 쓰는 것과 같은 파일)으로 인덱스와 별칭을 새로 만든다. */
+	private static void recreateIndex(String index, String alias, String resource) throws IOException {
 		RestClient es = es();
 		try {
-			es.delete().uri("/" + INDEX).retrieve().toBodilessEntity();
+			es.delete().uri("/" + index).retrieve().toBodilessEntity();
 		} catch (org.springframework.web.client.HttpClientErrorException.NotFound absent) {
 			// 처음에는 없다.
 		}
 		byte[] mapping;
-		try (InputStream in = new ClassPathResource("es-thr-doc-chunk-index.json").getInputStream()) {
+		try (InputStream in = new ClassPathResource(resource).getInputStream()) {
 			mapping = in.readAllBytes();
 		}
-		es.put().uri("/" + INDEX).contentType(MediaType.APPLICATION_JSON).body(mapping).retrieve().toBodilessEntity();
-		es.put().uri("/" + INDEX + "/_alias/" + ALIAS).retrieve().toBodilessEntity();
+		es.put().uri("/" + index).contentType(MediaType.APPLICATION_JSON).body(mapping).retrieve().toBodilessEntity();
+		es.put().uri("/" + index + "/_alias/" + alias).retrieve().toBodilessEntity();
 	}
 
 	private String embedding(String body) {
 		String text = json.readTree(body).path("input").get(0).asString("");
+		if (text.contains(NEAR)) {
+			float cosine = text.contains(FAR) ? 0.3f : 0.45f;
+			List<Float> near = unit(2);
+			near.set(0, cosine);
+			near.set(2, (float) Math.sqrt(1 - cosine * cosine));
+			return json.writeValueAsString(Map.of("model", "bge-m3", "data", List.of(Map.of("index", 0, "embedding", near))));
+		}
 		int axis = AXES.entrySet().stream().filter(entry -> text.contains(entry.getKey())).map(Map.Entry::getValue)
 				.findFirst().orElse(DIMENSIONS - 1);
 		return json.writeValueAsString(Map.of("model", "bge-m3", "data", List.of(Map.of("index", 0, "embedding", unit(axis)))));

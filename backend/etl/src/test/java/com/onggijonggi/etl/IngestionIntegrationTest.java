@@ -76,6 +76,12 @@ class IngestionIntegrationTest {
 		registry.add("app.etl.rebuild-delay", () -> "1h");
 		// 대체된 회차 정리 유예(운영 2분)를 없애 정리 결과를 바로 본다. 유예 자체는 RebuildStoreTest가 본다.
 		registry.add("app.etl.superseded-grace", () -> "0s");
+		// 태깅(#362)은 가짜 대화 서버로 돈다. 다른 테스트의 문서도 태깅하지만(원본을 지운 문서는 실패로 남는다) 결과에는 영향이 없다.
+		registry.add("app.etl.tagging.url", FAKE::url);
+		registry.add("app.etl.tagging.model", () -> "tag-model");
+		registry.add("app.etl.tagging.idle-delay", () -> "200ms");
+		registry.add("app.etl.tagging.retry-first-delay", () -> "500ms");
+		registry.add("app.etl.tagging.retry-delay", () -> "1s");
 		// 운영 기본값과 같은 2개 스레드로 돌려 선점 경합도 함께 지난다.
 		registry.add("app.etl.concurrency", () -> "2");
 		registry.add("app.etl.embedding.batch-size", () -> "4");
@@ -97,6 +103,7 @@ class IngestionIntegrationTest {
 		FAKE.embeddingFailures.set(0);
 		FAKE.embeddingCalls.set(0);
 		FAKE.wrongDimensions = false;
+		FAKE.chatFailures.set(0);
 		await("진행 중 회차가 모두 끝남", () -> jdbc.queryForObject(
 				"select count(*) from thr_doc_run where status in ('PENDING', 'RUNNING')", Integer.class) == 0);
 		FAKE.sources.clear();
@@ -306,6 +313,56 @@ class IngestionIntegrationTest {
 		});
 		assertThat(run(doc, 2)).containsEntry("run_kind", "RECOVER");
 		assertThat(count(doc)).isEqualTo(((Integer) run(doc, 2).get("chunk_cnt")).longValue());
+	}
+
+	/** #362: 검색 준비가 끝난 문서에 태깅 작업이 태그를 붙이고(DB·태그 색인), 태깅 설정이 바뀌면 태그만 다시 뽑는다 — 임베딩은 다시 하지 않는다. */
+	@Test
+	void readyDocumentsAreTaggedAndRetaggedWithoutReembedding() {
+		Fixture doc = register("태깅.txt", "연차 이월은 다음 해 3월 말까지다. ".repeat(20));
+		await(() -> "READY".equals(status(doc)));
+		await("태그 확정", () -> "DONE".equals(tagStatus(doc)));
+		Map<String, Object> tag = jdbc.queryForMap("select ctg, array_to_string(kyw, ',') as kyw, smm from thr_doc_tag where doc_id=? and run_seq=1", doc.id);
+		assertThat(tag).containsEntry("ctg", "인사·총무").containsEntry("kyw", "연차,이월").containsEntry("smm", "휴가 규정이다.");
+		JsonNode indexed = es().get().uri("/thr_doc_tag/_doc/{id}", doc.id + ":1").retrieve().body(JsonNode.class).path("_source");
+		assertThat(indexed.path("thr_id").asString()).isEqualTo(doc.thread.toString());
+		assertThat(indexed.path("kyw").get(0).asString()).isEqualTo("연차");
+
+		int embeddings = FAKE.embeddingCalls.get();
+		jdbc.update("update thr_doc_tag set tag_cnf = 'tag-v0:old' where doc_id=?", doc.id);
+		await("설정이 바뀐 태그를 다시 뽑음", () -> !"tag-v0:old".equals(jdbc.queryForObject("select tag_cnf from thr_doc_tag where doc_id=?", String.class, doc.id)));
+		assertThat(FAKE.embeddingCalls.get()).as("태그만 다시 뽑고 임베딩은 다시 하지 않는다").isEqualTo(embeddings);
+		assertThat(run(doc, 1)).as("새 회차를 만들지 않는다").containsEntry("status", "DONE");
+
+		// 태그 색인만 사라지면(색인 삭제·스냅샷 복원) 다음 주기에 다시 만들고 DB의 태그로 채운다 — LLM은 다시 부르지 않는다.
+		await("재태깅 반영", () -> "DONE".equals(tagStatus(doc)));
+		int chats = FAKE.chatCalls.get();
+		es().delete().uri("/thr_doc_tag_v1").retrieve().toBodilessEntity();
+		await("태그 색인을 DB 태그로 다시 채움", () -> es().get().uri("/thr_doc_tag/_doc/{id}", doc.id + ":1")
+				.exchange((request, response) -> response.getStatusCode().value()) == 200);
+		assertThat(FAKE.chatCalls.get()).as("다시 태깅하지 않는다").isEqualTo(chats);
+	}
+
+	/** #362: 태깅 서버가 죽어 있어도 문서는 먼저 검색 준비 완료가 되고, 서버가 돌아오면 태그가 붙는다. 문서를 지우면 태그도 지운다. */
+	@Test
+	void aTaggingOutageDoesNotDelayReadinessAndTagsAreDroppedWithTheDocument() {
+		FAKE.chatFailures.set(1_000_000);
+		Fixture doc = register("태깅장애.txt", "태깅 서버가 잠시 멈춰도 문서는 준비된다. ".repeat(20));
+		await(() -> "READY".equals(status(doc)));
+		await("태깅 실패 기록", () -> "FAILED".equals(tagStatus(doc)));
+		assertThat(status(doc)).isEqualTo("READY");
+
+		FAKE.chatFailures.set(0);
+		await("서버가 돌아온 뒤 태그", () -> "DONE".equals(tagStatus(doc)));
+
+		jdbc.update("update thr_doc set status='DELETED', pnn=false, deleted_at=now() where id=?", doc.id);
+		await("정리와 함께 태그 삭제", () -> tagStatus(doc) == null);
+		Integer found = es().get().uri("/thr_doc_tag/_doc/{id}", doc.id + ":1").exchange((request, response) -> response.getStatusCode().value());
+		assertThat(found).as("태그 색인 문서도 지운다").isEqualTo(404);
+	}
+
+	private String tagStatus(Fixture doc) {
+		var rows = jdbc.queryForList("select status from thr_doc_tag where doc_id=? and run_seq=1", String.class, doc.id);
+		return rows.isEmpty() ? null : rows.get(0);
 	}
 
 	/** 앞 테스트들이 남긴 문서를 지운 것으로 둔다 — 전체 재처리·자동 복구가 원본이 이미 없는 그 문서들까지 잡아 결과가 섞이지 않게. */
