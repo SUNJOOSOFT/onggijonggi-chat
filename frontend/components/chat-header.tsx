@@ -13,6 +13,7 @@ import { useWindowSize } from 'usehooks-ts';
 import { ModelSelector } from '@/components/model-selector';
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { ThemeToggle } from '@/components/theme-toggle';
+import { ThreadDocumentsButton } from '@/components/thread-documents';
 import { Button } from '@/components/ui/button';
 import { PlusIcon } from './icons';
 import { useSidebar } from './ui/sidebar';
@@ -24,10 +25,13 @@ function PureChatHeader({
   availableModels,
   selectedModelId,
   onModelChange,
+  showDocuments = false,
 }: {
   availableModels: string[];
   selectedModelId: string;
   onModelChange: (modelId: string) => void;
+  /** 좁은 화면의 방 문서 버튼. ThreadDocumentsProvider 안에서만 켠다(넓은 화면은 오른쪽 패널). */
+  showDocuments?: boolean;
 }) {
   const router = useRouter();
   const { open } = useSidebar();
@@ -50,7 +54,9 @@ function PureChatHeader({
               }}
             >
               <PlusIcon />
-              <span className="md:sr-only">New Chat</span>
+              <span className="sr-only sm:not-sr-only md:sr-only">
+                New Chat
+              </span>
             </Button>
           </TooltipTrigger>
           <TooltipContent>New Chat</TooltipContent>
@@ -65,6 +71,8 @@ function PureChatHeader({
       />
 
       <ThemeToggle />
+
+      {showDocuments && <ThreadDocumentsButton className="order-3 md:hidden" />}
     </header>
   );
 }

@@ -366,6 +366,50 @@ class ThreadWebSocketHandlerTest {
 	}
 
 	/**
+	* 입력 중 알림은 같은 방의 다른 사람에게만 간다. 입력한 쪽은 자기 알림 없이 이어 보낸 메시지만 받는다 —
+	* 자기 알림이 돌아왔다면 메시지보다 먼저 보냈으니 먼저 도착했을 것이다.
+	*/
+	@Test
+	void relaysTypingToTheOtherMemberButNotBackToTheTypist() throws Exception {
+		UUID threadId = rooms.openRoom("typing-writer", "typing-reader");
+		Sinks.Many<String> writerOutbound = Sinks.many().unicast().onBackpressureBuffer();
+		Sinks.Many<String> readerOutbound = Sinks.many().unicast().onBackpressureBuffer();
+		List<String> writerReceived = new CopyOnWriteArrayList<>();
+		List<String> readerReceived = new CopyOnWriteArrayList<>();
+		CountDownLatch subscribed = new CountDownLatch(2);
+		CountDownLatch writerReceivedOne = new CountDownLatch(1);
+		CountDownLatch readerReceivedBoth = new CountDownLatch(2);
+		CountDownLatch completed = new CountDownLatch(2);
+		AtomicReference<Throwable> failure = new AtomicReference<>();
+
+		Disposable writer = openClient("typing-writer", threadId, writerOutbound, writerReceived,
+				subscribed, writerReceivedOne, completed, failure, 1, frameTypes("chat.typing", "chat.message"));
+		Disposable reader = openClient("typing-reader", threadId, readerOutbound, readerReceived,
+				subscribed, readerReceivedBoth, completed, failure, 2, frameTypes("chat.typing", "chat.message"));
+
+		try {
+			assertThat(subscribed.await(5, TimeUnit.SECONDS)).isTrue();
+			writerOutbound.tryEmitNext("{\"type\":\"chat.typing\",\"threadId\":\"" + threadId + "\",\"active\":true}");
+			writerOutbound.tryEmitNext(WsTestExchange.chatMessageFrame(threadId, "after typing"));
+
+			assertThat(writerReceivedOne.await(5, TimeUnit.SECONDS)).isTrue();
+			assertThat(readerReceivedBoth.await(5, TimeUnit.SECONDS)).isTrue();
+			assertThat(failure.get()).isNull();
+
+			ChatTypingFrame typing = (ChatTypingFrame) objectMapper.readValue(readerReceived.get(0), WsFrame.class);
+			assertThat(typing.threadId()).isEqualTo(threadId);
+			assertThat(typing.subject()).isEqualTo("typing-writer");
+			assertThat(typing.active()).isTrue();
+			assertThat(objectMapper.readValue(writerReceived.get(0), WsFrame.class)).isInstanceOf(ChatMessageFrame.class);
+		} finally {
+			writerOutbound.tryEmitComplete();
+			readerOutbound.tryEmitComplete();
+			writer.dispose();
+			reader.dispose();
+		}
+	}
+
+	/**
 	* 참가자가 아닌 방의 구독은 그 방 threadId로 FORBIDDEN을 받지만, 커넥션은 닫히지 않는다(이슈 #161) —
 	* 다른 방 구독까지 끊을 이유가 없다. 거부 뒤에 자기 방으로 보낸 발화의 에코가 오는 것으로 확인한다.
 	*/

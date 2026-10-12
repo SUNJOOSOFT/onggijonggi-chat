@@ -98,6 +98,32 @@ class RoomSessionRegistryTest {
 	}
 
 	/** 방이 없거나(아무도 접속한 적 없거나 이미 비어 사라진 경우) 조용히 버려진다 — 예외를 던지지 않는다. */
+	/** 입력 중 알림은 그 방을 구독한 연결이 협업방에서 낼 때만 방송한다. */
+	@Test
+	void notifyTypingBroadcastsOnlyFromASubscribedConnectionInACollabRoom() {
+		UUID collabId = UUID.randomUUID();
+		UUID directId = UUID.randomUUID();
+		UUID typistId = UUID.randomUUID();
+		UUID directTypistId = UUID.randomUUID();
+		List<WsFrame> collab = new CopyOnWriteArrayList<>();
+		List<WsFrame> direct = new CopyOnWriteArrayList<>();
+		Disposable collabSubscription = registry.join(collabId, typistId, participant("typist"))
+				.frames().subscribe(collab::add);
+		Disposable directSubscription = registry.join(directId, directTypistId, participant("owner"), false)
+				.frames().subscribe(direct::add);
+
+		ChatTypingFrame typing = new ChatTypingFrame(collabId, "typist", "typist", true);
+		assertThat(registry.notifyTyping(typistId, typing)).isTrue();
+		assertThat(registry.notifyTyping(UUID.randomUUID(), typing)).isFalse();
+		assertThat(registry.notifyTyping(directTypistId, new ChatTypingFrame(directId, "owner", "owner", true)))
+				.isFalse();
+
+		assertThat(collab).containsExactly(typing);
+		assertThat(direct).isEmpty();
+		collabSubscription.dispose();
+		directSubscription.dispose();
+	}
+
 	@Test
 	void notifyIfListeningIsANoOpWhenTheRoomDoesNotExist() {
 		registry.notifyIfListening(UUID.randomUUID(),

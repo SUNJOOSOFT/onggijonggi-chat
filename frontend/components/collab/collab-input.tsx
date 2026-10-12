@@ -27,6 +27,8 @@ export function CollabInput({
   canSend,
   onSend,
   onCancel,
+  typingLabel,
+  onTyping,
 }: {
   /** 연결이 열려 있는지. 닫혀 있으면 보내기를 막는다. */
   canSend: boolean;
@@ -34,6 +36,10 @@ export function CollabInput({
   onSend: (content: string, attachmentIds: string[]) => boolean;
   /** 내가 부른 AI 답변이 흐르는 동안만 주어진다. 있으면 보내기 대신 중지를 그린다. */
   onCancel?: () => void;
+  /** 다른 사람이 입력 중이면 그 문구(lib/chat/typing.ts의 typingLabel). 안내 줄 자리에 대신 보인다. */
+  typingLabel?: string | null;
+  /** 입력창에 글자가 있는지 바뀔 때마다(키를 누를 때마다) 부른다. 얼마나 자주 알릴지는 받는 쪽이 정한다. */
+  onTyping?: (active: boolean) => void;
 }) {
   const [input, setInput] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -76,10 +82,31 @@ export function CollabInput({
   return (
     <div className="flex w-full flex-col gap-2">
       <div className="flex items-center justify-between gap-2 text-xs">
-        <span className={callsAi ? 'text-foreground' : 'text-muted-foreground'}>
-          {callsAi
-            ? 'AI가 이 메시지에 답합니다.'
-            : `참여자에게만 보입니다. ${AI_MENTION} 를 붙이면 AI가 답합니다.`}
+        {/* 다른 사람의 입력 중 표시는 따로 줄을 두지 않고 이 안내 자리를 빌린다. 내가 AI를 부르는 중이면
+            그 안내를 지우지 않고 옆에 붙인다 — 보내기 전에 알아야 하는 것이라 줄이지도 않고, 폭이 모자라면
+            입력 중 문구가 말줄임된다. */}
+        <span className="flex min-w-0 items-center gap-1.5 text-muted-foreground">
+          {callsAi && (
+            <span className="shrink-0 text-foreground">
+              AI가 이 메시지에 답합니다.
+            </span>
+          )}
+          {typingLabel ? (
+            <span
+              aria-live="polite"
+              className="flex min-w-0 items-center gap-1.5"
+            >
+              {callsAi && <span aria-hidden="true">·</span>}
+              <TypingDots />
+              <span className="truncate">{typingLabel}</span>
+            </span>
+          ) : (
+            !callsAi && (
+              <span>
+                참여자에게만 보입니다. {AI_MENTION} 를 붙이면 AI가 답합니다.
+              </span>
+            )
+          )}
         </span>
         <Button
           type="button"
@@ -105,7 +132,10 @@ export function CollabInput({
             canSend ? '메시지를 입력하세요' : '연결되면 보낼 수 있습니다'
           }
           value={input}
-          onChange={(event) => setInput(event.target.value)}
+          onChange={(event) => {
+            setInput(event.target.value);
+            onTyping?.(event.target.value.trim() !== '');
+          }}
           className="max-h-[40dvh] min-h-[80px] resize-none overflow-auto rounded-2xl bg-muted pb-10 !text-base dark:border-zinc-700"
           rows={2}
           disabled={!canSend}
@@ -159,5 +189,20 @@ export function CollabInput({
         </div>
       </div>
     </div>
+  );
+}
+
+/** 입력 중 표시 앞의 점 세 개. 움직임을 줄이도록 설정한 사용자에게는 멈춰 보인다. */
+function TypingDots() {
+  return (
+    <span aria-hidden="true" className="flex shrink-0 items-end gap-0.5">
+      {['0ms', '150ms', '300ms'].map((delay) => (
+        <span
+          key={delay}
+          className="size-1 animate-bounce rounded-full bg-current motion-reduce:animate-none"
+          style={{ animationDelay: delay }}
+        />
+      ))}
+    </span>
   );
 }

@@ -159,6 +159,22 @@ public class RoomSessionRegistry {
 	}
 
 	/**
+	 * 입력 중 알림을 방에 낸다. 그 커넥션이 이 방을 구독 중이고 협업방(presence가 켜진 방)일 때만
+	 * 보낸다 — 1:1 방에는 알릴 사람이 없다. presence처럼 부가 정보라 듣는 사람이 없으면 버리고
+	 * 실패해도 던지지 않는다. 입력한 본인에게 돌아가지 않게 거르는 것은 구독 쪽(ThreadWebSocketHandler) 몫이다.
+	 *
+	 * @return 방송했으면 {@code true}
+	 */
+	public boolean notifyTyping(UUID connectionId, ChatTypingFrame frame) {
+		RoomState room = rooms.get(frame.threadId());
+		if (room == null || !room.presenceEnabled || !room.contains(connectionId)) {
+			return false;
+		}
+		room.emitPresence(frame);
+		return true;
+	}
+
+	/**
 	 * 연결을 방에서 빼고, 그 사용자의 마지막 연결이었다면 유예 시간 뒤 남은 참여자에게 퇴장을
 	 * 알린다(이슈 #198) — 그 유예 안에 같은 사람이 재연결하면 이 퇴장 통보는 나가지 않는다.
 	 * 같은 사용자의 다른 연결이 남아 있으면 그 사람은 아직 방에 있으므로 알리지 않는다. 방의

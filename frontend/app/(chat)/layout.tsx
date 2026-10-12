@@ -24,7 +24,8 @@ export default async function Layout({
   return (
     <SidebarProvider defaultOpen={!isCollapsed}>
       <AppSidebar authSlot={<AuthButton />} />
-      <SidebarInset>{children}</SidebarInset>
+      {/* min-w-0: 헤더의 긴 방 제목이 말줄임되지 않고 화면 폭을 밀어내지 않게 한다. */}
+      <SidebarInset className="min-w-0">{children}</SidebarInset>
     </SidebarProvider>
   );
 }

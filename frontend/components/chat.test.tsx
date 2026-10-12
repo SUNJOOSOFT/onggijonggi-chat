@@ -27,6 +27,11 @@ vi.mock('@/lib/chat/use-room', () => ({
   }),
 }));
 vi.mock('@/components/chat-header', () => ({ ChatHeader: () => null }));
+vi.mock('@/components/thread-documents', () => ({
+  ThreadDocumentsProvider: ({ children }: { children: React.ReactNode }) =>
+    children,
+  ThreadDocumentsPanel: () => null,
+}));
 vi.mock('./multimodal-input', () => ({
   MultimodalInput: ({
     onSend,

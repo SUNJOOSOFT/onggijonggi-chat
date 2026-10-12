@@ -46,6 +46,7 @@ const OUTBOUND_TYPES: Record<WsFrameType, true> = {
   error: true,
   'chat.queued': true,
   pong: true,
+  'chat.typing': true,
 };
 
 /**
@@ -69,6 +70,7 @@ const INBOUND_SAMPLES: {
   'room.subscribe': { type: 'room.subscribe', threadId: '' },
   'room.unsubscribe': { type: 'room.unsubscribe', threadId: '' },
   ping: { type: 'ping' },
+  'chat.typing': { type: 'chat.typing', threadId: '', active: false },
 };
 
 describe('서버 → 클라이언트 골든 파일', () => {
