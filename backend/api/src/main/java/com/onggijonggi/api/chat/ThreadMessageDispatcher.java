@@ -308,7 +308,7 @@ public class ThreadMessageDispatcher {
 		ChatMessageCommand.ReservedTurn reserved = turn.reservedTurn();
 		persistDirectReservedAgentTerminal(reserved, turn.terminalPersisted(), terminalStatus);
 		broadcastQuietly(key, new ChatAnswerFrame(key.threadId(), reserved.agentMsgId(), turn.turnId(),
-				modelIdFor(turn), reserved.agentSeq(), "", List.of(), false, answerStatus));
+				modelIdFor(turn), reserved.agentSeq(), "", List.of(), false, answerStatus, null));
 	}
 
 	/** 예약된 DIRECT AGENT의 terminal 전이는 큐·대기·활성 어느 경로에서도 한 번만 실행한다. */
@@ -475,7 +475,7 @@ public class ThreadMessageDispatcher {
 		persistAgentCancellation(activeTurn);
 		broadcastQuietly(key, new ChatAnswerFrame(threadId, activeTurn.msgId, activeTurn.turn.turnId(),
 				modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false,
-				direct ? ChatAnswerStatus.CANCELLED : ChatAnswerStatus.DONE));
+				direct ? ChatAnswerStatus.CANCELLED : ChatAnswerStatus.DONE, null));
 		advance(key, state, activeTurn);
 	}
 
@@ -518,7 +518,7 @@ public class ThreadMessageDispatcher {
 				activeTurn.subscription.dispose();
 				persistAgentCancellation(activeTurn);
 				broadcastQuietly(key, new ChatAnswerFrame(key.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
-						modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE));
+						modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE, null));
 				advance(key, state, activeTurn);
 			}
 		}
@@ -632,9 +632,11 @@ public class ThreadMessageDispatcher {
 	* buildPromptMessages가 항상 맨 끝에 이번 발화 하나만 user로 붙이므로, 그 앞까지가 "이번 발화
 	* 이전의 대화 history"다.
 	*
-	* FOUND가 아니면(NO_EVIDENCE·UNAVAILABLE) messages를 그대로 돌려준다 — 검색 실패가 답변 자체를
-	* 막지 않는다(UNAVAILABLE은 로그에만 남기고 사용자에게 노출하지 않는다). 검색 호출 자체가
-	* 예기치 않게 에러를 던져도 같은 이유로 삼킨다.
+	* FOUND가 아니면 messages를 그대로 돌려주되, NO_PINNED_DOCUMENTS(고정 문서 자체가 없는 방)만은
+	* 검색을 안 부른 것과 같게 조용히 넘어간다(이슈 #353) — 그 방은 원래부터 안내 대상이 아니다.
+	* 그 외(NO_MATCH·UNAVAILABLE 전부)는 사용자에게 안내할 GroundingNotice를 activeTurn에 남긴다 —
+	* 검색 실패가 답변 자체를 막지는 않지만, 문서 기반으로 답한 것처럼 보이면 안 되기 때문이다.
+	* 검색 호출 자체가 예기치 않게 에러를 던지면 UNAVAILABLE과 같은 취급으로 삼킨다.
 	*/
 	private Mono<List<ChatMessage>> augmentWithDocumentSearch(ActiveTurn activeTurn, List<ChatMessage> messages) {
 		PendingTurn turn = activeTurn.turn;
@@ -643,11 +645,19 @@ public class ThreadMessageDispatcher {
 		return threadDocumentSearch.search(turn.threadId(), actor, turn.prompt(), history, modelIdFor(turn))
 				.map(result -> {
 					if (result.status() != SearchResult.Status.FOUND) {
-						if (result.status() == SearchResult.Status.UNAVAILABLE) {
-							log.warn("방 문서 검색을 끝내지 못해 근거 없이 답변한다 threadId={} traceId={} reason={}",
-									turn.threadId(), turn.traceId(), result.reason());
+						if (result.reason() == SearchResult.Reason.NO_PINNED_DOCUMENTS) {
+							return messages;
 						}
-						return messages;
+						activeTurn.groundingNotice = result.status() == SearchResult.Status.UNAVAILABLE
+								? GroundingNotice.UNAVAILABLE
+								: GroundingNotice.NO_EVIDENCE;
+						log.info("방 문서 근거를 못 찾아 안내를 보낸다 threadId={} traceId={} notice={} reason={}",
+								turn.threadId(), turn.traceId(), activeTurn.groundingNotice, result.reason());
+						// 사용자에게 보내는 안내(groundingNotice)와 AI 자신의 인식을 맞춘다 — 문서를
+						// 못 봤는데도 문서 기반인 것처럼 답하면 안내와 답변이 서로 어긋난다(이슈 #353).
+						List<ChatMessage> withNotice = new ArrayList<>(messages);
+						withNotice.add(messages.size() - 1, new ChatMessage("system", noGroundingPrompt(activeTurn.groundingNotice)));
+						return withNotice;
 					}
 					activeTurn.citations = result.chunks().stream().map(this::toCitation).toList();
 					List<ChatMessage> withGrounding = new ArrayList<>(messages);
@@ -655,9 +665,18 @@ public class ThreadMessageDispatcher {
 					return withGrounding;
 				})
 				.onErrorResume(error -> {
-					log.error("방 문서 검색 호출 실패 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
-					return Mono.just(messages);
+					activeTurn.groundingNotice = GroundingNotice.UNAVAILABLE;
+					log.error("방 문서 검색 호출 실패로 안내를 보낸다 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
+					List<ChatMessage> withNotice = new ArrayList<>(messages);
+					withNotice.add(messages.size() - 1, new ChatMessage("system", noGroundingPrompt(GroundingNotice.UNAVAILABLE)));
+					return Mono.just(withNotice);
 				});
+	}
+
+	private static String noGroundingPrompt(GroundingNotice notice) {
+		return notice == GroundingNotice.UNAVAILABLE
+				? "이 방에 고정된 문서를 지금 검색할 수 없습니다. 문서를 확인한 것처럼 말하지 말고, 일반 지식으로만 답하세요."
+				: "이 방에 고정된 문서에서 관련 근거를 찾지 못했습니다. 문서에 있는 내용처럼 추측하지 말고, 일반 지식으로만 답하세요.";
 	}
 
 	private static String groundingPrompt(SearchResult result) {
@@ -726,7 +745,7 @@ public class ThreadMessageDispatcher {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
 							modelIdFor(activeTurn.turn), activeTurn.seq, delta, List.of(), false,
-							ChatAnswerStatus.STREAMING))) {
+							ChatAnswerStatus.STREAMING, activeTurn.groundingNotice))) {
 				throw new StaleGenerationException();
 			}
 		} catch (StaleGenerationException error) {
@@ -748,7 +767,7 @@ public class ThreadMessageDispatcher {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
 							modelIdFor(activeTurn.turn), activeTurn.seq, "", activeTurn.citations, false,
-							ChatAnswerStatus.DONE))) {
+							ChatAnswerStatus.DONE, activeTurn.groundingNotice))) {
 				persistAgentCompletion(activeTurn, content);
 				closeGeneration(key, state);
 				return;
@@ -1053,6 +1072,10 @@ public class ThreadMessageDispatcher {
 		/** 방 문서 검색(FOUND)으로 찾은 근거. LLM 호출 전에 한 번만 채워지고 그 뒤 완료 프레임이
 		 * 읽기만 하므로 volatile로 충분하다(이슈 #347). */
 		private volatile List<Citation> citations = List.of();
+
+		/** 방 문서 검색이 FOUND가 아니었을 때 STREAMING·DONE 프레임에 함께 실을 안내 — LLM 호출
+		 * 전에 결정되므로 스트리밍 시작부터 실린다. citations와 같은 이유로 volatile이다(이슈 #353). */
+		private volatile GroundingNotice groundingNotice;
 
 		/**
 		* PENDING 행 생성 결과(성공 시 msgId, 실패 시 empty)를 캐시해 여러 번 구독해도 한 번만

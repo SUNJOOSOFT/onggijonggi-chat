@@ -86,12 +86,14 @@ function MessageRow({ message }: { message: RoomMessage }) {
         <>
           {message.content !== '' && <Markdown>{message.content}</Markdown>}
           {(message.citations.length > 0 ||
-            message.restrictedResultsOmitted) && (
+            message.restrictedResultsOmitted ||
+            message.groundingNotice !== null) && (
             <CitationsPanel
               state={{
                 status: 'success',
                 citations: message.citations,
                 restrictedResultsOmitted: message.restrictedResultsOmitted,
+                groundingNotice: message.groundingNotice,
               }}
             />
           )}

@@ -35,6 +35,7 @@ const chatAnswerFrameSchema = z.object({
   citations: z.array(citationSchema),
   restrictedResultsOmitted: z.boolean(),
   status: z.union([z.literal('streaming'), z.literal('done'), z.literal('cancelled'), z.literal('denied')]),
+  groundingNotice: z.union([z.literal('no_evidence'), z.literal('unavailable'), z.null()]),
 });
 
 const chatMessageFrameSchema = z.object({

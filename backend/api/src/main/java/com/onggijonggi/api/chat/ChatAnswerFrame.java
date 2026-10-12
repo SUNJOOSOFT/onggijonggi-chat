@@ -30,6 +30,9 @@ import java.util.UUID;
  *
  *               model은 이 턴에 실제로 쓴 게이트웨이 모델 별칭이다 — 발화가 지정했으면 그 값,
  *               비웠으면 서버 기본값이다.
+ *
+ *               groundingNotice는 방 문서 검색(#344)이 FOUND가 아니었을 때만 채워진다(이슈
+ *               #353) — 재접속 복원 대상이 아니라 그 턴에만 실어 보내는 일시적 안내다.
  */
 public record ChatAnswerFrame(
 		UUID threadId,
@@ -40,5 +43,6 @@ public record ChatAnswerFrame(
 		String delta,
 		List<Citation> citations,
 		boolean restrictedResultsOmitted,
-		ChatAnswerStatus status) implements WsFrame {
+		ChatAnswerStatus status,
+		GroundingNotice groundingNotice) implements WsFrame {
 }

@@ -9,13 +9,26 @@
  loc은 "N쪽"·"N번째 문단"으로 바꿔 보여주고, 과거 메시지처럼 없거나 모양이 다르면 생략한다(이슈 #352).
  같은 문서에서 청크 여러 개가 근거로 쓰이면 docId가 같아지므로, 목록 key는 chunkId를 우선
  쓰고 없으면(과거 메시지) 배열 index로 보강한다.
+ groundingNotice는 citations가 비어 있어도 단독으로 패널을 띄운다(이슈 #353) — "근거를 못
+ 찾았다"와 "검색을 못 했다"를 서로 다른 문구로 구분해, 사용자가 답변이 문서 기반인지 AI의
+ 일반 지식인지 헷갈리지 않게 한다.
  *********************************************************/
 
 import { AnimatePresence, motion } from 'framer-motion';
 import { useId, useState } from 'react';
 
 import type { Citation } from '@/lib/api/chat';
-import { ChevronDownIcon, LoaderIcon, LockIcon } from './icons';
+import type { ChatAnswerFrame } from '@/lib/transport/frames';
+import { ChevronDownIcon, InfoIcon, LoaderIcon, LockIcon } from './icons';
+
+/** groundingNotice 값을 사람이 읽는 안내 문구로 바꾼다. */
+function groundingNoticeText(
+  notice: ChatAnswerFrame['groundingNotice'],
+): string | null {
+  if (notice === 'no_evidence') return '이 방에 고정된 문서에서 근거를 찾지 못해 일반 지식으로 답했습니다.';
+  if (notice === 'unavailable') return '문서 검색을 하지 못해 일반 지식으로 답했습니다.';
+  return null;
+}
 
 /** loc("page=N"·"para=N")을 사람이 읽는 위치 문구로 바꾼다(이슈 #352). 모양이 다르거나
  * 없으면(과거 메시지) null — 호출부가 위치 표시 자체를 건너뛴다. */
@@ -32,6 +45,8 @@ export interface CitationsState {
   status: 'loading' | 'error' | 'success';
   citations?: Citation[];
   restrictedResultsOmitted?: boolean;
+  /** 방 문서 검색이 FOUND가 아니었을 때의 안내(이슈 #353). */
+  groundingNotice?: ChatAnswerFrame['groundingNotice'];
   /** 에러 code 기준 친화 문구(errors.ts resolveChatError 재사용). */
   errorMessage?: string;
 }
@@ -55,7 +70,12 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
 
   // 근거 조회 실패는 화면에 표시하지 않는다(채팅은 그대로 진행).
   const citations = state.citations ?? [];
-  if (citations.length === 0 && !state.restrictedResultsOmitted) {
+  const noticeText = groundingNoticeText(state.groundingNotice ?? null);
+  if (
+    citations.length === 0 &&
+    !state.restrictedResultsOmitted &&
+    noticeText === null
+  ) {
     return null;
   }
 
@@ -114,6 +134,13 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
         <div className="flex items-center gap-1.5 text-muted-foreground px-2 py-1">
           <LockIcon size={12} />
           일부 문서는 접근 권한이 없어 결과에서 제외되었습니다.
+        </div>
+      )}
+
+      {noticeText && (
+        <div className="flex items-center gap-1.5 text-muted-foreground px-2 py-1">
+          <InfoIcon size={12} />
+          {noticeText}
         </div>
       )}
     </div>

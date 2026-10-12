@@ -679,6 +679,88 @@ class ThreadMessageDispatcherTest {
 		assertThat(citationsJson.getValue()).contains(docId.toString()).contains("규정.pdf");
 	}
 
+	/** 고정 문서는 있지만 이번 질문과 맞는 근거가 없을 때(NO_MATCH) 사용자에게 안내를 보낸다
+	 * (이슈 #353) — 근거 없이도 일반 답변은 그대로 허용한다. */
+	@Test
+	void sendsNoEvidenceNoticeWhenSearchFindsNoMatchingChunks() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(pending);
+		SearchResult noMatch = new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_MATCH,
+				"first", false, List.of());
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.search(eq(room.threadId), any(), any(), any(), any())).thenReturn(Mono.just(noMatch));
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService,
+				documents, new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20,
+				VirtualTimeScheduler.create());
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		awaitFrameCount(room.frames, 2);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.map(ChatAnswerFrame.class::cast)
+				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
+				.first()
+				.satisfies(frame -> {
+					assertThat(frame.groundingNotice()).isEqualTo(GroundingNotice.NO_EVIDENCE);
+					assertThat(frame.citations()).isEmpty();
+				});
+	}
+
+	/** 방 문서 검색 자체가 실패하면(UNAVAILABLE) 근거 없이 평소처럼 답하면서도 사용자에게는
+	 * "검색을 하지 못했다"는 안내를 보낸다(이슈 #353) — #347의 "로그만 남긴다" 방침을 확장한다. */
+	@Test
+	void sendsUnavailableNoticeWhenDocumentSearchFails() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(pending);
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.search(eq(room.threadId), any(), any(), any(), any()))
+				.thenReturn(Mono.error(new IllegalStateException("elasticsearch down")));
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService,
+				documents, new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20,
+				VirtualTimeScheduler.create());
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		awaitFrameCount(room.frames, 2);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.map(ChatAnswerFrame.class::cast)
+				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
+				.first()
+				.satisfies(frame -> assertThat(frame.groundingNotice()).isEqualTo(GroundingNotice.UNAVAILABLE));
+	}
+
+	/** 고정 문서가 없는 방(NO_PINNED_DOCUMENTS)은 검색을 안 부른 것과 같다 — 안내도 나오지
+	 * 않는다(이슈 #353). dispatcher()의 기본 noOpDocumentSearch가 이 사유를 쓴다. */
+	@Test
+	void sendsNoNoticeWhenRoomHasNoPinnedDocuments() {
+		TestRoom room = new TestRoom();
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 0);
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		awaitFrameCount(room.frames, 2);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.map(ChatAnswerFrame.class::cast)
+				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
+				.first()
+				.satisfies(frame -> assertThat(frame.groundingNotice()).isNull());
+	}
+
 	@Test
 	void marksAgentMessageFailedWhenTurnErrors() {
 		TestRoom room = new TestRoom();
@@ -1362,7 +1444,7 @@ class ThreadMessageDispatcherTest {
 	}
 
 	private static ChatAnswerFrame answer(TestRoom room, String delta, ChatAnswerStatus status) {
-		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status);
+		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status, null);
 	}
 
 	private static void awaitAttemptedDelta(FailingRoomSessionRegistry registry, String delta) {

@@ -214,6 +214,7 @@ export function answerFrame(
   status: 'streaming' | 'done',
   citations: Citation[] = [],
   restrictedResultsOmitted = false,
+  groundingNotice: ChatAnswerFrame['groundingNotice'] = null,
 ): ChatAnswerFrame {
   return {
     type: 'chat.answer',
@@ -226,6 +227,7 @@ export function answerFrame(
     citations,
     restrictedResultsOmitted,
     status,
+    groundingNotice,
   };
 }
 

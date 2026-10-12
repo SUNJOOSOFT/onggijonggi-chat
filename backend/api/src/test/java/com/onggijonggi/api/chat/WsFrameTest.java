@@ -23,7 +23,7 @@ class WsFrameTest {
 		UUID threadId = UUID.randomUUID();
 		UUID msgId = UUID.randomUUID();
 		WsFrame frame = new ChatAnswerFrame(threadId, msgId, null, "gemini", 7L, "안녕", List.of(), false,
-				ChatAnswerStatus.STREAMING);
+				ChatAnswerStatus.STREAMING, null);
 
 		String json = objectMapper.writeValueAsString(frame);
 
@@ -36,7 +36,7 @@ class WsFrameTest {
 	void citationOnlyAnswerFrameIsValid() throws Exception {
 		UUID threadId = UUID.randomUUID();
 		List<Citation> citations = List.of(new Citation("doc-001", "제목", "발췌", 0.91, "chunk-001", "page=1"));
-		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "", citations, false, ChatAnswerStatus.STREAMING);
+		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "", citations, false, ChatAnswerStatus.STREAMING, null);
 
 		String json = objectMapper.writeValueAsString(frame);
 		WsFrame roundTripped = objectMapper.readValue(json, WsFrame.class);
@@ -47,7 +47,7 @@ class WsFrameTest {
 	@Test
 	void restrictedResultsOmittedIsIndependentOfEmptyCitations() throws Exception {
 		UUID threadId = UUID.randomUUID();
-		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "", List.of(), true, ChatAnswerStatus.DONE);
+		WsFrame frame = new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "", List.of(), true, ChatAnswerStatus.DONE, null);
 
 		String json = objectMapper.writeValueAsString(frame);
 		WsFrame roundTripped = objectMapper.readValue(json, WsFrame.class);
@@ -114,7 +114,8 @@ class WsFrameTest {
 		PresenceParticipant participant = new PresenceParticipant("kc-1", "주성민");
 		List<WsFrame> frames = List.of(
 				new ChatAnswerFrame(threadId, UUID.randomUUID(), null, "gemini", 0L, "delta",
-						List.of(new Citation("doc-001", "제목", "발췌", 0.91, "chunk-001", "page=1")), false, ChatAnswerStatus.DONE),
+						List.of(new Citation("doc-001", "제목", "발췌", 0.91, "chunk-001", "page=1")), false,
+						ChatAnswerStatus.DONE, GroundingNotice.UNAVAILABLE),
 				new PresenceJoinFrame(threadId, participant.subject(), participant.displayName()),
 				new PresenceLeaveFrame(threadId, participant.subject(), participant.displayName()),
 				new PresenceSnapshotFrame(threadId, List.of(participant)),
@@ -141,7 +142,7 @@ class WsFrameTest {
 		String message = objectMapper.writeValueAsString(new ChatMessageFrame(UUID.randomUUID(), UUID.randomUUID(),
 				clientMsgId, turnId, 1L, "kc-1", "주성민", "@AI 질문", List.of()));
 		String answer = objectMapper.writeValueAsString(new ChatAnswerFrame(UUID.randomUUID(), UUID.randomUUID(),
-				turnId, "gemini", 2L, "답", List.of(), false, ChatAnswerStatus.STREAMING));
+				turnId, "gemini", 2L, "답", List.of(), false, ChatAnswerStatus.STREAMING, null));
 
 		assertThat(message).contains("\"clientMsgId\":\"" + clientMsgId + "\"", "\"turnId\":\"" + turnId + "\"");
 		assertThat(answer).contains("\"turnId\":\"" + turnId + "\"", "\"model\":\"gemini\"");

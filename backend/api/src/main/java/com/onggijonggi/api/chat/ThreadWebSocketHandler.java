@@ -421,7 +421,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 		if (streaming.isPresent()) {
 			return Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(), inbound.turnId(),
 					threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), streaming.get(),
-					List.of(), false, ChatAnswerStatus.STREAMING));
+					List.of(), false, ChatAnswerStatus.STREAMING, null));
 		}
 
 		return switch (stored.agentStatus()) {
@@ -432,13 +432,13 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 							threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(),
 							msg.map(Msg::getContent).orElse(""),
 							msg.map(m -> Citation.fromSrcJson(objectMapper, m.getSrcJson())).orElse(List.of()), false,
-							ChatAnswerStatus.DONE));
+							ChatAnswerStatus.DONE, null));
 			case CANCELLED -> Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(),
 					inbound.turnId(), threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), "",
-					List.of(), false, ChatAnswerStatus.CANCELLED));
+					List.of(), false, ChatAnswerStatus.CANCELLED, null));
 			case DENIED -> Mono.<WsFrame>just(new ChatAnswerFrame(threadId, stored.agentMessageId(),
 					inbound.turnId(), threadMessageDispatcher.resolveModelId(inbound.model()), stored.agentSeq(), "",
-					List.of(), false, ChatAnswerStatus.DENIED));
+					List.of(), false, ChatAnswerStatus.DENIED, null));
 			case FAILED -> Mono.<WsFrame>just(new ErrorFrame(threadId, "MODEL_UNAVAILABLE",
 					"이전 시도에서 응답을 만들지 못했습니다.", traceId));
 			case PENDING -> recoverOrphanedDirect(threadId, roomGeneration, connection, actor, inbound, files,

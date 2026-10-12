@@ -78,6 +78,9 @@ export interface RoomMessage {
   turnId: string | null;
   citations: Citation[];
   restrictedResultsOmitted: boolean;
+  /** 방 문서 검색이 FOUND가 아니었을 때의 안내(이슈 #353). 재접속 복원 대상이 아니라 그 턴에만
+   * 실시간으로 실려 온다 — 이력(toRoomMessage)에서는 항상 null이다. */
+  groundingNotice: ChatAnswerFrame['groundingNotice'];
   /** 사람 메시지에 실린 첨부. 이름만 든다. AI 답변은 언제나 빈 배열이다. */
   attachments: MessageAttachment[];
 }
@@ -228,6 +231,7 @@ function appendMessage(
         turnId,
         citations: [],
         restrictedResultsOmitted: false,
+        groundingNotice: null,
         attachments,
       },
     ],
@@ -359,6 +363,7 @@ function toRoomMessage(item: ThreadMessageItem): RoomMessage {
     turnId: null,
     citations: [],
     restrictedResultsOmitted: false,
+    groundingNotice: null,
     attachments: item.attachments,
   };
 }
@@ -452,6 +457,7 @@ function extendAnswer(
   status: AnswerStatus,
   citations: Citation[],
   restrictedResultsOmitted: boolean,
+  groundingNotice: ChatAnswerFrame['groundingNotice'] = null,
 ): RoomState {
   const messages = [...state.messages];
   // index는 streamingAnswerIndex가 고른 자리라 언제나 흐르는 중인 AI 답변이다.
@@ -466,6 +472,8 @@ function extendAnswer(
     citations: mergeCitations(target.citations, citations),
     restrictedResultsOmitted:
       target.restrictedResultsOmitted || restrictedResultsOmitted,
+    // 안내는 한 턴에 한 번만 결정되고 사라지지 않는다 — 이후 패킷이 null을 보내도 덮어쓰지 않는다.
+    groundingNotice: target.groundingNotice ?? groundingNotice,
   };
   return { ...state, messages };
 }
@@ -553,6 +561,7 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
           frame.status,
           frame.citations,
           frame.restrictedResultsOmitted,
+          frame.groundingNotice,
         );
       }
       // 아직 아무것도 안 실린 패킷으로 빈 말풍선을 만들 이유는 없다 — delta 없이 status만
@@ -561,11 +570,15 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       // 다만 cancelled·denied는 예외다. 거부된 답변은 언제나 본문이 비고, 즉시 취소된 답변도
       // 조각이 하나도 오지 않는다 — 여기서 걸러 버리면 "중지됨"을 걸어 둘 말풍선 자체가
       // 없어져 사용자에게는 아무 일도 일어나지 않은 것처럼 보인다(이슈 #162, §3.2).
+      //
+      // groundingNotice만 실린 패킷도 예외다 — 방 문서 근거를 못 찾았다는 안내는 delta가
+      // 비어 있어도 사용자에게 보여야 한다(이슈 #353).
       if (
         frame.delta === '' &&
         frame.citations.length === 0 &&
         !frame.restrictedResultsOmitted &&
-        !isTerminalStatus(frame.status)
+        !isTerminalStatus(frame.status) &&
+        frame.groundingNotice === null
       ) {
         return state;
       }
@@ -585,6 +598,7 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         frame.status,
         frame.citations,
         frame.restrictedResultsOmitted,
+        frame.groundingNotice,
       );
     }
 

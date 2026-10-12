@@ -258,14 +258,15 @@ function ChatSession({
    * 근거 인용은 AI 답변이 들고 오지만 패널은 그 답변을 부른 사람 메시지 아래에 붙는다 —
    * 그래서 직전 사람 메시지의 id로 옮겨 단다(이슈 #163).
    *
-   * "검색 중" 표시는 두지 않는다. RAG가 아직 없어(로드맵 v0.4) DIRECT 답변에 근거가 실릴
-   * 일이 없으므로, 켤 이유가 없는 표시다 — PR #231이 없애려던 것이 바로 이것이다. 그 PR은
-   * useChat 어댑터가 이미 켜 둔 로딩을 백엔드의 빈 citation 신호 프레임으로 껐지만
-   * (allowInitialEmptyCitationResult), 상태를 파생하는 지금 구조에서는 켜지 않는 것이 같은
-   * 답이다. 그래서 그 신호 프레임은 applyFrame이 빈 패킷으로 버린다.
+   * "검색 중" 표시는 두지 않는다. 검색은 LLM 호출 전에 끝나 스트리밍이 시작되는 시점에는
+   * 이미 결과가 정해져 있으므로, 켤 이유가 없는 표시다 — PR #231이 없애려던 것이 바로
+   * 이것이다. 그 PR은 useChat 어댑터가 이미 켜 둔 로딩을 백엔드의 빈 citation 신호
+   * 프레임으로 껐지만(allowInitialEmptyCitationResult), 상태를 파생하는 지금 구조에서는
+   * 켜지 않는 것이 같은 답이다. 그래서 그 신호 프레임은 applyFrame이 빈 패킷으로 버린다.
    *
-   * 근거가 실제로 실려 오면 그때 success로 건다. RAG가 들어와 검색에 시간이 걸리게 되면
-   * 그 시점에 로딩 표시를 다시 판단해야 한다.
+   * 근거(citations)가 실려 오거나, 근거를 못 찾았거나 검색이 실패했다는 안내
+   * (groundingNotice, 이슈 #353)가 와도 success로 건다 — 패널이 빈 상태를 "검색 중"으로
+   * 오해하지 않게 한다.
    */
   const citationsByMessageId = useMemo(() => {
     const byId: Record<string, CitationsState> = {};
@@ -279,11 +280,16 @@ function ChatSession({
         }
       }
       if (askedBy === undefined) return;
-      if (message.citations.length > 0 || message.restrictedResultsOmitted) {
+      if (
+        message.citations.length > 0 ||
+        message.restrictedResultsOmitted ||
+        message.groundingNotice !== null
+      ) {
         byId[askedBy] = {
           status: 'success',
           citations: message.citations,
           restrictedResultsOmitted: message.restrictedResultsOmitted,
+          groundingNotice: message.groundingNotice,
         };
       }
     });

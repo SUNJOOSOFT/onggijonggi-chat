@@ -287,6 +287,7 @@ describe('useCollabRoom — 중지할 수 있는 턴 고르기(#205)', () => {
       citations: [],
       restrictedResultsOmitted: false,
       status: done ? ('done' as const) : ('streaming' as const),
+      groundingNotice: null,
     };
   }
 

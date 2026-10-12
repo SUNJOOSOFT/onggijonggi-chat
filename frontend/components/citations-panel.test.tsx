@@ -82,4 +82,49 @@ describe('CitationsPanel', () => {
     expect(screen.queryByText(/쪽$/)).toBeNull();
     expect(screen.queryByText(/번째 문단$/)).toBeNull();
   });
+
+  it('shows a notice when no evidence was found even with no citations', () => {
+    render(
+      <CitationsPanel
+        state={{
+          status: 'success',
+          citations: [],
+          restrictedResultsOmitted: false,
+          groundingNotice: 'no_evidence',
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/근거를 찾지 못해/)).toBeTruthy();
+  });
+
+  it('shows a different notice when the document search itself failed', () => {
+    render(
+      <CitationsPanel
+        state={{
+          status: 'success',
+          citations: [],
+          restrictedResultsOmitted: false,
+          groundingNotice: 'unavailable',
+        }}
+      />,
+    );
+
+    expect(screen.getByText(/검색을 하지 못해/)).toBeTruthy();
+  });
+
+  it('renders nothing when there is no citation, no restriction, and no notice', () => {
+    const { container } = render(
+      <CitationsPanel
+        state={{
+          status: 'success',
+          citations: [],
+          restrictedResultsOmitted: false,
+          groundingNotice: null,
+        }}
+      />,
+    );
+
+    expect(container.textContent).toBe('');
+  });
 });

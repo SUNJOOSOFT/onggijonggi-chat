@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { Citation } from '@/lib/api/chat';
 import type { ThreadMessageItem } from '@/lib/api/thread-history';
 import type {
+  ChatAnswerFrame,
   MessageAttachment,
   PresenceParticipant,
   WsFrame,
@@ -89,6 +90,7 @@ function answer(
     restrictedResultsOmitted?: boolean;
     /** 같은 턴의 패킷은 같은 msgId를 단다. 턴을 나누고 싶을 때만 다른 값을 준다. */
     msgId?: string;
+    groundingNotice?: ChatAnswerFrame['groundingNotice'];
   } = {},
 ): WsFrame {
   return {
@@ -102,6 +104,7 @@ function answer(
     citations: metadata.citations ?? [],
     restrictedResultsOmitted: metadata.restrictedResultsOmitted ?? false,
     status,
+    groundingNotice: metadata.groundingNotice ?? null,
   };
 }
 
@@ -214,6 +217,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
         turnId: null,
         citations: [],
         restrictedResultsOmitted: false,
+        groundingNotice: null,
         attachments: [],
       },
       // 입퇴장 줄 번호는 서버 msgId를 쓰는 메시지와 카운터를 나눠 쓰지 않는다(이슈 #190).
@@ -265,6 +269,7 @@ describe('applyFrame - chat.message', () => {
         turnId: null,
         citations: [],
         restrictedResultsOmitted: false,
+        groundingNotice: null,
         attachments: [],
       },
     ]);
@@ -404,6 +409,40 @@ describe('applyFrame - chat.answer의 중지·거부(이슈 #162, §3.2)', () =>
       streaming: false,
       terminalStatus: null,
     });
+  });
+});
+
+describe('applyFrame - chat.answer의 groundingNotice(이슈 #353)', () => {
+  it('근거를 못 찾았다는 안내가 delta 없이 와도 빈 말풍선을 버리지 않는다', () => {
+    const state = fold([
+      answer('', 'streaming', { groundingNotice: 'no_evidence' }),
+    ]);
+    expect(chats(state)[0]).toMatchObject({ groundingNotice: 'no_evidence' });
+  });
+
+  it('검색 실패 안내는 근거 없음 안내와 구분된다', () => {
+    const state = fold([
+      answer('일반 지식으로 답합니다', 'done', {
+        groundingNotice: 'unavailable',
+      }),
+    ]);
+    expect(chats(state)[0]).toMatchObject({ groundingNotice: 'unavailable' });
+  });
+
+  it('한 번 정해진 안내는 이후 패킷이 null을 보내도 지워지지 않는다', () => {
+    const state = fold([
+      answer('', 'streaming', { groundingNotice: 'no_evidence' }),
+      answer('답변', 'done'),
+    ]);
+    expect(chats(state)[0]).toMatchObject({
+      content: '답변',
+      groundingNotice: 'no_evidence',
+    });
+  });
+
+  it('근거를 찾은 답변은 안내가 없다', () => {
+    const state = fold([answer('근거 있음', 'done')]);
+    expect(chats(state)[0]).toMatchObject({ groundingNotice: null });
   });
 });
 

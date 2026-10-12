@@ -49,6 +49,9 @@ export interface ChatAnswerFrame {
   restrictedResultsOmitted: boolean;
   /** cancelled·denied는 DIRECT 전용이다(이슈 #162) — COLLAB은 지금처럼 streaming·done만 쓴다. */
   status: 'streaming' | 'done' | 'cancelled' | 'denied';
+  /** 방 문서 검색(#344)이 FOUND가 아니었을 때만 채워진다(이슈 #353). 재접속 복원 대상이
+   * 아니라 그 턴에만 실려 오는 일시적 안내다. */
+  groundingNotice: 'no_evidence' | 'unavailable' | null;
 }
 
 /**
