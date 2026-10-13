@@ -7,6 +7,7 @@ import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -760,6 +761,33 @@ class ThreadMessageDispatcherTest {
 	}
 
 	/**
+	 * 파일 이름만으로는 내용을 알기 어려워 태그(#362)가 있으면 카테고리·키워드·요약을 함께 알린다. 태그가 없는 문서(태깅 꺼짐·대기·실패)는
+	 * 파일 이름만, 미분류는 카테고리 없이 싣는다. 요약은 SUMMARY_MAX_CHARS자까지, 태그는 앞의 MAX_TAGGED_DOCUMENTS개 문서에만 싣는다.
+	 */
+	@Test
+	void listsTheDocumentTagsSoTheModelCanTellWhatEachDocumentIsAbout() {
+		String prompt = ThreadMessageDispatcher.documentsPrompt(List.of(
+				new SearchableDocument("규정_v3_최종.pdf", "인사·총무", List.of("급여 지급일", "수습 기간"), "급여 계산과 지급 기준"),
+				SearchableDocument.untagged("메모.txt"),
+				new SearchableDocument("안내.txt", null, List.of("도자기"), null)));
+
+		assertThat(prompt).contains("- 규정_v3_최종.pdf — 인사·총무 / 키워드: 급여 지급일, 수습 기간 / 요약: 급여 계산과 지급 기준\n")
+				.contains("- 메모.txt\n").contains("- 안내.txt — 키워드: 도자기\n").contains(ThreadDocumentTool.NAME)
+				.contains("목록만 보고 답하지 마세요");
+
+		String longSummary = "가".repeat(ThreadMessageDispatcher.SUMMARY_MAX_CHARS + 50);
+		List<SearchableDocument> many = new ArrayList<>();
+		for (int i = 0; i <= ThreadMessageDispatcher.MAX_TAGGED_DOCUMENTS; i++) {
+			many.add(new SearchableDocument("문서" + i + ".txt", "인사·총무", List.of(), longSummary));
+		}
+		String capped = ThreadMessageDispatcher.documentsPrompt(many);
+
+		assertThat(capped).contains("요약: " + "가".repeat(ThreadMessageDispatcher.SUMMARY_MAX_CHARS) + "…\n")
+				.doesNotContain("가".repeat(ThreadMessageDispatcher.SUMMARY_MAX_CHARS + 1))
+				.contains("- 문서" + ThreadMessageDispatcher.MAX_TAGGED_DOCUMENTS + ".txt\n");
+	}
+
+	/**
 	 * 근거를 찾으면(FOUND) 근거와 함께 "문서 우선, 웹 검색을 요청받았으면 근거가 있어도 먼저 webSearch를 부르고, 요청하지 않았으면
 	 * 웹을 쓰지도 제안하지도 않음, 도구 결과가 없으면 웹에서 찾았다고 말하지 않음"을 도구 결과로 돌려준다(이슈 #368).
 	 */
@@ -876,7 +904,7 @@ class ThreadMessageDispatcherTest {
 		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
 				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
 		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.searchableFileNames(eq(room.threadId), any())).thenReturn(Mono.error(new IllegalStateException("db down")));
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.error(new IllegalStateException("db down")));
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
 				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
 
@@ -929,7 +957,8 @@ class ThreadMessageDispatcherTest {
 		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
 		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
 		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.searchableFileNames(eq(room.threadId), any())).thenReturn(Mono.just(List.of("규정.pdf", "취업규칙.docx")));
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.just(List.of(SearchableDocument.untagged("규정.pdf"),
+				SearchableDocument.untagged("취업규칙.docx"))));
 		if (!results.isEmpty()) {
 			OngoingStubbing<Mono<SearchResult>> stub = when(documents.search(eq(room.threadId), any(), any(), any(), any()));
 			for (Mono<SearchResult> result : results) {
@@ -1616,7 +1645,7 @@ class ThreadMessageDispatcherTest {
 	/** 이 파일의 테스트는 대부분 RAG 검색을 다루지 않는다 — 검색할 고정 문서가 없는 방으로 두어 검색 도구도 지시도 붙지 않게 한다. */
 	private static ThreadDocumentSearch noOpDocumentSearch() {
 		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.searchableFileNames(any(), any())).thenReturn(Mono.just(List.of()));
+		when(documents.searchableDocuments(any(), any())).thenReturn(Mono.just(List.of()));
 		return documents;
 	}
 

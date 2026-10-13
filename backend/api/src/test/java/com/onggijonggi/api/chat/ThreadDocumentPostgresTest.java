@@ -619,6 +619,36 @@ class ThreadDocumentPostgresTest {
 		assertThat(service.searchScope(room, owner).targets()).hasSize(1);
 	}
 
+	/** 태그(#362)는 현재 회차의 DONE 행만 싣는다. 이전 회차·실패 태그, 태그 없는 문서는 파일 이름만, 미분류는 카테고리 없이 남는다. */
+	@Test void searchableDocumentsCarryOnlyTheCurrentRunsDoneTags() {
+		UUID tagged = UUID.randomUUID(), reprocessed = UUID.randomUUID(), failedTag = UUID.randomUUID(), untagged = UUID.randomUUID(),
+				unclassified = UUID.randomUUID();
+		for (UUID id : List.of(tagged, reprocessed, failedTag, untagged, unclassified)) {
+			upload(id, owner);
+			completeProcessing(id);
+			service.change(room, id, owner, "PINNED", UUID.randomUUID());
+		}
+		jdbc.update("insert into thr_doc_run(id, doc_id, tnn_id, thr_id, run_seq, status, emb_mdl, emb_dim) values (?, ?, ?, ?, 2, 'DONE', 'bge-m3', 1024)",
+				UUID.randomUUID(), reprocessed, tenant, room);
+		tag(tagged, 1, "DONE", "인사·총무", "{지급일,수습 기간}", "급여 규정");
+		tag(reprocessed, 1, "DONE", "인사·총무", "{옛 키워드}", "이전 회차");
+		tag(failedTag, 1, "FAILED", null, "{}", null);
+		tag(unclassified, 1, "DONE", "UNCLASSIFIED", "{메모}", null);
+
+		// 순서는 searchScope와 같은 등록 순서다.
+		assertThat(service.searchableDocuments(room, member)).containsExactly(
+				new SearchableDocument("guide.txt", "인사·총무", List.of("지급일", "수습 기간"), "급여 규정"),
+				SearchableDocument.untagged("guide.txt"),
+				SearchableDocument.untagged("guide.txt"),
+				SearchableDocument.untagged("guide.txt"),
+				new SearchableDocument("guide.txt", null, List.of("메모"), null));
+	}
+
+	private void tag(UUID document, int runSeq, String status, String category, String keywords, String summary) {
+		jdbc.update("insert into thr_doc_tag(id, doc_id, tnn_id, thr_id, run_seq, status, ctg, kyw, smm, tag_cnf) values (?, ?, ?, ?, ?, ?, ?, ?::text[], ?, 'v1')",
+				UUID.randomUUID(), document, tenant, room, runSeq, status, category, keywords, summary);
+	}
+
 	/** ETL이 1회차를 끝낸 상태: 문서 READY, 회차 DONE. */
 	private void completeProcessing(UUID id) {
 		assertThat(service.processing(id, "PENDING", "PROCESSING")).isTrue();

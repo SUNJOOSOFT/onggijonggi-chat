@@ -105,6 +105,9 @@ public class ThreadMessageDispatcher {
 			+ "이번 답변에서 webSearch 도구의 결과를 받지 않았다면 \"웹 검색 결과\", \"웹에서 찾은\" 같은 표현을 쓰지 말고 웹 검색을 하지 못했다고 말하세요. "
 			+ "예: \"웹에서 찾아서 우리 규정과 비교해줘\" → webSearch를 먼저 호출하고, 그 결과와 문서 근거를 함께 비교한다.";
 
+	/** 문서 목록 지시에 태그를 싣는 최대 문서 수와 요약 길이. 그 밖의 문서는 파일 이름만 싣는다. */
+	static final int MAX_TAGGED_DOCUMENTS = 20;
+	static final int SUMMARY_MAX_CHARS = 200;
 	/** 방 문서 검색 도구가 근거를 찾지 못했을 때 모델에 돌려주는 문장. 웹을 쓸지는 모델이 판단한다(이슈 #368). */
 	static final String NO_EVIDENCE_RESULT = "이 방에 고정된 문서에서 관련된 근거를 찾지 못했습니다. 문서에 있는 내용처럼 추측하지 마세요.";
 
@@ -683,10 +686,10 @@ public class ThreadMessageDispatcher {
 	*/
 	private Mono<TurnPrompt> withDocumentTool(ActiveTurn activeTurn, List<ChatMessage> messages) {
 		PendingTurn turn = activeTurn.turn;
-		return threadDocumentSearch.searchableFileNames(turn.threadId(), actorOf(turn))
-				.map(fileNames -> fileNames.isEmpty()
+		return threadDocumentSearch.searchableDocuments(turn.threadId(), actorOf(turn))
+				.map(documents -> documents.isEmpty()
 						? new TurnPrompt(messages, null)
-						: new TurnPrompt(withSystem(messages, documentsPrompt(fileNames)),
+						: new TurnPrompt(withSystem(messages, documentsPrompt(documents)),
 								new ThreadDocumentTool(query -> searchDocuments(activeTurn, query))))
 				.onErrorResume(error -> {
 					activeTurn.groundingNotice = GroundingNotice.UNAVAILABLE;
@@ -748,9 +751,32 @@ public class ThreadMessageDispatcher {
 		return new CurrentActor(turn.fromUserId(), turn.fromSubject(), turn.fromDisplayName());
 	}
 
-	/** 이 방의 검색할 수 있는 고정 문서와, 문서가 필요한 질문에만 검색 도구를 쓰라는 지시. */
-	private static String documentsPrompt(List<String> fileNames) {
-		return "이 방에 고정된 문서: " + String.join(", ", fileNames) + ". "
+	/**
+	* 이 방의 검색할 수 있는 고정 문서와, 문서가 필요한 질문에만 검색 도구를 쓰라는 지시. 파일 이름만으로는 내용을 알기 어려워
+	* 태그(#362)가 있으면 카테고리·키워드·요약을 함께 싣는다. 고정 문서가 많아도 지시가 길어지지 않게 태그는 앞의
+	* MAX_TAGGED_DOCUMENTS개 문서에만, 요약은 SUMMARY_MAX_CHARS자까지만 싣는다. 태그는 문서를 고르는 데만 쓰게 한다 —
+	* 요약만 보고 답하면 검색을 건너뛰어 출처가 붙지 않고, 요약에 없는 내용을 지어낼 수 있다. "요약을 근거로 쓰지 말라"고
+	* 요약을 직접 가리키면 오히려 요약으로 답해(로컬 측정), 목록만 보고 답하지 말고 먼저 검색하라고 지시한다.
+	*/
+	static String documentsPrompt(List<SearchableDocument> documents) {
+		StringBuilder prompt = new StringBuilder("이 방에 고정된 문서:\n");
+		for (int i = 0; i < documents.size(); i++) {
+			SearchableDocument document = documents.get(i);
+			prompt.append("- ").append(document.fileName());
+			if (i < MAX_TAGGED_DOCUMENTS) {
+				List<String> tags = new ArrayList<>();
+				if (document.category() != null) tags.add(document.category());
+				if (!document.keywords().isEmpty()) tags.add("키워드: " + String.join(", ", document.keywords()));
+				if (document.summary() != null && !document.summary().isBlank()) {
+					String summary = document.summary().strip();
+					tags.add("요약: " + (summary.length() > SUMMARY_MAX_CHARS ? summary.substring(0, SUMMARY_MAX_CHARS) + "…" : summary));
+				}
+				if (!tags.isEmpty()) prompt.append(" — ").append(String.join(" / ", tags));
+			}
+			prompt.append('\n');
+		}
+		return prompt + "목록만 보고 답하지 마세요. 이 문서들과 관련된 질문이면 답하기 전에 반드시 " + ThreadDocumentTool.NAME
+				+ "를 먼저 호출하고, 검색 결과로만 답하세요. "
 				+ "이 문서의 내용이 있어야 답할 수 있는 질문이면 " + ThreadDocumentTool.NAME + " 도구로 검색한 뒤 그 근거로 답하세요. "
 				+ "문서가 필요 없는 질문에는 검색하지 마세요.";
 	}

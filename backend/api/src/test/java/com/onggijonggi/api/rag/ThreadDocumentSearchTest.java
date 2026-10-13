@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.authz.ThreadScopeFilter;
+import com.onggijonggi.api.chat.SearchableDocument;
 import com.onggijonggi.api.chat.ThreadDocumentScope;
 import com.onggijonggi.api.chat.ThreadDocumentService;
 import java.util.List;
@@ -52,14 +53,14 @@ class ThreadDocumentSearchTest {
 		verifyNoInteractions(embedder);
 	}
 
-	/** 답변 턴이 검색 도구를 붙일지 정하는 문서 목록은 검색 범위의 파일 이름이다. 외부 호출이 없어 검색 대기열과 무관하다. */
+	/** 답변 턴이 검색 도구를 붙일지 정하는 문서 목록은 DB만 읽는다. 외부 호출이 없어 검색 대기열과 무관하다. */
 	@Test
-	void listsTheSearchableFileNamesEvenWhenTheSearchQueueIsFull() {
-		when(documents.searchScope(eq(room), any())).thenReturn(new ThreadDocumentScope(UUID.randomUUID(), ThreadScopeFilter.of(List.of(room)),
-				List.of(new ThreadDocumentScope.Target(UUID.randomUUID(), "a.txt", 1, "bge-m3", 1024),
-						new ThreadDocumentScope.Target(UUID.randomUUID(), "b.pdf", 2, "bge-m3", 1024))));
+	void listsTheSearchableDocumentsEvenWhenTheSearchQueueIsFull() {
+		List<SearchableDocument> listed = List.of(SearchableDocument.untagged("a.txt"),
+				new SearchableDocument("b.pdf", "인사·총무", List.of("연차"), "연차 규정"));
+		when(documents.searchableDocuments(eq(room), any())).thenReturn(listed);
 
-		assertThat(search.searchableFileNames(room, actor).block()).containsExactly("a.txt", "b.pdf");
+		assertThat(search.searchableDocuments(room, actor).block()).isEqualTo(listed);
 		verifyNoInteractions(embedder);
 	}
 
