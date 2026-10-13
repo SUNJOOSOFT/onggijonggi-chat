@@ -57,6 +57,8 @@ public class ThreadMessageDispatcher {
 	private final MsgPersistenceService msgPersistenceService;
 
 	private final ThreadDocumentSearch threadDocumentSearch;
+	/** 개정본 만들기 도구의 실행. 운영 생성자만 넣는다 — 없으면 도구가 쓸 수 없다고 답한다(테스트용 생성자). */
+	ThreadDocumentRevision documentRevision;
 
 	private final ObjectMapper json;
 
@@ -118,6 +120,7 @@ public class ThreadMessageDispatcher {
 			LlmChatStreamService llmChatStreamService,
 			MsgPersistenceService msgPersistenceService,
 			ThreadDocumentSearch threadDocumentSearch,
+			ThreadDocumentRevision documentRevision,
 			WebTools webTools,
 			ObjectMapper json,
 			@Value("${app.thread.ai.model:${spring.ai.openai.chat.options.model}}") String modelId,
@@ -126,6 +129,7 @@ public class ThreadMessageDispatcher {
 			@Value("${app.thread.ai.max-context-messages:20}") int maxContextMessages) {
 		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, threadDocumentSearch, json, modelId,
 				turnTimeout, maxPendingPerRoom, maxContextMessages, Schedulers.parallel(), webTools.enabled());
+		this.documentRevision = documentRevision;
 	}
 
 	/** 웹 도구가 켜진 배포(기본값)로 만든다. */
@@ -690,7 +694,8 @@ public class ThreadMessageDispatcher {
 				.map(documents -> documents.isEmpty()
 						? new TurnPrompt(messages, null)
 						: new TurnPrompt(withSystem(messages, documentsPrompt(documents)),
-								new ThreadDocumentTool(query -> searchDocuments(activeTurn, query))))
+								new ThreadDocumentTool(query -> searchDocuments(activeTurn, query),
+										(fileName, edits) -> reviseDocument(activeTurn, fileName, edits))))
 				.onErrorResume(error -> {
 					activeTurn.groundingNotice = GroundingNotice.UNAVAILABLE;
 					log.error("방 문서 목록 조회 실패로 안내를 보낸다 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
@@ -745,6 +750,14 @@ public class ThreadMessageDispatcher {
 			}
 			return unavailable ? unavailablePrompt(webEnabled) : NO_EVIDENCE_RESULT;
 		}
+	}
+
+	/** 모델이 부른 개정본 만들기. 도구 실행 스레드(boundedElastic)에서 불린다. 결과는 모델에 돌려줄 문장이다. */
+	private String reviseDocument(ActiveTurn activeTurn, String fileName, List<ThreadDocumentTool.Edit> edits) {
+		if (documentRevision == null) return "이 배포에서는 개정본을 만들 수 없습니다.";
+		PendingTurn turn = activeTurn.turn;
+		log.info("개정본 만들기 threadId={} traceId={} edits={}", turn.threadId(), turn.traceId(), edits == null ? 0 : edits.size());
+		return documentRevision.revise(turn.threadId(), actorOf(turn), fileName, edits);
 	}
 
 	private static CurrentActor actorOf(PendingTurn turn) {

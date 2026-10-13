@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.rag.SearchResult;
 import com.onggijonggi.api.rag.ThreadDocumentSearch;
 import com.onggijonggi.common.chat.domain.Msg;
@@ -895,6 +896,38 @@ class ThreadMessageDispatcherTest {
 	}
 
 	/** 고정 문서 목록을 읽지 못하면 도구 없이 검색 실패와 같은 지시·안내로 답한다 — 장애를 조용히 넘기지 않는다. */
+	/** 모델이 개정본 도구를 부르면 이 턴의 방·요청자로 ThreadDocumentRevision에 넘기고, 그 문장을 모델에 돌려준다. */
+	@Test
+	void theRevisionToolRunsForTheTurnsRoomAndRequester() {
+		TestRoom room = new TestRoom();
+		AtomicReference<String> toolResult = new AtomicReference<>();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		List<ThreadDocumentTool.Edit> edits = List.of(new ThreadDocumentTool.Edit("주 12시간", "주 18시간"));
+		when(llm.streamChat(any())).thenAnswer(invocation -> {
+			ChatStreamRequest sent = invocation.getArgument(0);
+			toolResult.set(sent.documentTool().reviseThreadDocument("규정.docx", edits));
+			return Flux.just("답");
+		});
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.just(List.of(SearchableDocument.untagged("규정.docx"))));
+		ThreadDocumentRevision revision = mock(ThreadDocumentRevision.class);
+		when(revision.revise(eq(room.threadId), any(), eq("규정.docx"), eq(edits))).thenReturn("등록했습니다");
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
+		dispatcher.documentRevision = revision;
+
+		dispatcher.dispatch(command(room, "@AI 개정본 만들어줘"), room.membership.generation());
+
+		awaitDone(room);
+		assertThat(toolResult).hasValue("등록했습니다");
+		ArgumentCaptor<CurrentActor> actor = ArgumentCaptor.forClass(CurrentActor.class);
+		verify(revision).revise(eq(room.threadId), actor.capture(), eq("규정.docx"), eq(edits));
+		assertThat(actor.getValue().userId()).isEqualTo(room.userId);
+	}
+
 	@Test
 	void answersWithoutTheToolWhenTheDocumentListFails() {
 		TestRoom room = new TestRoom();
