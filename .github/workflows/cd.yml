@@ -55,6 +55,7 @@ jobs:
       - name: docker compose 재기동
         working-directory: /home/ogjg/agent-onggijonggi/infra
         run: |
-          # etl은 elasticsearch 프로필 서비스라 그 프로필을 켠 서버에서만 뜬다. 이름을 주면 프로필과 관계없이 빌드되고, depends_on인 elasticsearch·document-worker 이미지도 함께 빌드된다(캐시가 있으면 짧다).
-          docker compose build bff nextjs etl
+          # etl은 elasticsearch 프로필 서비스라 그 프로필을 켠 서버에서만 뜬다. 이름을 주면 프로필과 관계없이 빌드된다(캐시가 있으면 짧다).
+          # depends_on인 서비스는 함께 빌드되지 않고 up -d도 이미지가 이미 있으면 다시 빌드하지 않으므로, 빌드하는 서비스는 모두 이름을 적는다.
+          docker compose build bff nextjs etl elasticsearch document-worker
           docker compose up -d
