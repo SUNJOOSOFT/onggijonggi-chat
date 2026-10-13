@@ -64,7 +64,7 @@ class WsFrameGoldenTest {
 		Map<String, WsFrame> samples = new LinkedHashMap<>();
 		samples.put("chat.answer", new ChatAnswerFrame(THREAD_ID, MSG_ID, TURN_ID, "gemini-3.6-flash", 7L, "안녕",
 				List.of(new Citation("doc-001", "제목", "발췌", 0.91, "chunk-001", "page=1")), false,
-				ChatAnswerStatus.STREAMING, GroundingNotice.NO_EVIDENCE));
+				ChatAnswerStatus.STREAMING, GroundingNotice.NO_EVIDENCE, Agent.FIN));
 		samples.put("chat.message", new ChatMessageFrame(THREAD_ID, MSG_ID, CLIENT_MSG_ID, TURN_ID, 3L,
 				participant.subject(), participant.displayName(), "@AI 요약해줘",
 				List.of(new MsgFileView(FILE_ID, "보고서.pdf"))));

@@ -91,6 +91,7 @@ function answer(
     /** 같은 턴의 패킷은 같은 msgId를 단다. 턴을 나누고 싶을 때만 다른 값을 준다. */
     msgId?: string;
     groundingNotice?: ChatAnswerFrame['groundingNotice'];
+    agent?: ChatAnswerFrame['agent'];
   } = {},
 ): WsFrame {
   return {
@@ -105,6 +106,7 @@ function answer(
     restrictedResultsOmitted: metadata.restrictedResultsOmitted ?? false,
     status,
     groundingNotice: metadata.groundingNotice ?? null,
+    agent: metadata.agent ?? null,
   };
 }
 
@@ -218,6 +220,7 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
         citations: [],
         restrictedResultsOmitted: false,
         groundingNotice: null,
+        agent: null,
         attachments: [],
       },
       // 입퇴장 줄 번호는 서버 msgId를 쓰는 메시지와 카운터를 나눠 쓰지 않는다(이슈 #190).
@@ -270,6 +273,7 @@ describe('applyFrame - chat.message', () => {
         citations: [],
         restrictedResultsOmitted: false,
         groundingNotice: null,
+        agent: null,
         attachments: [],
       },
     ]);

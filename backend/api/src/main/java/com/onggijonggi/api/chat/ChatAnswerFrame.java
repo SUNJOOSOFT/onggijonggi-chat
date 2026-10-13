@@ -33,6 +33,10 @@ import java.util.UUID;
  *
  *               groundingNotice는 방 문서 검색(#344)이 FOUND가 아니었을 때만 채워진다(이슈
  *               #353) — 재접속 복원 대상이 아니라 그 턴에만 실어 보내는 일시적 안내다.
+ *
+ *               agent는 협업방에서 `@SOL`·`@FIN`·`@LAW`로 멘션해 역할별 페르소나로 답했을 때만
+ *               채워진다(이슈 #357) — `@AI`로 답했거나 DIRECT(1:1)면 null이다. citations와 달리
+ *               이 값은 메시지에 저장돼 재접속 후에도 복원된다.
  */
 public record ChatAnswerFrame(
 		UUID threadId,
@@ -44,5 +48,6 @@ public record ChatAnswerFrame(
 		List<Citation> citations,
 		boolean restrictedResultsOmitted,
 		ChatAnswerStatus status,
-		GroundingNotice groundingNotice) implements WsFrame {
+		GroundingNotice groundingNotice,
+		Agent agent) implements WsFrame {
 }

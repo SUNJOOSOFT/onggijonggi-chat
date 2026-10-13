@@ -24,6 +24,8 @@ import tools.jackson.databind.ObjectMapper;
  * @param attachments HUMAN 메시지에 실린 첨부. 없으면 빈 배열이다. WS chat.message의 같은 필드와 짝이다
  * @param citations 방 문서 검색으로 찾은 근거(이슈 #347). 근거 없이 답했거나 HUMAN·SYSTEM 메시지면
  *        빈 배열이다 — 실시간 스트리밍 DONE 프레임과 같은 값을 이력 조회에서도 복원한다
+ * @param agent `@SOL`·`@FIN`·`@LAW`로 멘션해 역할별 페르소나로 답했을 때만 채워진다(이슈 #357).
+ *        `@AI`로 답했거나 HUMAN·SYSTEM 메시지면 null이다 — WS chat.answer의 같은 필드와 짝이다
  */
 public record MsgItem(
 		UUID id,
@@ -36,14 +38,16 @@ public record MsgItem(
 		Instant createdAt,
 		Instant completedAt,
 		List<MsgFileView> attachments,
-		List<Citation> citations
+		List<Citation> citations,
+		Agent agent
 ) {
 
 	static MsgItem from(Msg msg, String authorSubject, String authorDisplayName, List<MsgFileView> attachments,
 			ObjectMapper objectMapper) {
 		return new MsgItem(msg.getId(), msg.getSeq(), msg.getAthKind().name(), msg.getStatus().name(),
 				msg.getContent(), authorSubject, authorDisplayName, msg.getCreatedAt(), msg.getCompletedAt(),
-				attachments, Citation.fromSrcJson(objectMapper, msg.getSrcJson()));
+				attachments, Citation.fromSrcJson(objectMapper, msg.getSrcJson()),
+				Agent.fromPylJson(objectMapper, msg.getPylJson()));
 	}
 
 }

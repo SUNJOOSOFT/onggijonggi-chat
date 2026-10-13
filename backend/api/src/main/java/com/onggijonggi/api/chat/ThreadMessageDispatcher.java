@@ -139,18 +139,25 @@ public class ThreadMessageDispatcher {
 	public Optional<ErrorFrame> dispatch(ChatMessageCommand command, UUID roomGeneration) {
 		ErrorFrame malformed;
 		String prompt;
+		Agent agent;
 		if (command.kind() == ThrKind.DIRECT) {
 			// DIRECT는 멘션 여부와 무관하게 모든 정상 발화를 AI에 전달한다 — 파서를 아예 타지 않는다.
+			// 역할별 에이전트(이슈 #357)는 협업방 전용이라 DIRECT는 agent가 항상 null이다.
 			malformed = null;
 			prompt = command.content();
+			agent = null;
 		} else {
 			AiMentionParser.MentionResult mention = AiMentionParser.parse(command.content());
-			malformed = mention.mentioned() && mention.prompt().isBlank()
+			malformed = mention.ambiguous()
 					? new ErrorFrame(command.threadId(), "MALFORMED_REQUEST",
-							"@AI 뒤에 요청 내용을 입력해 주세요.", command.traceId())
-					: null;
+							"한 메시지에는 에이전트를 하나만 멘션해 주세요.", command.traceId())
+					: mention.mentioned() && mention.prompt().isBlank()
+							? new ErrorFrame(command.threadId(), "MALFORMED_REQUEST",
+									"멘션 뒤에 요청 내용을 입력해 주세요.", command.traceId())
+							: null;
 			// prompt가 null이면 워커는 방송·저장만 하고 AI 턴을 만들지 않는다 — 일반 발화이거나 빈 프롬프트다.
 			prompt = malformed == null && mention.mentioned() ? mention.prompt() : null;
+			agent = malformed == null && mention.mentioned() ? mention.agent() : null;
 		}
 
 		RoomKey key = new RoomKey(command.threadId(), roomGeneration);
@@ -166,7 +173,7 @@ public class ThreadMessageDispatcher {
 				}
 				// 워커가 꺼내기 전에 도착한 취소도 받을 수 있게 큐에 넣는 순간 등록한다(cancel 주석).
 				// 인바운드는 연결마다 순서대로 처리되므로, 같은 연결의 chat.cancel은 이 등록 뒤에 온다.
-				QueuedMessage queued = new QueuedMessage(command, prompt, new AtomicBoolean());
+				QueuedMessage queued = new QueuedMessage(command, prompt, agent, new AtomicBoolean());
 				TurnRef ref = prompt == null ? null : TurnRef.of(command.turnId(), command.connectionId());
 				if (ref != null) {
 					state.inFlight.put(ref, new InFlightTurn(queued, false));
@@ -231,7 +238,7 @@ public class ThreadMessageDispatcher {
 		PendingTurn pendingTurn = new PendingTurn(command.threadId(), key.roomGeneration(), queued.prompt(),
 				msgId, command.files(), command.traceId(), command.from(), command.fromSubject(),
 				command.fromDisplayName(), TurnRef.of(command.turnId(), command.connectionId()), command.model(),
-				command.timeZone(), context, direct ? reserved : null, queued.terminalPersisted());
+				command.timeZone(), context, direct ? reserved : null, queued.terminalPersisted(), queued.agent());
 		ActiveTurn turnToStart = null;
 		boolean admitted = false;
 		// 등록 해제와 대기열 추가를 한 락 안에서 한다 — 사이가 벌어지면 그 틈에 온 취소가 어디서도
@@ -308,7 +315,7 @@ public class ThreadMessageDispatcher {
 		ChatMessageCommand.ReservedTurn reserved = turn.reservedTurn();
 		persistDirectReservedAgentTerminal(reserved, turn.terminalPersisted(), terminalStatus);
 		broadcastQuietly(key, new ChatAnswerFrame(key.threadId(), reserved.agentMsgId(), turn.turnId(),
-				modelIdFor(turn), reserved.agentSeq(), "", List.of(), false, answerStatus, null));
+				modelIdFor(turn), reserved.agentSeq(), "", List.of(), false, answerStatus, null, null));
 	}
 
 	/** 예약된 DIRECT AGENT의 terminal 전이는 큐·대기·활성 어느 경로에서도 한 번만 실행한다. */
@@ -475,7 +482,7 @@ public class ThreadMessageDispatcher {
 		persistAgentCancellation(activeTurn);
 		broadcastQuietly(key, new ChatAnswerFrame(threadId, activeTurn.msgId, activeTurn.turn.turnId(),
 				modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false,
-				direct ? ChatAnswerStatus.CANCELLED : ChatAnswerStatus.DONE, null));
+				direct ? ChatAnswerStatus.CANCELLED : ChatAnswerStatus.DONE, null, activeTurn.turn.agent()));
 		advance(key, state, activeTurn);
 	}
 
@@ -518,7 +525,8 @@ public class ThreadMessageDispatcher {
 				activeTurn.subscription.dispose();
 				persistAgentCancellation(activeTurn);
 				broadcastQuietly(key, new ChatAnswerFrame(key.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
-						modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE, null));
+						modelIdFor(activeTurn.turn), activeTurn.seq, "", List.of(), false, ChatAnswerStatus.DONE, null,
+						activeTurn.turn.agent()));
 				advance(key, state, activeTurn);
 			}
 		}
@@ -703,7 +711,11 @@ public class ThreadMessageDispatcher {
 	*/
 	private static List<ChatMessage> buildPromptMessages(List<Msg> context, Map<UUID, List<MsgFile>> files,
 			PendingTurn turn) {
-		List<ChatMessage> messages = new ArrayList<>(context.size() + 1);
+		List<ChatMessage> messages = new ArrayList<>(context.size() + 2);
+		// 역할별 페르소나(이슈 #357)는 대화 이력보다 앞에 둬 전체 발화를 그 역할의 관점으로 보게 한다.
+		if (turn.agent() != null) {
+			messages.add(new ChatMessage("system", turn.agent().systemPrompt()));
+		}
 		boolean humanInContext = false;
 		for (Msg msg : context) {
 			String role = msg.getAthKind() == AthKind.HUMAN ? "user"
@@ -745,7 +757,7 @@ public class ThreadMessageDispatcher {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
 							modelIdFor(activeTurn.turn), activeTurn.seq, delta, List.of(), false,
-							ChatAnswerStatus.STREAMING, activeTurn.groundingNotice))) {
+							ChatAnswerStatus.STREAMING, activeTurn.groundingNotice, activeTurn.turn.agent()))) {
 				throw new StaleGenerationException();
 			}
 		} catch (StaleGenerationException error) {
@@ -767,7 +779,7 @@ public class ThreadMessageDispatcher {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
 							modelIdFor(activeTurn.turn), activeTurn.seq, "", activeTurn.citations, false,
-							ChatAnswerStatus.DONE, activeTurn.groundingNotice))) {
+							ChatAnswerStatus.DONE, activeTurn.groundingNotice, activeTurn.turn.agent()))) {
 				persistAgentCompletion(activeTurn, content);
 				closeGeneration(key, state);
 				return;
@@ -939,8 +951,10 @@ public class ThreadMessageDispatcher {
 			return;
 		}
 		String citationsJson = citationsJson(activeTurn.citations);
+		String agentJson = Agent.toPylJson(json, activeTurn.turn.agent());
 		activeTurn.pendingMsgId
-				.flatMap(msgId -> Mono.fromRunnable(() -> msgPersistenceService.completeBlocking(msgId, content, citationsJson))
+				.flatMap(msgId -> Mono
+						.fromRunnable(() -> msgPersistenceService.completeBlocking(msgId, content, citationsJson, agentJson))
 						.subscribeOn(Schedulers.boundedElastic())
 						.doOnError(e -> log.error("agent 메시지 완료 저장 실패 msgId={}", msgId, e)))
 				.onErrorComplete()
@@ -1027,7 +1041,8 @@ public class ThreadMessageDispatcher {
 	}
 
 	/** 워커가 꺼내 처리할 한 건. prompt가 null이면 AI 턴을 만들지 않는다(일반 발화·빈 프롬프트). */
-	private record QueuedMessage(ChatMessageCommand command, String prompt, AtomicBoolean terminalPersisted) {
+	private record QueuedMessage(ChatMessageCommand command, String prompt, Agent agent,
+			AtomicBoolean terminalPersisted) {
 	}
 
 	/** inbox에 들어간 예약 DIRECT 턴은 worker가 꺼내기 전에도 terminal 상태를 공유해야 한다. */
@@ -1042,12 +1057,13 @@ public class ThreadMessageDispatcher {
 	* ref는 취소 지목 키다(이슈 #160). model이 null이면 서버 기본값을 쓴다. reservedTurn은 DIRECT만
 	* 채운다 — `DirectChatTurnService`가 이미 만든 PENDING AGENT를 가리킨다(이슈 #162). humanMsgId·files는
 	* 이 턴을 부른 발화의 msg id와 첨부다 — 프롬프트에 첨부를 붙일 때 쓴다. timeZone은 그 발화자의 브라우저
-	* 시간대다 — 협업방에서도 턴을 부른 사람 기준으로 현재 시각 도구가 답한다.
+	* 시간대다 — 협업방에서도 턴을 부른 사람 기준으로 현재 시각 도구가 답한다. agent는 `@SOL`·`@FIN`·
+	* `@LAW`로 멘션됐을 때만 채워진다(이슈 #357) — `@AI`거나 DIRECT면 null이다.
 	*/
 	private record PendingTurn(UUID threadId, UUID roomGeneration, String prompt, UUID humanMsgId,
 			List<MsgFile> files, String traceId, UUID fromUserId, String fromSubject, String fromDisplayName,
 			TurnRef ref, String model, String timeZone, Mono<List<Msg>> context,
-			ChatMessageCommand.ReservedTurn reservedTurn, AtomicBoolean terminalPersisted) {
+			ChatMessageCommand.ReservedTurn reservedTurn, AtomicBoolean terminalPersisted, Agent agent) {
 
 		UUID turnId() {
 			return ref == null ? null : ref.turnId();

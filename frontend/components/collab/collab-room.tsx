@@ -73,7 +73,13 @@ function PresenceRow({ notice }: { notice: RoomPresenceNotice }) {
   );
 }
 
-/** 사람 메시지는 보낸 사람 이름을, AI 답변은 "AI"를 머리에 달고 배경으로 구분한다. */
+/** `@SOL`·`@FIN`·`@LAW`로 답했으면 그 이름을, `@AI`로 답했으면 "AI"를 보여준다(이슈 #357). */
+function agentLabel(agent: RoomMessage['agent']): string {
+  return agent === null ? 'AI' : agent.toUpperCase();
+}
+
+/** 사람 메시지는 보낸 사람 이름을, AI 답변은 "AI" 또는 역할별 에이전트 이름을 머리에 달고
+ * 배경으로 구분한다(이슈 #357). */
 function MessageRow({ message }: { message: RoomMessage }) {
   const isAi = message.from === null;
   return (
@@ -86,7 +92,7 @@ function MessageRow({ message }: { message: RoomMessage }) {
         className="text-xs font-medium text-muted-foreground"
         title={message.from?.subject}
       >
-        {isAi ? 'AI' : message.from?.displayName}
+        {isAi ? agentLabel(message.agent) : message.from?.displayName}
       </span>
       {isAi ? (
         <>

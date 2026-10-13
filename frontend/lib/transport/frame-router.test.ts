@@ -25,6 +25,7 @@ describe('routeFrame', () => {
       restrictedResultsOmitted: false,
       status: 'streaming',
       groundingNotice: null,
+      agent: null,
     };
     const onChatAnswer = vi.fn();
     const onError = vi.fn();
@@ -112,6 +113,7 @@ describe('routeFrame', () => {
       restrictedResultsOmitted: false,
       status: 'streaming',
       groundingNotice: null,
+      agent: null,
     };
     expect(() => routeFrame(frame, {})).not.toThrow();
   });
@@ -129,6 +131,7 @@ describe('routeFrame', () => {
       restrictedResultsOmitted: false,
       status: 'done',
       groundingNotice: null,
+      agent: null,
     };
     const onChatAnswer = vi.fn();
     const onChatMessage = vi.fn();

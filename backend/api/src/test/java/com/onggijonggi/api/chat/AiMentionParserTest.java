@@ -33,4 +33,35 @@ class AiMentionParserTest {
 		assertThat(result.prompt()).isEqualTo("keep   these spaces");
 	}
 
+	@Test
+	void recognizesRoleAgentMentionsAndResolvesThePersona() {
+		assertThat(AiMentionParser.parse("@FIN 비용 관점에서 검토해줘").agent()).isEqualTo(Agent.FIN);
+		assertThat(AiMentionParser.parse("@law 유의할 점은?").agent()).isEqualTo(Agent.LAW);
+		assertThat(AiMentionParser.parse("@SOL 요약해줘").agent()).isEqualTo(Agent.SOL);
+	}
+
+	@Test
+	void aiMentionHasNoAgentPersona() {
+		AiMentionParser.MentionResult result = AiMentionParser.parse("@AI 알려줘");
+
+		assertThat(result.mentioned()).isTrue();
+		assertThat(result.agent()).isNull();
+		assertThat(result.ambiguous()).isFalse();
+	}
+
+	@Test
+	void flagsMultipleDistinctMentionsAsAmbiguous() {
+		AiMentionParser.MentionResult result = AiMentionParser.parse("@FIN @LAW 같이 검토해줘");
+
+		assertThat(result.ambiguous()).isTrue();
+	}
+
+	@Test
+	void repeatingTheSameMentionIsNotAmbiguous() {
+		AiMentionParser.MentionResult result = AiMentionParser.parse("@FIN 먼저 보고, @FIN 다시 정리해줘");
+
+		assertThat(result.ambiguous()).isFalse();
+		assertThat(result.agent()).isEqualTo(Agent.FIN);
+	}
+
 }

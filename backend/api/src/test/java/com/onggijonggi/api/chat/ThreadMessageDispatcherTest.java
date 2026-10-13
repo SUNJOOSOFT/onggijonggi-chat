@@ -37,6 +37,7 @@ import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -166,6 +167,75 @@ class ThreadMessageDispatcherTest {
 		awaitFrameCount(room.frames, 1);
 		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").containsExactly(message(room, "@AI   "));
 		verify(llm, times(0)).streamChat(any());
+	}
+
+	/** 역할별 에이전트(이슈 #357)는 페르소나 system 메시지를 대화 이력보다 앞에 끼워 보낸다. */
+	@Test
+	void sendsTheMentionedAgentsPersonaBeforeHistory() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@FIN 비용 관점에서 검토해줘"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().messages().get(0).role()).isEqualTo("system");
+		assertThat(request.getValue().messages().get(0).content()).isEqualTo(Agent.FIN.systemPrompt());
+		assertThat(request.getValue().messages().get(1).content()).isEqualTo("비용 관점에서 검토해줘");
+	}
+
+	/** `@AI`는 역할 구분이 없어 페르소나 system 메시지를 끼우지 않는다(이슈 #357) — 기존 동작 그대로다. */
+	@Test
+	void plainAiMentionHasNoPersonaMessage() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@AI 알려줘"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().messages()).hasSize(1);
+		assertThat(request.getValue().messages().get(0).role()).isEqualTo("user");
+	}
+
+	/** 한 메시지에 서로 다른 에이전트를 멘션하면 이번 범위는 거절한다(이슈 #357 "확인이 필요한 것" 1번). */
+	@Test
+	void rejectsMultipleDistinctAgentMentionsWithoutCallingTheLlm() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		ErrorFrame error = dispatcher.dispatch(command(room, "@FIN @LAW 같이 검토해줘"), room.membership.generation())
+				.orElseThrow();
+
+		assertThat(error.code()).isEqualTo("MALFORMED_REQUEST");
+		verify(llm, times(0)).streamChat(any());
+	}
+
+	/** 답변이 어느 에이전트의 것인지가 스트리밍·완료 프레임과 저장에 함께 실린다(이슈 #357). */
+	@Test
+	void persistsAndBroadcastsTheMentionedAgentOnCompletion() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1L);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(pending);
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@LAW 유의할 점은?"), room.membership.generation());
+
+		awaitFrameCount(room.frames, 3);
+		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+				.extracting(frame -> ((ChatAnswerFrame) frame).agent())
+				.containsOnly(Agent.LAW);
+		verify(msgPersistenceService, timeout(1000)).completeBlocking(eq(pending.getId()), eq("답"), isNull(),
+				eq("{\"agent\":\"law\"}"));
 	}
 
 	@Test
@@ -547,7 +617,7 @@ class ThreadMessageDispatcherTest {
 
 		dispatcher.dispatch(command(room, "@AI hi"), room.membership.generation());
 
-		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "hello world", null);
+		verify(msgPersistenceService, timeout(1000)).completeBlocking(pending.getId(), "hello world", null, null);
 	}
 
 	@Test
@@ -675,7 +745,7 @@ class ThreadMessageDispatcherTest {
 
 		ArgumentCaptor<String> citationsJson = ArgumentCaptor.forClass(String.class);
 		verify(msgPersistenceService, timeout(1000)).completeBlocking(eq(pending.getId()), eq("답"),
-				citationsJson.capture());
+				citationsJson.capture(), isNull());
 		assertThat(citationsJson.getValue()).contains(docId.toString()).contains("규정.pdf");
 	}
 
@@ -823,7 +893,7 @@ class ThreadMessageDispatcherTest {
 		// 오가는 경로라 스케줄링 편차가 누적되는데, 같은 JVM에서 클래스 전체를 연달아 돌리는 CI에서는
 		// 1초 창이 빠듯해 10회 중 1~2회 간헐 실패했다. 프로덕션 순서·로직 결함이 아니라는 것은
 		// 이슈에서 반복 측정으로 확인됐다(#207, Refs #197).
-		verify(msgPersistenceService, timeout(5000)).completeBlocking(pending.getId(), "answer", null);
+		verify(msgPersistenceService, timeout(5000)).completeBlocking(pending.getId(), "answer", null, null);
 		verify(msgPersistenceService, never()).cancelBlocking(eq(pending.getId()), any());
 	}
 
@@ -1444,7 +1514,8 @@ class ThreadMessageDispatcherTest {
 	}
 
 	private static ChatAnswerFrame answer(TestRoom room, String delta, ChatAnswerStatus status) {
-		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status, null);
+		return new ChatAnswerFrame(room.threadId, null, null, "test-model", 0L, delta, List.of(), false, status, null,
+				null);
 	}
 
 	private static void awaitAttemptedDelta(FailingRoomSessionRegistry registry, String delta) {

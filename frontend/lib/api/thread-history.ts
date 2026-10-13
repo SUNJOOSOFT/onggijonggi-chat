@@ -29,6 +29,10 @@ export interface ThreadMessageItem {
   completedAt: string | null;
   /** HUMAN 메시지에 실린 첨부. 없으면 빈 배열이다. WS chat.message의 같은 필드와 짝이다. */
   attachments: MessageAttachment[];
+  /** 협업방에서 `@SOL`·`@FIN`·`@LAW`로 멘션해 역할별 페르소나로 답했을 때만 채워진다(이슈
+   * #357). `@AI`로 답했거나 HUMAN·SYSTEM이면 null이다 — WS chat.answer의 같은 필드와 짝이다.
+   * 이 필드가 없던 과거 응답의 역직렬화 호환을 위해 optional이다. */
+  agent?: 'sol' | 'fin' | 'law' | null;
 }
 
 export async function fetchThreadMessages(

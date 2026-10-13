@@ -221,6 +221,7 @@ export function answerFrame(
   citations: Citation[] = [],
   restrictedResultsOmitted = false,
   groundingNotice: ChatAnswerFrame['groundingNotice'] = null,
+  agent: ChatAnswerFrame['agent'] = null,
 ): ChatAnswerFrame {
   return {
     type: 'chat.answer',
@@ -234,6 +235,7 @@ export function answerFrame(
     restrictedResultsOmitted,
     status,
     groundingNotice,
+    agent,
   };
 }
 

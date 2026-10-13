@@ -16,5 +16,6 @@
   } ],
   "restrictedResultsOmitted" : false,
   "status" : "streaming",
-  "groundingNotice" : "no_evidence"
+  "groundingNotice" : "no_evidence",
+  "agent" : "fin"
 }

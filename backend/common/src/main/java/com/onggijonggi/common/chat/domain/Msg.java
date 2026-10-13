@@ -68,6 +68,13 @@ public class Msg {
 	@Column(name = "src_json")
 	private String srcJson;
 
+	/** 협업방에서 `@SOL`·`@FIN`·`@LAW` 역할별 에이전트가 답했을 때 그 표시를 담아 둔다(이슈 #357)
+	 * — `@AI`로 답했거나 HUMAN·SYSTEM 메시지면 null이다. src_json과 같은 이유로 JSON 타입으로
+	 * 바인딩한다. */
+	@JdbcTypeCode(SqlTypes.JSON)
+	@Column(name = "pyl_json")
+	private String pylJson;
+
 	protected Msg() {
 	}
 
@@ -112,13 +119,19 @@ public class Msg {
 	}
 
 	public void complete(String content) {
-		complete(content, null);
+		complete(content, null, null);
 	}
 
-	/** citationsJson은 방 문서 검색으로 찾은 근거를 직렬화한 것이다(이슈 #347) — 없으면 null. */
 	public void complete(String content, String citationsJson) {
+		complete(content, citationsJson, null);
+	}
+
+	/** citationsJson은 방 문서 검색으로 찾은 근거를 직렬화한 것이다(이슈 #347) — 없으면 null.
+	 * agentJson은 협업방 역할별 에이전트 표시를 직렬화한 것이다(이슈 #357) — `@AI`로 답했으면 null. */
+	public void complete(String content, String citationsJson, String agentJson) {
 		this.content = content;
 		this.srcJson = citationsJson;
+		this.pylJson = agentJson;
 		this.status = MsgStatus.COMPLETE;
 		this.completedAt = Instant.now();
 	}
@@ -176,6 +189,10 @@ public class Msg {
 
 	public String getSrcJson() {
 		return srcJson;
+	}
+
+	public String getPylJson() {
+		return pylJson;
 	}
 
 	public Instant getCreatedAt() {

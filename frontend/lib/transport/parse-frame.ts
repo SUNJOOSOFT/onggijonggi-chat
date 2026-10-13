@@ -41,6 +41,7 @@ const chatAnswerFrameSchema = z.object({
     z.literal('denied'),
   ]),
   groundingNotice: z.union([z.literal('no_evidence'), z.literal('unavailable'), z.null()]),
+  agent: z.union([z.literal('sol'), z.literal('fin'), z.literal('law'), z.null()]),
 });
 
 const chatMessageFrameSchema = z.object({
