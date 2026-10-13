@@ -11,6 +11,7 @@ import org.springframework.ai.chat.prompt.ChatOptions;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Flux;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -46,19 +47,22 @@ public class LlmChatStreamService {
 
 		// toolContext는 요청마다 새로 만든다 — 웹 읽기 허락 목록이 이 턴에만 쌓인다.
 		Map<String, Object> toolContext = new HashMap<>(currentTimeTool.context(request.timeZone()));
-		Object[] tools = {currentTimeTool};
+		List<Object> tools = new ArrayList<>(List.of(currentTimeTool));
 		if (webTools.enabled()) {
 			toolContext.putAll(webTools.context(request.messages().stream()
 					.filter(message -> isUser(message.role()))
 					.map(ChatMessage::content)
 					.toList()));
-			tools = new Object[] {currentTimeTool, webTools};
+			tools.add(webTools);
+		}
+		if (request.documentTool() != null) {
+			tools.add(request.documentTool());
 		}
 
 		return chatClient.prompt()
 				.messages(messages)
 				.options(ChatOptions.builder().model(request.modelId()))
-				.tools(tools)
+				.tools(tools.toArray())
 				.toolContext(toolContext)
 				.advisors()
 				.stream()

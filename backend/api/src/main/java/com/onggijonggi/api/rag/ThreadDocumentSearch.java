@@ -47,6 +47,16 @@ public class ThreadDocumentSearch {
 		this.scheduler = scheduler;
 	}
 
+	/**
+	 * 지금 검색할 수 있는 문서(고정·READY)의 파일 이름. 답변 턴이 검색 도구를 붙일지, 모델에 어떤 문서가 있는지 알릴지 정할 때 쓴다.
+	 * 범위는 search와 같은 searchScope라 방 접근 확인도 같다.
+	 */
+	public Mono<List<String>> searchableFileNames(UUID thread, CurrentActor actor) {
+		return Mono.fromCallable(() -> documents.searchScope(thread, actor).targets().stream()
+						.map(ThreadDocumentScope.Target::fileName).toList())
+				.subscribeOn(Schedulers.boundedElastic());
+	}
+
 	/** history는 질문 앞의 대화(오래된 것부터), modelId는 그 대화의 모델(다시 쓰기 기본값)이다. */
 	public Mono<SearchResult> search(UUID thread, CurrentActor actor, String question, List<ChatMessage> history, String modelId) {
 		// 장애는 200 응답의 UNAVAILABLE이라 공통 오류 로그에 남지 않는다. 응답 헤더 X-Trace-Id로 찾을 수 있게 로그에 traceId를 단다.

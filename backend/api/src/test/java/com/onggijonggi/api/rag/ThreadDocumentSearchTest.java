@@ -52,6 +52,17 @@ class ThreadDocumentSearchTest {
 		verifyNoInteractions(embedder);
 	}
 
+	/** 답변 턴이 검색 도구를 붙일지 정하는 문서 목록은 검색 범위의 파일 이름이다. 외부 호출이 없어 검색 대기열과 무관하다. */
+	@Test
+	void listsTheSearchableFileNamesEvenWhenTheSearchQueueIsFull() {
+		when(documents.searchScope(eq(room), any())).thenReturn(new ThreadDocumentScope(UUID.randomUUID(), ThreadScopeFilter.of(List.of(room)),
+				List.of(new ThreadDocumentScope.Target(UUID.randomUUID(), "a.txt", 1, "bge-m3", 1024),
+						new ThreadDocumentScope.Target(UUID.randomUUID(), "b.pdf", 2, "bge-m3", 1024))));
+
+		assertThat(search.searchableFileNames(room, actor).block()).containsExactly("a.txt", "b.pdf");
+		verifyNoInteractions(embedder);
+	}
+
 	@Test
 	void aRefusedAccessStaysNotFoundEvenWhenTheSearchQueueIsFull() {
 		when(documents.searchScope(eq(room), any())).thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND));
