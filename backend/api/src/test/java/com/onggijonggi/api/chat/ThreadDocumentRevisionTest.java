@@ -12,6 +12,7 @@ import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.authz.ThreadScopeFilter;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import org.junit.jupiter.api.Test;
 import org.springframework.http.HttpStatus;
@@ -24,7 +25,7 @@ import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : ThreadDocumentRevisionTest.java
- * Description : 개정본 만들기 — 고정 docx 원본을 워커의 개정 경로로 보내고 결과를 "_개정안.docx"로 방 문서에 등록하는지,
+ * Description : 개정본 만들기 — 고정 docx 원본을 워커의 개정 경로로 보내고 결과를 버전을 올린 이름("_v1.docx")으로 방 문서에 등록하는지,
  *               워커 거절(원문 없음·여러 곳)과 권한·저장소 실패를 모델이 다시 시도하거나 사용자에게 알릴 수 있는 문장으로 돌려주는지 확인한다.
  */
 class ThreadDocumentRevisionTest {
@@ -50,6 +51,13 @@ class ThreadDocumentRevisionTest {
 		when(documents.searchScope(eq(room), any())).thenReturn(new ThreadDocumentScope(tenant, ThreadScopeFilter.of(List.of(room)),
 				List.of(new ThreadDocumentScope.Target(rules, fileName, 1, "bge-m3", 1024))));
 		when(documents.original(room, rules, actor)).thenReturn(new ThreadDocumentService.Original(fileName, new byte[] {1, 2}));
+		inRoom();
+	}
+
+	private void inRoom(String... fileNames) {
+		when(documents.list(eq(room), any())).thenReturn(new ThreadDocumentView.Listing("ACTIVE", true, List.of(fileNames).stream()
+				.map(name -> new ThreadDocumentView(UUID.randomUUID(), name, 1, "READY", false, true, true, false, true, true, false, null))
+				.toList()));
 	}
 
 	@Test
@@ -62,8 +70,28 @@ class ThreadDocumentRevisionTest {
 		assertThat(sent.url().toString()).isEqualTo("http://worker" + ThreadDocumentRevision.REVISIONS_PATH);
 		assertThat(sent.headers().getFirst("X-Internal-Api-Key")).isEqualTo("key");
 		assertThat(sent.headers().getFirst("X-Tenant-Id")).isEqualTo(tenant.toString());
-		verify(documents).upload(eq(room), any(), eq(actor), eq("취업규칙_개정안.docx"), eq("revised".getBytes()));
-		assertThat(result).contains("취업규칙_개정안.docx").contains("방 문서에 등록").contains("신구조문 대비표");
+		verify(documents).upload(eq(room), any(), eq(actor), eq("취업규칙_v1.docx"), eq("revised".getBytes()));
+		assertThat(result).contains("취업규칙_v1.docx").contains("방 문서에 등록").contains("신구조문 대비표");
+	}
+
+	@Test
+	void aSecondRevisionOfTheSameDocumentGetsTheNextVersion() {
+		pinned("취업규칙.docx");
+		inRoom("취업규칙.docx", "취업규칙_v1.docx");
+
+		String result = revision(HttpStatus.OK, "revised").revise(room, actor, "취업규칙.docx", edits);
+
+		verify(documents).upload(eq(room), any(), eq(actor), eq("취업규칙_v2.docx"), eq("revised".getBytes()));
+		assertThat(result).contains("취업규칙_v2.docx");
+	}
+
+	@Test
+	void theVersionAtTheEndOfTheNameGoesUpAndSkipsNamesAlreadyInTheRoom() {
+		assertThat(ThreadDocumentRevision.revisionName("사내_취업_규칙_20260101.docx", Set.of())).isEqualTo("사내_취업_규칙_20260101_v1.docx");
+		assertThat(ThreadDocumentRevision.revisionName("규칙_v1.docx", Set.of())).isEqualTo("규칙_v2.docx");
+		assertThat(ThreadDocumentRevision.revisionName("규칙_v9.docx", Set.of())).isEqualTo("규칙_v10.docx");
+		assertThat(ThreadDocumentRevision.revisionName("규칙_v1.docx", Set.of("규칙_v2.docx"))).isEqualTo("규칙_v3.docx");
+		assertThat(ThreadDocumentRevision.revisionName("규칙.docx", Set.of("규칙_v1.docx", "규칙_v2.docx"))).isEqualTo("규칙_v3.docx");
 	}
 
 	@Test
@@ -75,8 +103,9 @@ class ThreadDocumentRevisionTest {
 		String ambiguous = revision(HttpStatus.UNPROCESSABLE_CONTENT, "{\"code\":\"EDIT_AMBIGUOUS\",\"message\":\"edit 1: 2 times\",\"requestId\":\"r\"}")
 				.revise(room, actor, "취업규칙.docx", edits);
 
-		assertThat(missing).contains("찾지 못했습니다").contains("edit 1").contains(ThreadDocumentTool.NAME);
-		assertThat(ambiguous).contains("여러 번");
+		// 실패는 모두 같은 문장으로 시작한다 — 모델이 거절을 성공으로 읽지 않게.
+		assertThat(missing).startsWith(ThreadDocumentRevision.FAILED).contains("찾지 못했습니다").contains("edit 1").contains(ThreadDocumentTool.NAME);
+		assertThat(ambiguous).startsWith(ThreadDocumentRevision.FAILED).contains("여러 번");
 		verify(documents, never()).upload(any(), any(), any(), any(), any());
 	}
 
@@ -85,9 +114,10 @@ class ThreadDocumentRevisionTest {
 		pinned("취업규칙.docx");
 		ThreadDocumentRevision revision = revision(HttpStatus.OK, "revised");
 
-		assertThat(revision.revise(room, actor, "취업규칙.pdf", edits)).contains("docx 문서만");
-		assertThat(revision.revise(room, actor, "규정.docx", edits)).contains("고정된 문서 중 '규정.docx'이 없습니다");
-		assertThat(revision.revise(room, actor, "취업규칙.docx", List.of())).contains("하나 이상");
+		assertThat(revision.revise(room, actor, "취업규칙.pdf", edits)).startsWith(ThreadDocumentRevision.FAILED).contains("docx 문서만");
+		assertThat(revision.revise(room, actor, "규정.docx", edits)).startsWith(ThreadDocumentRevision.FAILED)
+				.contains("고정된 문서 중 '규정.docx'이 없습니다");
+		assertThat(revision.revise(room, actor, "취업규칙.docx", List.of())).startsWith(ThreadDocumentRevision.FAILED).contains("하나 이상");
 		assertThat(requests).isEmpty();
 	}
 
@@ -96,8 +126,9 @@ class ThreadDocumentRevisionTest {
 		pinned("취업규칙.docx");
 		when(documents.upload(any(), any(), any(), any(), any())).thenThrow(new ResponseStatusException(HttpStatus.FORBIDDEN));
 
-		assertThat(revision(HttpStatus.OK, "revised").revise(room, actor, "취업규칙.docx", edits)).contains("등록할 수 없어");
+		assertThat(revision(HttpStatus.OK, "revised").revise(room, actor, "취업규칙.docx", edits))
+				.startsWith(ThreadDocumentRevision.FAILED).contains("등록할 수 없습니다");
 		assertThat(revision(HttpStatus.INTERNAL_SERVER_ERROR, "{}").revise(room, actor, "취업규칙.docx", edits))
-				.contains("문서 저장소 문제").doesNotContain("worker").doesNotContain("500");
+				.startsWith(ThreadDocumentRevision.FAILED).contains("문서 저장소 문제").doesNotContain("worker").doesNotContain("500");
 	}
 }

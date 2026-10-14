@@ -40,7 +40,9 @@ public class ThreadDocumentTool {
 
 	@Tool(name = REVISE_NAME, description = "이 방에 고정된 docx 문서의 서식을 그대로 둔 채 지정한 문장만 바꾼 개정본 파일을 만들어 방 문서로 등록한다. "
 			+ "개정본 끝에는 신구조문 대비표가 붙는다. 사용자가 문서의 개정본·수정본 파일을 만들어 달라고 할 때만 쓴다. "
-			+ "부르기 전에 searchThreadDocuments로 바꿀 조항의 원문을 확인한다.")
+			+ "부르기 전에 searchThreadDocuments로 바꿀 조항의 원문을 확인한다. "
+			+ "결과가 '개정본을 만들지 못했습니다'로 시작하면 파일은 없다 — 다시 불러 성공하지 않았다면 사용자에게 만들지 못했다고 그 이유와 함께 알린다. "
+			+ "파일을 만들었다고 말하는 것은 결과가 '등록했습니다'일 때뿐이고, 파일 이름은 결과에 나온 그대로 쓴다.")
 	public String reviseThreadDocument(
 			@ToolParam(description = "고칠 고정 문서의 파일 이름. 문서 목록에 나온 이름을 그대로 쓴다.") String fileName,
 			@ToolParam(description = "바꿀 문장 목록") List<Edit> edits) {
