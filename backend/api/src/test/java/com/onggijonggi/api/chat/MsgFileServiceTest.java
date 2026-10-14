@@ -19,11 +19,14 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.lenient;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
@@ -37,13 +40,16 @@ class MsgFileServiceTest {
 	@Mock
 	private MsgFileRepository msgFileRepository;
 
+	@Mock
+	private JdbcTemplate jdbc;
+
 	private MsgFileService service;
 
 	private final UUID userId = UUID.randomUUID();
 
 	@BeforeEach
 	void setUp() {
-		service = new MsgFileService(msgFileRepository);
+		service = new MsgFileService(msgFileRepository, jdbc);
 		lenient().when(msgFileRepository.save(any(MsgFile.class))).thenAnswer(invocation -> invocation.getArgument(0));
 	}
 
@@ -56,6 +62,23 @@ class MsgFileServiceTest {
 		assertThat(saved.getFileText()).isEqualTo("# 회의록\n연차는 3일 전에 신청한다.");
 		assertThat(saved.getUserId()).isEqualTo(userId);
 		assertThat(saved.getMsgId()).isNull();
+	}
+
+	@Test
+	void keepsOriginalBytes() {
+		byte[] content = "연차는 3일 전에 신청한다.".getBytes(StandardCharsets.UTF_8);
+
+		MsgFile saved = service.uploadBlocking(userId, "규정.txt", content);
+
+		verify(jdbc).update("insert into msg_file_org(file_id, content) values (?, ?)", saved.getId(), content);
+	}
+
+	@Test
+	void rejectedFileKeepsNoOriginal() {
+		assertThatThrownBy(() -> service.uploadBlocking(userId, "사진.png", new byte[] {1, 2, 3}))
+				.isInstanceOf(MsgFileRejectedException.class);
+
+		verifyNoInteractions(jdbc);
 	}
 
 	@Test

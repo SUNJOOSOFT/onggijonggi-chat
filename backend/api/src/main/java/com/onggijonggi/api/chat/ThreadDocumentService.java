@@ -47,6 +47,7 @@ import org.springframework.web.server.ResponseStatusException;
  * Class Name : ThreadDocumentService.java
  * Description : Thread 문서의 원본 예약·등록·고정·삭제·업무 이력을 처리한다. 호출부는 boundedElastic에서 실행한다.
  *               원본 통신은 DB 예약 뒤에 수행하고, 늦은 업로드·방 삭제에도 정리 참조를 잃지 않는다.
+ *               이 방에 보낸 채팅 첨부(msg_file)도 같은 방 접근 규칙으로 목록·원본을 내주고, 방 문서로 등록한다.
  */
 @Service
 public class ThreadDocumentService {
@@ -132,8 +133,47 @@ public class ThreadDocumentService {
 					"select doc_id from thr_doc_evt where thr_id = ? and evt_kind = 'REGISTERED'", UUID.class, thread));
 			List<ThreadDocumentView> values = jdbc.query("select * from thr_doc where thr_id = ? and status <> 'DELETED' order by created_at, id",
 					this::document, thread).stream().map(doc -> view(doc, access, registered.contains(doc.id()))).toList();
-			return new ThreadDocumentView.Listing(access.thread().getStatus().name(), access.writable(), values);
+			List<ThreadDocumentView.Attachment> attachments = jdbc.query("""
+					select f.id, f.file_name, f.user_id, u.keycloak_subj, f.created_at, octet_length(o.content)::bigint as file_size,
+					  exists(select 1 from thr_doc d where d.id = f.id) as registered
+					from msg_file f join msg m on m.id = f.msg_id
+					join app_user u on u.id = f.user_id
+					left join msg_file_org o on o.file_id = f.id
+					where m.thr_id = ? order by f.created_at, f.id""",
+					(rs, row) -> {
+						Long size = rs.getObject("file_size", Long.class);
+						boolean kept = size != null;
+						boolean asDocument = rs.getBoolean("registered");
+						return new ThreadDocumentView.Attachment(rs.getObject("id", UUID.class), rs.getString("file_name"),
+								size, rs.getString("keycloak_subj"), access.user().equals(rs.getObject("user_id", UUID.class)), kept,
+								kept && access.writable() && !asDocument, asDocument, rs.getTimestamp("created_at").toInstant());
+					}, thread);
+			return new ThreadDocumentView.Listing(access.thread().getStatus().name(), access.writable(), values, attachments);
 		});
+	}
+
+	/** 이 방 메시지에 실린 채팅 첨부의 원본. 방 문서 원본과 같은 방 접근 확인을 거치고, 원본이 없거나 다른 방 첨부면 404다. */
+	public Original attachmentOriginal(UUID thread, UUID file, CurrentActor actor) {
+		return transactions.execute(tx -> {
+			access(thread, actor, false);
+			var rows = jdbc.query("""
+					select f.file_name, o.content from msg_file f
+					join msg m on m.id = f.msg_id
+					join msg_file_org o on o.file_id = f.id
+					where f.id = ? and m.thr_id = ?""",
+					(rs, row) -> new Original(rs.getString("file_name"), rs.getBytes("content")), file, thread);
+			if (rows.isEmpty()) throw notFound();
+			return rows.get(0);
+		});
+	}
+
+	/**
+	 * 채팅 첨부를 요청한 사람 이름으로 방 문서로 등록한다(고정하지 않음). 첨부 id를 문서 id로 써서 같은 요청을 다시 보내도
+	 * 문서가 하나만 생긴다. 쓰기 권한·파일 검사·원본 저장은 직접 올린 방 문서와 같다(upload).
+	 */
+	public ThreadDocumentView registerAttachment(UUID thread, UUID file, CurrentActor actor) {
+		Original original = attachmentOriginal(thread, file, actor);
+		return upload(thread, file, actor, original.fileName(), original.bytes());
 	}
 
 	/**

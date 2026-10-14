@@ -97,8 +97,28 @@ public class ThreadDocumentController {
 	public Mono<ResponseEntity<byte[]>> original(@PathVariable UUID threadId, @PathVariable UUID documentId) {
 		return actors.currentActor().flatMap(actor -> Mono.fromCallable(() -> documents.original(threadId, documentId, actor))
 				.subscribeOn(Schedulers.boundedElastic()))
-				.map(original -> ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
-						.header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(original.fileName(), StandardCharsets.UTF_8).build().toString())
-						.header(HttpHeaders.CACHE_CONTROL, "no-store").header("X-Content-Type-Options", "nosniff").body(original.bytes()));
+				.map(ThreadDocumentController::download);
+	}
+
+	/** 이 방 메시지에 실려 보낸 채팅 첨부의 원본. 목록은 문서 목록(list)의 attachments에 함께 실린다. */
+	@GetMapping("/api/threads/{threadId}/attachments/{fileId}/original")
+	public Mono<ResponseEntity<byte[]>> attachmentOriginal(@PathVariable UUID threadId, @PathVariable UUID fileId) {
+		return actors.currentActor().flatMap(actor -> Mono.fromCallable(() -> documents.attachmentOriginal(threadId, fileId, actor))
+				.subscribeOn(Schedulers.boundedElastic()))
+				.map(ThreadDocumentController::download);
+	}
+
+	/** 채팅 첨부를 방 문서로 등록한다. 첨부 id가 문서 id가 되므로 재전송해도 문서가 하나만 생긴다. */
+	@PostMapping("/api/threads/{threadId}/attachments/{fileId}/register")
+	@ResponseStatus(HttpStatus.CREATED)
+	public Mono<ThreadDocumentView> registerAttachment(@PathVariable UUID threadId, @PathVariable UUID fileId) {
+		return actors.currentActor().flatMap(actor -> Mono.fromCallable(() -> documents.registerAttachment(threadId, fileId, actor))
+				.subscribeOn(Schedulers.boundedElastic()));
+	}
+
+	private static ResponseEntity<byte[]> download(ThreadDocumentService.Original original) {
+		return ResponseEntity.ok().contentType(MediaType.APPLICATION_OCTET_STREAM)
+				.header(HttpHeaders.CONTENT_DISPOSITION, ContentDisposition.attachment().filename(original.fileName(), StandardCharsets.UTF_8).build().toString())
+				.header(HttpHeaders.CACHE_CONTROL, "no-store").header("X-Content-Type-Options", "nosniff").body(original.bytes());
 	}
 }

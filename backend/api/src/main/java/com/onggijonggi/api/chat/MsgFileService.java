@@ -3,6 +3,8 @@ package com.onggijonggi.api.chat;
 import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.persistence.MsgFileRepository;
 import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.time.Instant;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.List;
@@ -17,13 +19,17 @@ import org.springframework.ai.document.Document;
 import org.springframework.ai.reader.tika.TikaDocumentReader;
 import org.springframework.core.io.ByteArrayResource;
 import org.springframework.http.HttpStatus;
+import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 /**
  * Class Name : MsgFileService.java
- * Description : 채팅 첨부 파일(msg_file). 올릴 때 텍스트를 뽑아 저장하고, 발화에 실릴 때 그 메시지에
- *               붙이고, AI 문맥을 만들 때 텍스트를 프롬프트에 끼운다. 원본은 저장하지 않는다.
+ * Description : 채팅 첨부 파일(msg_file). 올릴 때 텍스트를 뽑아 원본과 함께 저장하고, 발화에 실릴 때 그
+ *               메시지에 붙이고, AI 문맥을 만들 때 텍스트를 프롬프트에 끼운다. 원본은 보낸 뒤 방 문서 패널에서
+ *               내려받거나 방 문서로 등록할 때 쓴다(ThreadDocumentService). 보내지 않은 첨부는 하루 뒤 지운다.
+ *               원본(msg_file_org)은 JDBC로 쓴다 — 절체 이후 스키마라 JPA 엔티티에 넣지 않는다(thr_doc과 같다).
  *
  *               txt·md·csv는 UTF-8로 그대로 읽는다 — Tika의 문자셋 추정이 짧은 한글 파일을 다른
  *               인코딩으로 볼 수 있어서다. PDF·DOCX만 Tika로 뽑는다.
@@ -49,13 +55,19 @@ public class MsgFileService {
 
 	private static final Set<String> DOCUMENT_EXTENSIONS = Set.of("pdf", "docx");
 
+	/** 올리고 이만큼 지나도록 보내지 않은 첨부는 지운다. 원본까지 두므로 쌓이게 두지 않는다. */
+	static final Duration UNSENT_RETENTION = Duration.ofDays(1);
+
 	private final MsgFileRepository msgFileRepository;
 
-	public MsgFileService(MsgFileRepository msgFileRepository) {
+	private final JdbcTemplate jdbc;
+
+	public MsgFileService(MsgFileRepository msgFileRepository, JdbcTemplate jdbc) {
 		this.msgFileRepository = msgFileRepository;
+		this.jdbc = jdbc;
 	}
 
-	/** 텍스트를 뽑아 아직 어느 메시지에도 붙지 않은 첨부로 저장한다. */
+	/** 텍스트를 뽑아 아직 어느 메시지에도 붙지 않은 첨부로 원본과 함께 저장한다. */
 	@Transactional
 	public MsgFile uploadBlocking(UUID userId, String fileName, byte[] content) {
 		String name = fileName == null ? "" : fileName.strip();
@@ -70,7 +82,17 @@ public class MsgFileService {
 		if (text.length() > MAX_TEXT_LENGTH) {
 			text = text.substring(0, MAX_TEXT_LENGTH) + "\n\n(파일이 길어 앞 " + MAX_TEXT_LENGTH + "자만 넣었습니다.)";
 		}
-		return msgFileRepository.save(new MsgFile(UUID.randomUUID(), userId, name, text));
+		MsgFile saved = msgFileRepository.save(new MsgFile(UUID.randomUUID(), userId, name, text));
+		// 원본 행이 msg_file을 FK로 가리키므로 첨부 INSERT를 먼저 내보낸다.
+		msgFileRepository.flush();
+		jdbc.update("insert into msg_file_org(file_id, content) values (?, ?)", saved.getId(), content);
+		return saved;
+	}
+
+	@Scheduled(fixedDelayString = "${app.chat.attachment-cleanup-delay-ms:3600000}")
+	@Transactional
+	public void cleanupUnsent() {
+		msgFileRepository.deleteUnsentBefore(Instant.now().minus(UNSENT_RETENTION));
 	}
 
 	/**

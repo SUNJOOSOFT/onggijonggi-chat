@@ -27,7 +27,7 @@
  넘겨주지 않아(#4) 서버 장애와 구분되지 않으므로, 그쪽은 단정하지 않는 문구로 안내한다.
  *********************************************************/
 
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 
 import { MessageAttachments } from '@/components/attachments';
 import { CitationsPanel } from '@/components/citations-panel';
@@ -171,6 +171,16 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   } = useCollabRoom(threadId);
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
   const title = useThreadTitle(threadId);
+  // 방 문서 패널의 첨부에 보낸 사람 이름을 붙인다. 첨부는 메시지에 실려 오므로 작성자에서 찾는다.
+  const senderNames = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const entry of state.messages) {
+      if (!isPresenceNotice(entry) && entry.from) {
+        names.set(entry.from.subject, entry.from.displayName);
+      }
+    }
+    return names;
+  }, [state.messages]);
 
   if (isForbidden(state.error)) {
     return (
@@ -191,7 +201,15 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   }
 
   return (
-    <ThreadDocumentsProvider threadId={threadId}>
+    <ThreadDocumentsProvider
+      threadId={threadId}
+      attachmentCount={state.messages.reduce(
+        (count, entry) =>
+          isPresenceNotice(entry) ? count : count + entry.attachments.length,
+        0,
+      )}
+      senderNames={senderNames}
+    >
       <div className="flex h-dvh flex-col">
         {/* 패딩·정렬을 chat-header.tsx와 같은 값으로 둔다 — 1:1 채팅과 오갈 때 사이드바 토글이
           같은 자리에 있어야 한다. */}

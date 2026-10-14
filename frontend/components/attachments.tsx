@@ -101,7 +101,7 @@ export function PendingAttachments({
   );
 }
 
-/** 말풍선에 붙는 파일 이름들. 내려받기는 없다 — 서버가 원본을 보관하지 않는다. */
+/** 말풍선에 붙는 파일 이름들. 원본 내려받기는 방 문서 패널의 '채팅 첨부'에서 한다. */
 export function MessageAttachments({
   attachments,
   className,
