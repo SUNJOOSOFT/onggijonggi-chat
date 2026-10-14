@@ -2,6 +2,7 @@ package com.onggijonggi.api.rag;
 
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.chat.ChatMessage;
+import com.onggijonggi.api.chat.SearchableDocument;
 import com.onggijonggi.api.chat.ThreadDocumentScope;
 import com.onggijonggi.api.chat.ThreadDocumentService;
 import com.onggijonggi.api.common.TraceIdWebFilter;
@@ -45,6 +46,15 @@ public class ThreadDocumentSearch {
 		this.embedder = embedder;
 		this.searcher = searcher;
 		this.scheduler = scheduler;
+	}
+
+	/**
+	 * 지금 검색할 수 있는 문서(고정·READY)와 그 태그. 답변 턴이 검색 도구를 붙일지, 모델에 어떤 문서가 있는지 알릴지 정할 때 쓴다.
+	 * 범위는 search와 같은 searchScope라 방 접근 확인도 같다.
+	 */
+	public Mono<List<SearchableDocument>> searchableDocuments(UUID thread, CurrentActor actor) {
+		return Mono.fromCallable(() -> documents.searchableDocuments(thread, actor))
+				.subscribeOn(Schedulers.boundedElastic());
 	}
 
 	/** history는 질문 앞의 대화(오래된 것부터), modelId는 그 대화의 모델(다시 쓰기 기본값)이다. */

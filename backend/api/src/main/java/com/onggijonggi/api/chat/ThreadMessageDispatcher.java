@@ -20,11 +20,13 @@ import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.stream.Collectors;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -102,6 +104,12 @@ public class ThreadMessageDispatcher {
 			+ "웹 검색을 요청하지 않았다면 웹을 쓰지 말고 웹 검색을 먼저 제안하지도 마세요. "
 			+ "이번 답변에서 webSearch 도구의 결과를 받지 않았다면 \"웹 검색 결과\", \"웹에서 찾은\" 같은 표현을 쓰지 말고 웹 검색을 하지 못했다고 말하세요. "
 			+ "예: \"웹에서 찾아서 우리 규정과 비교해줘\" → webSearch를 먼저 호출하고, 그 결과와 문서 근거를 함께 비교한다.";
+
+	/** 문서 목록 지시에 태그를 싣는 최대 문서 수와 요약 길이. 그 밖의 문서는 파일 이름만 싣는다. */
+	static final int MAX_TAGGED_DOCUMENTS = 20;
+	static final int SUMMARY_MAX_CHARS = 200;
+	/** 방 문서 검색 도구가 근거를 찾지 못했을 때 모델에 돌려주는 문장. 웹을 쓸지는 모델이 판단한다(이슈 #368). */
+	static final String NO_EVIDENCE_RESULT = "이 방에 고정된 문서에서 관련된 근거를 찾지 못했습니다. 문서에 있는 내용처럼 추측하지 마세요.";
 
 	private final ConcurrentMap<RoomKey, RoomAiState> states = new ConcurrentHashMap<>();
 
@@ -603,14 +611,14 @@ public class ThreadMessageDispatcher {
 
 		Disposable subscription = activeTurn.turn.context()
 				.flatMap(context -> promptMessages(activeTurn.turn, context))
-				.flatMap(messages -> augmentWithDocumentSearch(activeTurn, messages))
-				.flatMapMany(messages -> {
+				.flatMap(messages -> withDocumentTool(activeTurn, messages))
+				.flatMapMany(prompt -> {
 					if (abandoned(activeTurn)) {
 						return Flux.<String>never();
 					}
 					return withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 							new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
-									messages, activeTurn.turn.timeZone()))));
+									prompt.messages(), activeTurn.turn.timeZone(), prompt.documentTool()))));
 				})
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
@@ -666,57 +674,111 @@ public class ThreadMessageDispatcher {
 				.map(files -> buildPromptMessages(context, files, turn));
 	}
 
+	/** 모델에 보낼 메시지와 이 턴의 방 문서 검색 도구(검색할 문서가 없으면 null). */
+	private record TurnPrompt(List<ChatMessage> messages, ThreadDocumentTool documentTool) { }
+
 	/**
-	* 방에 고정·READY 문서가 있으면 방 문서 검색(#344)을 불러 근거를 프롬프트 맨 끝(이번 발화 바로
-	* 앞)에 system 메시지로 끼워 넣고, 실제로 쓰인 청크를 activeTurn.citations에 채운다(이슈 #347).
-	* buildPromptMessages가 항상 맨 끝에 이번 발화 하나만 user로 붙이므로, 그 앞까지가 "이번 발화
-	* 이전의 대화 history"다.
-	*
-	* 검색 결과마다 웹 검색 사용 규칙을 다르게 지시한다(이슈 #368). 웹 도구 자체는 늘 붙는다 — 빼면 사용자가 원해도
-	* 웹으로 답할 길이 없어진다(LlmChatStreamService).
-	* - FOUND: 근거와 함께 "문서 근거를 우선하고, 사용자가 웹 검색을 요청했으면 먼저 웹 검색 도구를 부르고, 요청하지 않았으면
-	*   웹을 쓰지도 제안하지도 않는다"를 지시한다(FOUND_WEB_RULE).
-	* - NO_EVIDENCE(고정 문서 없음·맞는 내용 없음): 지시를 넣지 않는다 — 웹을 쓸지는 모델이 판단한다.
-	* - UNAVAILABLE·검색 호출 예외: 문서를 확인하지 못했다고 알리게 한다. 답변은 막지 않는다 — 일반 질문은 그대로
-	*   답하고, 문서가 필요한 질문이면 확인할 수 없다고 알린 뒤 웹 검색 여부를 묻는다(그 안내는 저장돼 다음 턴 문맥에
-	*   남아, 사용자가 응하면 모델이 웹으로 답한다). 장애를 조용히 넘기지 않는다. 고장 원인은 지시에 넣지 않는다.
-	* 웹이 켜진 배포의 UNAVAILABLE 지시에는 "요청받으면 웹 검색 도구를 반드시 부르고, 부르지 않았으면 웹에서 찾았다고
-	* 말하지 않는다"(WEB_TOOL_HONESTY)를 붙인다(FOUND는 FOUND_WEB_RULE이 같은 규칙을 담는다). NO_EVIDENCE는 지시를 넣지 않으므로 같은 규칙을 웹 검색 도구 설명(WebTools)에 둔다.
-	* 웹이 꺼진 배포에서는 웹을 말하는 문장을 빼고 지시한다.
-	*
-	* 지시와 별개로 화면 안내(GroundingNotice)를 activeTurn에 남긴다(이슈 #353) — NO_MATCH는 NO_EVIDENCE, UNAVAILABLE·
-	* 검색 호출 예외는 UNAVAILABLE. 고정 문서 자체가 없는 방(NO_PINNED_DOCUMENTS)은 원래부터 안내 대상이 아니다.
+	* 방에 검색할 고정 문서(고정·READY)가 있으면 방 문서 검색 도구(ThreadDocumentTool)를 붙이고, 어떤 문서가 있는지
+	* 이번 발화 바로 앞에 system 메시지로 알린다. 검색은 모델이 도구를 부를 때만 한다 — 예전에는 매 턴 미리 검색해,
+	* 문서가 필요 없는 질문(첨부 요약·현재 시각)에도 관련 없는 청크가 출처로 붙었다.
+	* 문서 목록을 읽지 못하면 도구 없이 검색 실패와 같은 지시·안내(UNAVAILABLE)로 답한다 — 장애를 조용히 넘기지 않는다.
+	* 고정 문서가 없는 방은 도구도 지시도 없다(안내 대상도 아니다, 이슈 #353).
 	*/
-	private Mono<List<ChatMessage>> augmentWithDocumentSearch(ActiveTurn activeTurn, List<ChatMessage> messages) {
+	private Mono<TurnPrompt> withDocumentTool(ActiveTurn activeTurn, List<ChatMessage> messages) {
 		PendingTurn turn = activeTurn.turn;
-		List<ChatMessage> history = messages.subList(0, messages.size() - 1);
-		CurrentActor actor = new CurrentActor(turn.fromUserId(), turn.fromSubject(), turn.fromDisplayName());
-		return threadDocumentSearch.search(turn.threadId(), actor, turn.prompt(), history, modelIdFor(turn))
-				.map(result -> switch (result.status()) {
-					case FOUND -> {
-						activeTurn.citations = result.chunks().stream().map(this::toCitation).toList();
-						yield withSystem(messages, groundingPrompt(result, webEnabled));
-					}
-					case UNAVAILABLE -> {
-						activeTurn.groundingNotice = GroundingNotice.UNAVAILABLE;
-						log.warn("방 문서 검색을 끝내지 못해 근거 없이 답변하고 안내를 보낸다 threadId={} traceId={} reason={}",
-								turn.threadId(), turn.traceId(), result.reason());
-						yield withSystem(messages, unavailablePrompt(webEnabled));
-					}
-					case NO_EVIDENCE -> {
-						if (result.reason() != SearchResult.Reason.NO_PINNED_DOCUMENTS) {
-							activeTurn.groundingNotice = GroundingNotice.NO_EVIDENCE;
-							log.info("방 문서 근거를 못 찾아 안내를 보낸다 threadId={} traceId={} reason={}",
-									turn.threadId(), turn.traceId(), result.reason());
-						}
-						yield messages;
-					}
-				})
+		return threadDocumentSearch.searchableDocuments(turn.threadId(), actorOf(turn))
+				.map(documents -> documents.isEmpty()
+						? new TurnPrompt(messages, null)
+						: new TurnPrompt(withSystem(messages, documentsPrompt(documents)),
+								new ThreadDocumentTool(query -> searchDocuments(activeTurn, query))))
 				.onErrorResume(error -> {
 					activeTurn.groundingNotice = GroundingNotice.UNAVAILABLE;
-					log.error("방 문서 검색 호출 실패로 안내를 보낸다 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
-					return Mono.just(withSystem(messages, unavailablePrompt(webEnabled)));
+					log.error("방 문서 목록 조회 실패로 안내를 보낸다 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
+					return Mono.just(new TurnPrompt(withSystem(messages, unavailablePrompt(webEnabled)), null));
 				});
+	}
+
+	/**
+	* 모델이 부른 방 문서 검색(#344)을 실행하고, 모델에 돌려줄 문장을 만든다. 도구 실행 스레드(boundedElastic)에서 불리므로
+	* 결과를 기다려도 된다. 검색어는 모델이 대화를 보고 이미 독립 문장으로 썼으므로 이력을 넘기지 않는다(다시 쓰기 생략).
+	*
+	* 결과마다 돌려주는 문장과 웹 검색 사용 규칙이 다르다(이슈 #368). 웹 도구 자체는 늘 붙는다(LlmChatStreamService).
+	* - FOUND: 근거와 함께 "문서 근거를 우선하고, 사용자가 웹 검색을 요청했으면 웹 검색 도구를 부르고, 요청하지 않았으면
+	*   웹을 쓰지도 제안하지도 않는다"(FOUND_WEB_RULE). 찾은 청크를 activeTurn.citations에 더한다(이슈 #347).
+	* - NO_EVIDENCE: 찾지 못했다는 사실만 돌려준다 — 웹을 쓸지는 모델이 판단한다.
+	* - UNAVAILABLE·검색 호출 예외: 문서를 확인하지 못했다고 알리게 한다. 답변은 막지 않는다. 고장 원인은 넣지 않는다.
+	*   웹이 켜진 배포에서는 웹 검색 여부를 묻게 하고 WEB_TOOL_HONESTY를 붙인다.
+	* 웹이 꺼진 배포에서는 웹을 말하는 문장을 빼고 돌려준다.
+	*
+	* 화면 안내(GroundingNotice, 이슈 #353)는 이 턴에서 근거를 하나도 찾지 못했을 때만 남긴다 — 모델이 검색어를 바꿔 여러 번
+	* 부르다 한 번이라도 찾으면 근거 없음이 아니다.
+	*/
+	private String searchDocuments(ActiveTurn activeTurn, String query) {
+		PendingTurn turn = activeTurn.turn;
+		SearchResult result;
+		try {
+			result = threadDocumentSearch.search(turn.threadId(), actorOf(turn), query, List.of(), modelIdFor(turn))
+					.block(turnTimeout);
+		} catch (RuntimeException error) {
+			log.error("방 문서 검색 호출 실패로 안내를 보낸다 threadId={} traceId={}", turn.threadId(), turn.traceId(), error);
+			result = null;
+		}
+		synchronized (activeTurn) {
+			if (result != null && result.status() == SearchResult.Status.FOUND) {
+				Set<String> seen = activeTurn.citations.stream().map(Citation::chunkId).collect(Collectors.toSet());
+				List<Citation> citations = new ArrayList<>(activeTurn.citations);
+				result.chunks().stream().map(this::toCitation).filter(citation -> seen.add(citation.chunkId()))
+						.forEach(citations::add);
+				activeTurn.citations = List.copyOf(citations);
+				activeTurn.groundingNotice = null;
+				return groundingPrompt(result, webEnabled);
+			}
+			boolean unavailable = result == null || result.status() == SearchResult.Status.UNAVAILABLE;
+			if (activeTurn.citations.isEmpty()) {
+				activeTurn.groundingNotice = unavailable ? GroundingNotice.UNAVAILABLE : GroundingNotice.NO_EVIDENCE;
+			}
+			if (unavailable && result != null) {
+				log.warn("방 문서 검색을 끝내지 못해 근거 없이 답변하게 한다 threadId={} traceId={} reason={}",
+						turn.threadId(), turn.traceId(), result.reason());
+			} else if (!unavailable) {
+				log.info("방 문서 근거를 못 찾았다 threadId={} traceId={} reason={}", turn.threadId(), turn.traceId(), result.reason());
+			}
+			return unavailable ? unavailablePrompt(webEnabled) : NO_EVIDENCE_RESULT;
+		}
+	}
+
+	private static CurrentActor actorOf(PendingTurn turn) {
+		return new CurrentActor(turn.fromUserId(), turn.fromSubject(), turn.fromDisplayName());
+	}
+
+	/**
+	* 이 방의 검색할 수 있는 고정 문서와, 문서가 필요한 질문에만 검색 도구를 쓰라는 지시. 파일 이름만으로는 내용을 알기 어려워
+	* 태그(#362)가 있으면 카테고리·키워드·요약을 함께 싣는다. 고정 문서가 많아도 지시가 길어지지 않게 태그는 앞의
+	* MAX_TAGGED_DOCUMENTS개 문서에만, 요약은 SUMMARY_MAX_CHARS자까지만 싣는다. 태그는 문서를 고르는 데만 쓰게 한다 —
+	* 요약만 보고 답하면 검색을 건너뛰어 출처가 붙지 않고, 요약에 없는 내용을 지어낼 수 있다. "요약을 근거로 쓰지 말라"고
+	* 요약을 직접 가리키면 오히려 요약으로 답해(로컬 측정), 목록만 보고 답하지 말고 먼저 검색하라고 지시한다.
+	*/
+	static String documentsPrompt(List<SearchableDocument> documents) {
+		StringBuilder prompt = new StringBuilder("이 방에 고정된 문서:\n");
+		for (int i = 0; i < documents.size(); i++) {
+			SearchableDocument document = documents.get(i);
+			prompt.append("- ").append(document.fileName());
+			if (i < MAX_TAGGED_DOCUMENTS) {
+				List<String> tags = new ArrayList<>();
+				if (document.category() != null) tags.add(document.category());
+				if (!document.keywords().isEmpty()) tags.add("키워드: " + String.join(", ", document.keywords()));
+				if (document.summary() != null && !document.summary().isBlank()) {
+					String summary = document.summary().strip();
+					tags.add("요약: " + (summary.length() > SUMMARY_MAX_CHARS ? summary.substring(0, SUMMARY_MAX_CHARS) + "…" : summary));
+				}
+				if (!tags.isEmpty()) prompt.append(" — ").append(String.join(" / ", tags));
+			}
+			prompt.append('\n');
+		}
+		return prompt + "목록만 보고 답하지 마세요. 이 문서들과 관련된 질문이면 답하기 전에 반드시 " + ThreadDocumentTool.NAME
+				+ "를 먼저 호출하고, 검색 결과로만 답하세요. "
+				+ "이 문서의 내용이 있어야 답할 수 있는 질문이면 " + ThreadDocumentTool.NAME + " 도구로 검색한 뒤 그 근거로 답하세요. "
+				+ "문서가 필요 없는 질문에는 검색하지 마세요.";
 	}
 
 	/** 이번 발화(맨 끝 user) 바로 앞에 system 지시를 끼운다. */
@@ -1141,12 +1203,12 @@ public class ThreadMessageDispatcher {
 		/** 지금까지 생성된 답변. 스트림 스레드가 쓰고 취소하는 스레드가 읽어서 StringBuffer다(이슈 #160). */
 		private final StringBuffer content = new StringBuffer();
 
-		/** 방 문서 검색(FOUND)으로 찾은 근거. LLM 호출 전에 한 번만 채워지고 그 뒤 완료 프레임이
-		 * 읽기만 하므로 volatile로 충분하다(이슈 #347). */
+		/** 모델이 부른 방 문서 검색(FOUND)으로 찾은 근거(이슈 #347). 도구 실행 스레드가 activeTurn을 잡고 새 목록으로
+		 * 바꾸고, 완료 프레임이 읽는다. */
 		private volatile List<Citation> citations = List.of();
 
-		/** 방 문서 검색이 FOUND가 아니었을 때 STREAMING·DONE 프레임에 함께 실을 안내 — LLM 호출
-		 * 전에 결정되므로 스트리밍 시작부터 실린다. citations와 같은 이유로 volatile이다(이슈 #353). */
+		/** 이 턴에서 방 문서 근거를 찾지 못했을 때 STREAMING·DONE 프레임에 함께 실을 안내(이슈 #353). 문서 목록 조회 실패면
+		 * LLM 호출 전에, 검색 도구가 근거를 못 찾으면 그 호출 뒤에 정해져 이후 프레임부터 실린다. citations와 같이 volatile이다. */
 		private volatile GroundingNotice groundingNotice;
 
 		/**

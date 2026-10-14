@@ -7,6 +7,7 @@ import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.MsgStatus;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -22,6 +23,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
+import org.mockito.stubbing.OngoingStubbing;
 import reactor.core.Disposable;
 import reactor.core.publisher.Flux;
 import reactor.core.publisher.Mono;
@@ -195,9 +197,9 @@ class ThreadMessageDispatcherTest {
 		SearchResult found = new SearchResult(SearchResult.Status.FOUND, null, "q", false, List.of(new SearchResult.Chunk("doc:1:0",
 				UUID.randomUUID(), "규정.pdf", 1, 0, "page=1", "출장 일비는 하루 4만 원이다.", 0.9, null)));
 
-		List<ChatMessage> messages = promptFor(Mono.just(found), true, "@FIN 출장 일비를 웹에서 찾은 기준과 비교해줘");
-		assertThat(messages.get(0).content()).isEqualTo(Agent.FIN.systemPrompt());
-		assertThat(systemBeforeLastUser(messages)).contains(ThreadMessageDispatcher.FOUND_WEB_RULE);
+		ToolTurn turn = toolTurn(true, "@FIN 출장 일비를 웹에서 찾은 기준과 비교해줘", List.of("출장 일비"), List.of(Mono.just(found)));
+		assertThat(turn.request().messages().get(0).content()).isEqualTo(Agent.FIN.systemPrompt());
+		assertThat(turn.onlyToolResult()).contains(ThreadMessageDispatcher.FOUND_WEB_RULE);
 		for (Agent agent : Agent.values()) {
 			assertThat(agent.systemPrompt()).as(agent.name()).doesNotContain("문서만").doesNotContain("웹");
 		}
@@ -721,18 +723,80 @@ class ThreadMessageDispatcherTest {
 				new ChatMessage("user", "요약해줘"));
 	}
 
+	/** 검색할 고정 문서가 없는 방에는 검색 도구도 문서 지시도 붙이지 않는다. */
+	@Test
+	void attachesNoDocumentToolWhenTheRoomHasNothingToSearch() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().documentTool()).isNull();
+		assertThat(request.getValue().messages()).noneSatisfy(message -> assertThat(message.role()).isEqualTo("system"));
+	}
+
 	/**
-	 * 근거를 찾으면(FOUND) 근거와 함께 "문서 우선, 웹 검색을 요청받았으면 근거가 있어도 먼저 webSearch를 부르고, 요청하지 않았으면
-	 * 웹을 쓰지도 제안하지도 않음, 도구 결과가 없으면 웹에서 찾았다고 말하지 않음"을 한 system 메시지로 지시한다(이슈 #368).
+	 * 고정 문서가 있으면 검색 도구를 붙이고 어떤 문서가 있는지 알리지만, 검색은 모델이 부를 때만 한다. 모델이 부르지 않은 턴(첨부 요약·
+	 * 현재 시각 같은 질문)에는 출처도 안내도 붙지 않는다 — 예전에는 매 턴 미리 검색해 관련 없는 청크가 출처로 붙었다.
 	 */
 	@Test
-	void aFoundTurnPrefersTheDocumentsAndUsesTheWebOnlyWhenAsked() {
+	void searchesOnlyWhenTheModelCallsTheTool() {
+		ToolTurn turn = toolTurn(true, List.of(), List.of());
+
+		assertThat(turn.request().documentTool()).isNotNull();
+		assertThat(systemBeforeLastUser(turn.request().messages())).contains("규정.pdf").contains("취업규칙.docx")
+				.contains(ThreadDocumentTool.NAME).contains("필요 없는 질문에는 검색하지 마세요");
+		verify(turn.documents(), never()).search(any(), any(), any(), any(), any());
+		assertThat(turn.done()).satisfies(frame -> {
+			assertThat(frame.citations()).isEmpty();
+			assertThat(frame.groundingNotice()).isNull();
+		});
+	}
+
+	/**
+	 * 파일 이름만으로는 내용을 알기 어려워 태그(#362)가 있으면 카테고리·키워드·요약을 함께 알린다. 태그가 없는 문서(태깅 꺼짐·대기·실패)는
+	 * 파일 이름만, 미분류는 카테고리 없이 싣는다. 요약은 SUMMARY_MAX_CHARS자까지, 태그는 앞의 MAX_TAGGED_DOCUMENTS개 문서에만 싣는다.
+	 */
+	@Test
+	void listsTheDocumentTagsSoTheModelCanTellWhatEachDocumentIsAbout() {
+		String prompt = ThreadMessageDispatcher.documentsPrompt(List.of(
+				new SearchableDocument("규정_v3_최종.pdf", "인사·총무", List.of("급여 지급일", "수습 기간"), "급여 계산과 지급 기준"),
+				SearchableDocument.untagged("메모.txt"),
+				new SearchableDocument("안내.txt", null, List.of("도자기"), null)));
+
+		assertThat(prompt).contains("- 규정_v3_최종.pdf — 인사·총무 / 키워드: 급여 지급일, 수습 기간 / 요약: 급여 계산과 지급 기준\n")
+				.contains("- 메모.txt\n").contains("- 안내.txt — 키워드: 도자기\n").contains(ThreadDocumentTool.NAME)
+				.contains("목록만 보고 답하지 마세요");
+
+		String longSummary = "가".repeat(ThreadMessageDispatcher.SUMMARY_MAX_CHARS + 50);
+		List<SearchableDocument> many = new ArrayList<>();
+		for (int i = 0; i <= ThreadMessageDispatcher.MAX_TAGGED_DOCUMENTS; i++) {
+			many.add(new SearchableDocument("문서" + i + ".txt", "인사·총무", List.of(), longSummary));
+		}
+		String capped = ThreadMessageDispatcher.documentsPrompt(many);
+
+		assertThat(capped).contains("요약: " + "가".repeat(ThreadMessageDispatcher.SUMMARY_MAX_CHARS) + "…\n")
+				.doesNotContain("가".repeat(ThreadMessageDispatcher.SUMMARY_MAX_CHARS + 1))
+				.contains("- 문서" + ThreadMessageDispatcher.MAX_TAGGED_DOCUMENTS + ".txt\n");
+	}
+
+	/**
+	 * 근거를 찾으면(FOUND) 근거와 함께 "문서 우선, 웹 검색을 요청받았으면 근거가 있어도 먼저 webSearch를 부르고, 요청하지 않았으면
+	 * 웹을 쓰지도 제안하지도 않음, 도구 결과가 없으면 웹에서 찾았다고 말하지 않음"을 도구 결과로 돌려준다(이슈 #368).
+	 */
+	@Test
+	void aFoundSearchReturnsTheEvidenceAndUsesTheWebOnlyWhenAsked() {
 		SearchResult found = new SearchResult(SearchResult.Status.FOUND, null, "q", false, List.of(new SearchResult.Chunk("doc:1:0",
 				UUID.randomUUID(), "규정.pdf", 1, 0, "page=1", "최저임금은 시간당 1만 원이다.", 0.9, null)));
 
-		List<ChatMessage> messages = promptFor(Mono.just(found), true);
-		assertThat(messages).filteredOn(message -> message.role().equals("system")).as("지시는 system 메시지 하나").hasSize(1);
-		String withWeb = systemBeforeLastUser(messages);
+		String withWeb = toolTurn(true, List.of("최저임금"), List.of(Mono.just(found))).onlyToolResult();
 		assertThat(withWeb).contains("최저임금은 시간당 1만 원이다.").contains("문서 근거를 우선")
 				.contains(ThreadMessageDispatcher.FOUND_WEB_RULE).doesNotContain(ThreadMessageDispatcher.WEB_TOOL_HONESTY);
 		assertThat(ThreadMessageDispatcher.FOUND_WEB_RULE).contains("먼저 webSearch 도구를 호출")
@@ -740,48 +804,99 @@ class ThreadMessageDispatcherTest {
 		assertThat(withWeb.indexOf(ThreadMessageDispatcher.FOUND_WEB_RULE)).as("웹 규칙은 근거 목록 뒤에 둔다")
 				.isGreaterThan(withWeb.indexOf("최저임금은 시간당 1만 원이다."));
 
-		assertThat(systemBeforeLastUser(promptFor(Mono.just(found), false))).as("웹이 꺼진 배포에서는 웹을 말하지 않는다")
+		assertThat(toolTurn(false, List.of("최저임금"), List.of(Mono.just(found))).onlyToolResult()).as("웹이 꺼진 배포에서는 웹을 말하지 않는다")
 				.contains("문서 근거를 우선").doesNotContain("웹");
 	}
 
-	/** 근거가 없으면(고정 문서 없음·맞는 내용 없음) 지시를 넣지 않는다 — 웹을 쓸지는 모델이 판단한다(이슈 #368). */
+	/** 근거가 없으면 찾지 못했다는 사실만 돌려준다 — 웹을 쓸지는 모델이 판단한다(이슈 #368). */
 	@Test
-	void aNoEvidenceTurnAddsNoInstruction() {
-		for (SearchResult.Reason reason : List.of(SearchResult.Reason.NO_PINNED_DOCUMENTS, SearchResult.Reason.NO_MATCH)) {
-			List<ChatMessage> messages = promptFor(Mono.just(new SearchResult(SearchResult.Status.NO_EVIDENCE, reason, "q", false, List.of())), true);
-			assertThat(messages).as(reason.name()).noneSatisfy(message -> assertThat(message.role()).isEqualTo("system"));
-		}
+	void aNoEvidenceSearchOnlySaysNothingWasFound() {
+		SearchResult noMatch = new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_MATCH, "q", false, List.of());
+
+		assertThat(toolTurn(true, List.of("최저임금"), List.of(Mono.just(noMatch))).onlyToolResult())
+				.isEqualTo(ThreadMessageDispatcher.NO_EVIDENCE_RESULT).doesNotContain("웹");
 	}
 
 	/**
 	 * 문서 검색을 하지 못하면(UNAVAILABLE·검색 호출 예외) 알리게 하고, 웹은 쓰지 말고 웹 검색 여부를 묻게 한다. 답변은 계속된다.
-	 * 고장 원인은 지시에 넣지 않고, 웹이 꺼진 배포에서는 웹을 제안하지 않는다(이슈 #368).
+	 * 고장 원인은 넣지 않고, 웹이 꺼진 배포에서는 웹을 제안하지 않는다(이슈 #368).
 	 */
 	@Test
 	void anUnavailableSearchIsToldToTheModelAndOffersTheWebOnlyWhenAvailable() {
 		for (SearchResult.Reason reason : List.of(SearchResult.Reason.BACKEND_ERROR, SearchResult.Reason.MODEL_MISMATCH,
 				SearchResult.Reason.NOT_CONFIGURED, SearchResult.Reason.OVERLOADED)) {
-			String prompt = systemBeforeLastUser(promptFor(Mono.just(new SearchResult(SearchResult.Status.UNAVAILABLE, reason, "q", false,
-					List.of())), true));
-			assertThat(prompt).as(reason.name()).contains("검색하지 못했습니다").contains("웹 검색으로 답변해 드릴지 물어보세요")
-					.contains("앞선 제안에 응했으면").contains(ThreadMessageDispatcher.WEB_TOOL_HONESTY).doesNotContain(reason.name()).doesNotContain("Elasticsearch");
+			String result = toolTurn(true, List.of("q"), List.of(Mono.just(new SearchResult(SearchResult.Status.UNAVAILABLE, reason, "q",
+					false, List.of())))).onlyToolResult();
+			assertThat(result).as(reason.name()).contains("검색하지 못했습니다").contains("웹 검색으로 답변해 드릴지 물어보세요")
+					.contains("앞선 제안에 응했으면").contains(ThreadMessageDispatcher.WEB_TOOL_HONESTY).doesNotContain(reason.name())
+					.doesNotContain("Elasticsearch");
 		}
-		assertThat(systemBeforeLastUser(promptFor(Mono.error(new IllegalStateException("검색 서버 끊김")), true)))
-				.as("검색 호출 예외도 같은 지시").contains("검색하지 못했습니다").contains("웹 검색으로 답변해 드릴지").doesNotContain("끊김");
-		assertThat(systemBeforeLastUser(promptFor(Mono.just(new SearchResult(SearchResult.Status.UNAVAILABLE,
-				SearchResult.Reason.BACKEND_ERROR, "q", false, List.of())), false)))
+		assertThat(toolTurn(true, List.of("q"), List.of(Mono.error(new IllegalStateException("검색 서버 끊김")))).onlyToolResult())
+				.as("검색 호출 예외도 같은 결과").contains("검색하지 못했습니다").contains("웹 검색으로 답변해 드릴지").doesNotContain("끊김");
+		assertThat(toolTurn(false, List.of("q"), List.of(Mono.just(new SearchResult(SearchResult.Status.UNAVAILABLE,
+				SearchResult.Reason.BACKEND_ERROR, "q", false, List.of())))).onlyToolResult())
 				.as("웹이 꺼진 배포").contains("확인할 수 없다고 알리세요").doesNotContain("웹");
-		assertThat(systemBeforeLastUser(promptFor(Mono.error(new IllegalStateException("검색 서버 끊김")), false)))
-				.as("웹이 꺼진 배포의 검색 호출 예외").contains("확인할 수 없다고 알리세요").doesNotContain("웹");
 	}
 
-	/** 검색 결과를 주고 한 턴을 돌려, 모델에 보낸 메시지를 돌려준다. */
-	private static List<ChatMessage> promptFor(Mono<SearchResult> search, boolean webEnabled) {
-		return promptFor(search, webEnabled, "@AI 올해 최저임금 얼마야?");
+	/**
+	 * 모델이 검색해 근거를 찾으면(FOUND) 완료 프레임·저장 둘 다에 citations가 채워진다(이슈 #347). 검색어는 모델이 쓴 문장 그대로이고,
+	 * 이미 독립 문장이라 이력을 넘기지 않는다(다시 쓰기 생략).
+	 */
+	@Test
+	void includesDocumentSearchCitationsWhenTheModelSearches() {
+		UUID docId = UUID.randomUUID();
+		SearchResult.Chunk chunk = new SearchResult.Chunk("doc:1:0", docId, "규정.pdf", 1, 0, "page=1",
+				"연차는 사흘 전에 신청한다.", 0.9, null);
+		ToolTurn turn = toolTurn(true, List.of("연차 신청 기한"),
+				List.of(Mono.just(new SearchResult(SearchResult.Status.FOUND, null, "연차 신청 기한", false, List.of(chunk)))));
+
+		assertThat(turn.done().citations()).containsExactly(
+				new Citation(docId.toString(), "규정.pdf", "연차는 사흘 전에 신청한다.", 0.9, "doc:1:0", "page=1"));
+		verify(turn.documents()).search(eq(turn.room().threadId), any(), eq("연차 신청 기한"), eq(List.of()), eq("test-model"));
+		ArgumentCaptor<String> citationsJson = ArgumentCaptor.forClass(String.class);
+		verify(turn.persistence(), timeout(1000)).completeBlocking(eq(turn.pending().getId()), eq("답"),
+				citationsJson.capture(), isNull());
+		assertThat(citationsJson.getValue()).contains(docId.toString()).contains("규정.pdf");
 	}
 
-	/** 검색 결과와 발화를 주고 한 턴을 돌려, 모델에 보낸 메시지를 돌려준다. */
-	private static List<ChatMessage> promptFor(Mono<SearchResult> search, boolean webEnabled, String content) {
+	/** 모델이 검색했지만 맞는 근거가 없을 때(NO_MATCH) 사용자에게 안내를 보낸다(이슈 #353) — 일반 답변은 그대로 허용한다. */
+	@Test
+	void sendsNoEvidenceNoticeWhenSearchFindsNoMatchingChunks() {
+		ToolTurn turn = toolTurn(true, List.of("q"), List.of(Mono.just(new SearchResult(SearchResult.Status.NO_EVIDENCE,
+				SearchResult.Reason.NO_MATCH, "q", false, List.of()))));
+
+		assertThat(turn.done()).satisfies(frame -> {
+			assertThat(frame.groundingNotice()).isEqualTo(GroundingNotice.NO_EVIDENCE);
+			assertThat(frame.citations()).isEmpty();
+		});
+	}
+
+	/** 방 문서 검색 자체가 실패하면 근거 없이 답하면서도 "검색을 하지 못했다"는 안내를 보낸다(이슈 #353). */
+	@Test
+	void sendsUnavailableNoticeWhenDocumentSearchFails() {
+		ToolTurn turn = toolTurn(true, List.of("q"), List.of(Mono.error(new IllegalStateException("elasticsearch down"))));
+
+		assertThat(turn.done().groundingNotice()).isEqualTo(GroundingNotice.UNAVAILABLE);
+	}
+
+	/** 모델이 검색어를 바꿔 다시 불러 한 번이라도 근거를 찾으면 근거 없음 안내를 보내지 않는다. */
+	@Test
+	void aLaterFoundSearchClearsTheNoEvidenceNotice() {
+		SearchResult.Chunk chunk = new SearchResult.Chunk("doc:1:0", UUID.randomUUID(), "규정.pdf", 1, 0, "page=1",
+				"연차는 사흘 전에 신청한다.", 0.9, null);
+		ToolTurn turn = toolTurn(true, List.of("휴가", "연차 신청 기한"), List.of(
+				Mono.just(new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_MATCH, "휴가", false, List.of())),
+				Mono.just(new SearchResult(SearchResult.Status.FOUND, null, "연차 신청 기한", false, List.of(chunk)))));
+
+		assertThat(turn.done()).satisfies(frame -> {
+			assertThat(frame.groundingNotice()).isNull();
+			assertThat(frame.citations()).extracting(Citation::chunkId).containsExactly("doc:1:0");
+		});
+	}
+
+	/** 고정 문서 목록을 읽지 못하면 도구 없이 검색 실패와 같은 지시·안내로 답한다 — 장애를 조용히 넘기지 않는다. */
+	@Test
+	void answersWithoutTheToolWhenTheDocumentListFails() {
 		TestRoom room = new TestRoom();
 		LlmChatStreamService llm = mock(LlmChatStreamService.class);
 		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
@@ -789,15 +904,93 @@ class ThreadMessageDispatcherTest {
 		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
 				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
 		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.search(eq(room.threadId), any(), any(), any(), any())).thenReturn(search);
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.error(new IllegalStateException("db down")));
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().documentTool()).isNull();
+		assertThat(systemBeforeLastUser(request.getValue().messages())).contains("검색하지 못했습니다").doesNotContain("db down");
+		assertThat(awaitDone(room).groundingNotice()).isEqualTo(GroundingNotice.UNAVAILABLE);
+	}
+
+	/** 검색 도구가 붙은 한 턴의 결과. */
+	private record ToolTurn(TestRoom room, ChatStreamRequest request, List<String> toolResults, ThreadDocumentSearch documents,
+			MsgPersistenceService persistence, Msg pending) {
+
+		ChatAnswerFrame done() {
+			return awaitDone(room);
+		}
+
+		String onlyToolResult() {
+			done();
+			assertThat(toolResults).hasSize(1);
+			return toolResults.get(0);
+		}
+	}
+
+	/**
+	 * 검색할 고정 문서(규정.pdf, 취업규칙.docx)가 있는 방에서 한 턴을 돌린다. 모델은 queries를 차례로 검색 도구에 넘긴 뒤 "답"을 내고,
+	 * 검색은 results를 차례로 돌려준다.
+	 */
+	private static ToolTurn toolTurn(boolean webEnabled, List<String> queries, List<Mono<SearchResult>> results) {
+		return toolTurn(webEnabled, "@AI 올해 최저임금 얼마야?", queries, results);
+	}
+
+	private static ToolTurn toolTurn(boolean webEnabled, String content, List<String> queries, List<Mono<SearchResult>> results) {
+		TestRoom room = new TestRoom();
+		AtomicReference<ChatStreamRequest> request = new AtomicReference<>();
+		List<String> toolResults = new CopyOnWriteArrayList<>();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenAnswer(invocation -> {
+			ChatStreamRequest sent = invocation.getArgument(0);
+			request.set(sent);
+			for (String query : queries) {
+				toolResults.add(sent.documentTool().searchThreadDocuments(query));
+			}
+			return Flux.just("답");
+		});
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId))).thenReturn(pending);
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.just(List.of(SearchableDocument.untagged("규정.pdf"),
+				SearchableDocument.untagged("취업규칙.docx"))));
+		if (!results.isEmpty()) {
+			OngoingStubbing<Mono<SearchResult>> stub = when(documents.search(eq(room.threadId), any(), any(), any(), any()));
+			for (Mono<SearchResult> result : results) {
+				stub = stub.thenReturn(result);
+			}
+		}
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
 				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create(), webEnabled);
 
 		dispatcher.dispatch(command(room, content), room.membership.generation());
 
-		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
-		verify(llm, timeout(1000)).streamChat(request.capture());
-		return request.getValue().messages();
+		awaitDone(room);
+		return new ToolTurn(room, request.get(), toolResults, documents, msgPersistenceService, pending);
+	}
+
+	/** 답변 완료(DONE) 프레임을 기다린다. */
+	private static ChatAnswerFrame awaitDone(TestRoom room) {
+		long deadline = System.currentTimeMillis() + 2000;
+		while (System.currentTimeMillis() < deadline) {
+			Optional<ChatAnswerFrame> done = room.frames.stream().filter(ChatAnswerFrame.class::isInstance)
+					.map(ChatAnswerFrame.class::cast).filter(frame -> frame.status() == ChatAnswerStatus.DONE).findFirst();
+			if (done.isPresent()) {
+				return done.get();
+			}
+			try {
+				Thread.sleep(10);
+			} catch (InterruptedException interrupted) {
+				Thread.currentThread().interrupt();
+				break;
+			}
+		}
+		throw new AssertionError("DONE 프레임이 오지 않았다");
 	}
 
 	/** 이번 발화(맨 끝 user) 바로 앞의 system 지시. */
@@ -808,113 +1001,7 @@ class ThreadMessageDispatcherTest {
 		return instruction.content();
 	}
 
-	/** 방 문서 검색(#344)이 FOUND면 근거가 프롬프트에 끼워 들어가고, 완료 프레임·저장 둘 다에
-	 * citations가 채워진다(이슈 #347). */
-	@Test
-	void includesDocumentSearchCitationsWhenFound() {
-		TestRoom room = new TestRoom();
-		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
-		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
-				.thenReturn(pending);
-		UUID docId = UUID.randomUUID();
-		SearchResult.Chunk chunk = new SearchResult.Chunk("doc:1:0", docId, "규정.pdf", 1, 0, "page=1",
-				"연차는 사흘 전에 신청한다.", 0.9, null);
-		SearchResult found = new SearchResult(SearchResult.Status.FOUND, null, "first", false, List.of(chunk));
-		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.search(eq(room.threadId), any(), any(), any(), any())).thenReturn(Mono.just(found));
-		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService,
-				documents, new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20,
-				VirtualTimeScheduler.create());
-
-		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
-
-		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
-		verify(llm, timeout(1000)).streamChat(request.capture());
-		assertThat(request.getValue().messages()).anySatisfy(message -> {
-			assertThat(message.role()).isEqualTo("system");
-			assertThat(message.content()).contains("규정.pdf").contains("연차는 사흘 전에 신청한다.");
-		});
-
-		awaitFrameCount(room.frames, 2);
-		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
-				.map(ChatAnswerFrame.class::cast)
-				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
-				.extracting(frame -> frame.citations())
-				.first()
-				.satisfies(citations -> assertThat((List<Citation>) citations).containsExactly(
-						new Citation(docId.toString(), "규정.pdf", "연차는 사흘 전에 신청한다.", 0.9, "doc:1:0", "page=1")));
-
-		ArgumentCaptor<String> citationsJson = ArgumentCaptor.forClass(String.class);
-		verify(msgPersistenceService, timeout(1000)).completeBlocking(eq(pending.getId()), eq("답"),
-				citationsJson.capture(), isNull());
-		assertThat(citationsJson.getValue()).contains(docId.toString()).contains("규정.pdf");
-	}
-
-	/** 고정 문서는 있지만 이번 질문과 맞는 근거가 없을 때(NO_MATCH) 사용자에게 안내를 보낸다
-	 * (이슈 #353) — 근거 없이도 일반 답변은 그대로 허용한다. */
-	@Test
-	void sendsNoEvidenceNoticeWhenSearchFindsNoMatchingChunks() {
-		TestRoom room = new TestRoom();
-		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
-		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
-				.thenReturn(pending);
-		SearchResult noMatch = new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_MATCH,
-				"first", false, List.of());
-		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.search(eq(room.threadId), any(), any(), any(), any())).thenReturn(Mono.just(noMatch));
-		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService,
-				documents, new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20,
-				VirtualTimeScheduler.create());
-
-		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
-
-		awaitFrameCount(room.frames, 2);
-		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
-				.map(ChatAnswerFrame.class::cast)
-				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
-				.first()
-				.satisfies(frame -> {
-					assertThat(frame.groundingNotice()).isEqualTo(GroundingNotice.NO_EVIDENCE);
-					assertThat(frame.citations()).isEmpty();
-				});
-	}
-
-	/** 방 문서 검색 자체가 실패하면(UNAVAILABLE) 근거 없이 평소처럼 답하면서도 사용자에게는
-	 * "검색을 하지 못했다"는 안내를 보낸다(이슈 #353) — #347의 "로그만 남긴다" 방침을 확장한다. */
-	@Test
-	void sendsUnavailableNoticeWhenDocumentSearchFails() {
-		TestRoom room = new TestRoom();
-		LlmChatStreamService llm = mock(LlmChatStreamService.class);
-		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
-		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
-		Msg pending = Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1);
-		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
-				.thenReturn(pending);
-		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.search(eq(room.threadId), any(), any(), any(), any()))
-				.thenReturn(Mono.error(new IllegalStateException("elasticsearch down")));
-		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService,
-				documents, new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20,
-				VirtualTimeScheduler.create());
-
-		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
-
-		awaitFrameCount(room.frames, 2);
-		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
-				.map(ChatAnswerFrame.class::cast)
-				.filteredOn(frame -> frame.status() == ChatAnswerStatus.DONE)
-				.first()
-				.satisfies(frame -> assertThat(frame.groundingNotice()).isEqualTo(GroundingNotice.UNAVAILABLE));
-	}
-
-	/** 고정 문서가 없는 방(NO_PINNED_DOCUMENTS)은 검색을 안 부른 것과 같다 — 안내도 나오지
-	 * 않는다(이슈 #353). dispatcher()의 기본 noOpDocumentSearch가 이 사유를 쓴다. */
+	/** 고정 문서가 없는 방은 검색 도구가 없어 안내도 나오지 않는다(이슈 #353). dispatcher()의 기본 noOpDocumentSearch가 그런 방이다. */
 	@Test
 	void sendsNoNoticeWhenRoomHasNoPinnedDocuments() {
 		TestRoom room = new TestRoom();
@@ -1555,13 +1642,10 @@ class ThreadMessageDispatcherTest {
 				new ObjectMapper(), "test-model", timeout, maxPending, 20, scheduler);
 	}
 
-	/** 이 파일의 테스트는 RAG 검색을 다루지 않는다 — 항상 근거 없음으로 답해서 messages를 안
-	 * 건드리게 한다(이슈 #347 도입분). */
+	/** 이 파일의 테스트는 대부분 RAG 검색을 다루지 않는다 — 검색할 고정 문서가 없는 방으로 두어 검색 도구도 지시도 붙지 않게 한다. */
 	private static ThreadDocumentSearch noOpDocumentSearch() {
 		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
-		when(documents.search(any(), any(), any(), any(), any())).thenReturn(Mono.just(
-				new SearchResult(SearchResult.Status.NO_EVIDENCE, SearchResult.Reason.NO_PINNED_DOCUMENTS, "", false,
-						List.of())));
+		when(documents.searchableDocuments(any(), any())).thenReturn(Mono.just(List.of()));
 		return documents;
 	}
 

@@ -11,6 +11,7 @@ import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.CurrentActor;
 import com.onggijonggi.api.authz.ThreadScopeFilter;
+import com.onggijonggi.api.chat.SearchableDocument;
 import com.onggijonggi.api.chat.ThreadDocumentScope;
 import com.onggijonggi.api.chat.ThreadDocumentService;
 import java.util.List;
@@ -49,6 +50,17 @@ class ThreadDocumentSearchTest {
 		assertThat(result.status()).isEqualTo(SearchResult.Status.UNAVAILABLE);
 		assertThat(result.reason()).isEqualTo(SearchResult.Reason.OVERLOADED);
 		verify(documents).searchScope(eq(room), any());
+		verifyNoInteractions(embedder);
+	}
+
+	/** 답변 턴이 검색 도구를 붙일지 정하는 문서 목록은 DB만 읽는다. 외부 호출이 없어 검색 대기열과 무관하다. */
+	@Test
+	void listsTheSearchableDocumentsEvenWhenTheSearchQueueIsFull() {
+		List<SearchableDocument> listed = List.of(SearchableDocument.untagged("a.txt"),
+				new SearchableDocument("b.pdf", "인사·총무", List.of("연차"), "연차 규정"));
+		when(documents.searchableDocuments(eq(room), any())).thenReturn(listed);
+
+		assertThat(search.searchableDocuments(room, actor).block()).isEqualTo(listed);
 		verifyNoInteractions(embedder);
 	}
 

@@ -10,6 +10,8 @@ import com.onggijonggi.common.chat.domain.ThrMbrStatus;
 import com.onggijonggi.common.chat.domain.ThrStatus;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import com.onggijonggi.common.document.TagIndexContract;
+import com.onggijonggi.common.document.TagPrompt;
 import com.onggijonggi.common.document.ThreadDocumentStates;
 import com.onggijonggi.common.user.AppUserRepository;
 import com.onggijonggi.common.user.AppUserStatus;
@@ -21,9 +23,11 @@ import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.HashMap;
 import java.util.HexFormat;
 import java.util.List;
 import java.util.Locale;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.UUID;
@@ -93,6 +97,7 @@ public class ThreadDocumentService {
 			String digest, UUID attempt, String status, boolean pinned, Instant created, Instant updated) { }
 	public record Original(String fileName, byte[] bytes) { }
 	private record CleanupJob(UUID tenant, UUID thread, String digest, UUID attempt) { }
+	private record Tag(String category, List<String> keywords, String summary) { }
 
 	private Access access(UUID threadId, CurrentActor actor, boolean write) {
 		// Tenant 범위 권한 변경과 동일한 잠금 순서다. 읽기·원본 전송도 최신 판정 뒤 진행한다.
@@ -152,6 +157,26 @@ public class ThreadDocumentService {
 					thread);
 			return new ThreadDocumentScope(access.thread().getTenantId(), ThreadScopeFilter.of(List.of(thread)), targets);
 		});
+	}
+
+	/**
+	 * 검색 범위(searchScope)의 문서와 각 문서의 현재 회차 태그(#362). 답변 턴이 모델에 어떤 문서가 있는지 알릴 때 쓴다.
+	 * 태그는 현재 회차의 DONE 행만 쓴다 — 태깅이 꺼졌거나 대기·실패인 문서, 이전 회차의 태그는 파일 이름만 남는다.
+	 */
+	public List<SearchableDocument> searchableDocuments(UUID thread, CurrentActor actor) {
+		List<ThreadDocumentScope.Target> targets = searchScope(thread, actor).targets();
+		if (targets.isEmpty()) return List.of();
+		Map<String, Tag> tags = new HashMap<>();
+		jdbc.query("select doc_id, run_seq, ctg, kyw, smm from thr_doc_tag where thr_id = ? and status = 'DONE'", (ResultSet rs) -> {
+			String category = rs.getString("ctg");
+			tags.put(TagIndexContract.tagId(rs.getObject("doc_id", UUID.class), rs.getInt("run_seq")), new Tag(TagPrompt.UNCLASSIFIED.equals(category) ? null : category,
+					List.of((String[]) rs.getArray("kyw").getArray()), rs.getString("smm")));
+		}, thread);
+		return targets.stream().map(target -> {
+			Tag tag = tags.get(TagIndexContract.tagId(target.document(), target.runSeq()));
+			return tag == null ? SearchableDocument.untagged(target.fileName())
+					: new SearchableDocument(target.fileName(), tag.category(), tag.keywords(), tag.summary());
+		}).toList();
 	}
 
 	public ThreadDocumentView upload(UUID thread, UUID id, CurrentActor actor, String fileName, byte[] content) {

@@ -31,29 +31,30 @@ import reactor.core.publisher.Flux;
  */
 class LlmChatStreamServiceTest {
 
+	private final AtomicReference<Prompt> received = new AtomicReference<>();
+	private final ChatModel model = new ChatModel() {
+
+		/** ChatClient는 모델 기본 옵션이 도구 옵션일 때만 도구를 싣는다. 실제 OpenAiChatModel의 옵션(OpenAiChatOptions)이 그렇다. */
+		@Override
+		public ChatOptions getOptions() {
+			return ToolCallingChatOptions.builder().build();
+		}
+
+		@Override
+		public ChatResponse call(Prompt prompt) {
+			received.set(prompt);
+			return new ChatResponse(List.of(new Generation(new AssistantMessage("답"))));
+		}
+
+		@Override
+		public Flux<ChatResponse> stream(Prompt prompt) {
+			return Flux.just(call(prompt));
+		}
+	};
+
 	/** 모델에 넘어간 Prompt에 현재 시각 도구와 발화자의 시간대가 함께 실린다. 도구 실행은 모델 구현(ToolCallingManager)이 맡는다. */
 	@Test
 	void attachesTheCurrentTimeToolWithTheSendersTimeZone() {
-		AtomicReference<Prompt> received = new AtomicReference<>();
-		ChatModel model = new ChatModel() {
-
-			/** ChatClient는 모델 기본 옵션이 도구 옵션일 때만 도구를 싣는다. 실제 OpenAiChatModel의 옵션(OpenAiChatOptions)이 그렇다. */
-			@Override
-			public ChatOptions getOptions() {
-				return ToolCallingChatOptions.builder().build();
-			}
-
-			@Override
-			public ChatResponse call(Prompt prompt) {
-				received.set(prompt);
-				return new ChatResponse(List.of(new Generation(new AssistantMessage("답"))));
-			}
-
-			@Override
-			public Flux<ChatResponse> stream(Prompt prompt) {
-				return Flux.just(call(prompt));
-			}
-		};
 		CurrentTimeTool tool = new CurrentTimeTool(Clock.fixed(Instant.parse("2026-10-07T06:00:00Z"), ZoneOffset.UTC),
 				ZoneId.of("Asia/Seoul"));
 		// 웹 도구는 꺼진 것으로 둔다(mock의 enabled()는 false). 웹 도구 연결은 web.LlmChatStreamServiceWebToolsTest가 본다.
@@ -69,5 +70,30 @@ class LlmChatStreamServiceTest {
 				.findFirst().orElseThrow();
 		assertThat(callback.call("{}", new ToolContext(options.getToolContext())))
 				.contains("2026-10-07T02:00:00-04:00[America/New_York] WEDNESDAY");
+	}
+
+	/** 요청에 방 문서 검색 도구가 있으면 모델에 싣고, 모델이 부르면 그 검색어로 턴의 검색을 실행한다. 없으면 싣지 않는다. */
+	@Test
+	void attachesTheDocumentToolOnlyWhenTheTurnHasOne() {
+		AtomicReference<String> searched = new AtomicReference<>();
+		LlmChatStreamService service = new LlmChatStreamService(ChatClient.builder(model), new CurrentTimeTool("Asia/Seoul"),
+				mock(WebTools.class));
+		List<ChatMessage> messages = List.of(new ChatMessage("user", "연차는 며칠 전에 신청해?"));
+
+		service.streamChat(new ChatStreamRequest(UUID.randomUUID(), "test-model", messages, null,
+				new ThreadDocumentTool(query -> {
+					searched.set(query);
+					return "근거";
+				}))).blockLast();
+
+		ToolCallback callback = ((ToolCallingChatOptions) received.get().getOptions()).getToolCallbacks().stream()
+				.filter(candidate -> candidate.getToolDefinition().name().equals(ThreadDocumentTool.NAME))
+				.findFirst().orElseThrow();
+		assertThat(callback.call("{\"query\":\"연차 신청 기한\"}")).contains("근거");
+		assertThat(searched).hasValue("연차 신청 기한");
+
+		service.streamChat(new ChatStreamRequest(UUID.randomUUID(), "test-model", messages, null)).blockLast();
+		assertThat(((ToolCallingChatOptions) received.get().getOptions()).getToolCallbacks())
+				.extracting(candidate -> candidate.getToolDefinition().name()).doesNotContain(ThreadDocumentTool.NAME);
 	}
 }
