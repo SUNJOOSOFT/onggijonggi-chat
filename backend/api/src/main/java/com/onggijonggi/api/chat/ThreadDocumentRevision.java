@@ -38,8 +38,11 @@ public class ThreadDocumentRevision {
 	private static final Logger log = LoggerFactory.getLogger(ThreadDocumentRevision.class);
 	static final String REVISIONS_PATH = "/api/v1/documents/revisions";
 	static final String FAILED = "개정본을 만들지 못했습니다(아무 파일도 등록하지 않음). ";
-	/** 이름 끝의 버전 표시. "_20260101" 같은 날짜는 버전으로 보지 않는다. */
-	private static final Pattern VERSION = Pattern.compile("_v(\\d+)$", Pattern.CASE_INSENSITIVE);
+	/**
+	 * 이름 끝의 버전 표시. 네 자리까지만 버전으로 본다 — "_v20260101"처럼 날짜를 붙인 이름을 다음 날짜로 바꾸거나,
+	 * 열 자리가 넘어 숫자로 읽지 못해 개정본을 등록하지 못하는 일을 막는다. "_20260101" 같은 날짜도 버전이 아니다.
+	 */
+	private static final Pattern VERSION = Pattern.compile("_v(\\d{1,4})$", Pattern.CASE_INSENSITIVE);
 
 	private final ThreadDocumentService documents;
 	private final ObjectMapper json;

@@ -95,6 +95,13 @@ class ThreadDocumentRevisionTest {
 	}
 
 	@Test
+	void aDateOrLongNumberAfterVIsNotAVersion() {
+		assertThat(ThreadDocumentRevision.revisionName("규칙_v20260101.docx", Set.of())).isEqualTo("규칙_v20260101_v1.docx");
+		assertThat(ThreadDocumentRevision.revisionName("규칙_v20260101120000.docx", Set.of())).isEqualTo("규칙_v20260101120000_v1.docx");
+		assertThat(ThreadDocumentRevision.revisionName("규칙_v1234.docx", Set.of())).isEqualTo("규칙_v1235.docx");
+	}
+
+	@Test
 	void aMissingOrAmbiguousSentenceTellsTheModelHowToRetry() {
 		pinned("취업규칙.docx");
 
@@ -119,6 +126,20 @@ class ThreadDocumentRevisionTest {
 				.contains("고정된 문서 중 '규정.docx'이 없습니다");
 		assertThat(revision.revise(room, actor, "취업규칙.docx", List.of())).startsWith(ThreadDocumentRevision.FAILED).contains("하나 이상");
 		assertThat(requests).isEmpty();
+	}
+
+	@Test
+	void twoPinnedDocumentsWithTheSameNameAreNotRevised() {
+		when(documents.searchScope(eq(room), any())).thenReturn(new ThreadDocumentScope(tenant, ThreadScopeFilter.of(List.of(room)), List.of(
+				new ThreadDocumentScope.Target(rules, "취업규칙.docx", 1, "bge-m3", 1024),
+				new ThreadDocumentScope.Target(UUID.randomUUID(), "취업규칙.docx", 1, "bge-m3", 1024))));
+
+		String result = revision(HttpStatus.OK, "revised").revise(room, actor, "취업규칙.docx", edits);
+
+		assertThat(result).startsWith(ThreadDocumentRevision.FAILED).contains("여러 개 고정");
+		assertThat(requests).isEmpty();
+		verify(documents, never()).original(any(), any(), any());
+		verify(documents, never()).upload(any(), any(), any(), any(), any());
 	}
 
 	@Test
