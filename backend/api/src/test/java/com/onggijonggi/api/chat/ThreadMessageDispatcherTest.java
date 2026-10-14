@@ -916,8 +916,7 @@ class ThreadMessageDispatcherTest {
 		ThreadDocumentRevision revision = mock(ThreadDocumentRevision.class);
 		when(revision.revise(eq(room.threadId), any(), eq("규정.docx"), eq(edits))).thenReturn("등록했습니다");
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
-				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
-		dispatcher.documentRevision = revision;
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create(), true, revision);
 
 		dispatcher.dispatch(command(room, "@AI 개정본 만들어줘"), room.membership.generation());
 
@@ -999,7 +998,7 @@ class ThreadMessageDispatcherTest {
 			}
 		}
 		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
-				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create(), webEnabled);
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create(), webEnabled, null);
 
 		dispatcher.dispatch(command(room, content), room.membership.generation());
 
