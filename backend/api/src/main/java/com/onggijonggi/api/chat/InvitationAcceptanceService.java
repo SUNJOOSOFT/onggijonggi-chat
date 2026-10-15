@@ -30,11 +30,13 @@ public class InvitationAcceptanceService {
 
 	private final ThrInvRepository thrInvRepository;
 	private final PendingInvitationAcceptance pendingInvitationAcceptance;
+	private final MembershipNoticeService membershipNoticeService;
 
 	public InvitationAcceptanceService(ThrInvRepository thrInvRepository,
-			PendingInvitationAcceptance pendingInvitationAcceptance) {
+			PendingInvitationAcceptance pendingInvitationAcceptance, MembershipNoticeService membershipNoticeService) {
 		this.thrInvRepository = thrInvRepository;
 		this.pendingInvitationAcceptance = pendingInvitationAcceptance;
+		this.membershipNoticeService = membershipNoticeService;
 	}
 
 	/**
@@ -59,12 +61,19 @@ public class InvitationAcceptanceService {
 	 *
 	 * 재시도가 이 자리에 있는 이유는 REQUIRES_NEW 경계 <b>밖</b>이어야 하기 때문이다. 제약 위반이
 	 * 난 트랜잭션은 rollback-only라 그 안에서는 이어서 진행할 수 없다.
+	 *
+	 * 실제로 참가자가 됐으면 입장 줄을 남긴다. 전환이 커밋된 뒤라 경합에서 진 쪽은 남기지 않는다.
 	 */
 	public void acceptOneBlocking(UUID invitationId, UUID userId) {
+		boolean joined;
 		try {
-			pendingInvitationAcceptance.acceptOneBlocking(invitationId, userId);
+			joined = pendingInvitationAcceptance.acceptOneBlocking(invitationId, userId);
 		} catch (DataIntegrityViolationException raced) {
-			pendingInvitationAcceptance.acceptOneBlocking(invitationId, userId);
+			joined = pendingInvitationAcceptance.acceptOneBlocking(invitationId, userId);
+		}
+		if (joined) {
+			thrInvRepository.findById(invitationId).ifPresent(invitation -> membershipNoticeService
+					.recordBlocking(invitation.getThrId(), MembershipNotice.Event.JOINED, invitation.getSubj()));
 		}
 	}
 

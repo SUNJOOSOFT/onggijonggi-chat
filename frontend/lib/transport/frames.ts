@@ -185,9 +185,9 @@ export interface SystemNoticeFrame {
  * 있는가"를 다루는 것과 달리 이쪽은 "이 방의 참여자인가"다 — 접속 중이 아닌 사람이 초대되는
  * 경우처럼 presence로는 표현되지 않는 변화가 있어 타입이 따로 있다.
  *
- * action으로 분기하지 않고 명단 재조회 트리거로만 쓴다. 서버가 값을 다섯으로 나눈 것은
- * 나중에 액션별 시스템 메시지가 필요해졌을 때를 위한 것이라, 지금 화면이 그 값을 해석할
- * 이유가 없다 — 어느 액션이든 "다시 불러와"가 정답이다.
+ * 명단은 action과 상관없이 다시 불러온다 — 어느 액션이든 "다시 불러와"가 정답이다. 다만
+ * 참가자가 되거나 빠진 변경(INVITED·REMOVED)은 서버가 대화 흐름에 입퇴장 줄을 남기고 그 줄의
+ * msgId·seq를 함께 싣는다. 화면은 이력을 다시 읽지 않고 그 자리에 줄을 넣는다.
  */
 export interface ParticipantChangedFrame {
   type: 'participant.changed';
@@ -200,6 +200,10 @@ export interface ParticipantChangedFrame {
   action: string;
   subject: string;
   displayName: string;
+  /** 이 변경으로 남은 입퇴장 줄의 id(이력 MsgItem.id와 같다). 줄을 남기지 않은 변경이면 null이다. */
+  msgId: string | null;
+  /** 그 줄의 seq. msgId와 함께 채워진다. */
+  seq: number | null;
 }
 
 /**

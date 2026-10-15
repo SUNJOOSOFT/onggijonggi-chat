@@ -60,23 +60,26 @@ public class PendingInvitationAcceptance {
 	 *
 	 * @param invitationId 전환할 대기 초대의 id
 	 * @param userId 방금 만들어진 app_user 행의 id
+	 * @return 여기서 참가 행을 새로 만들었으면 true. 이미 참가해 있었거나 전환하지 않았으면 false다
 	 */
 	@Transactional(propagation = Propagation.REQUIRES_NEW)
-	public void acceptOneBlocking(UUID invitationId, UUID userId) {
+	public boolean acceptOneBlocking(UUID invitationId, UUID userId) {
 		ThrInv invitation = thrInvRepository.findById(invitationId).orElse(null);
 		if (invitation == null || invitation.getStatus() != ThrInvStatus.PENDING) {
-			return;
+			return false;
 		}
 		if (!isOpen(invitation.getThrId())) {
-			return;
+			return false;
 		}
-		if (!thrMbrRepository.existsByThrIdAndUserIdAndStatus(invitation.getThrId(), userId,
-				ThrMbrStatus.ACTIVE)) {
+		boolean joined = !thrMbrRepository.existsByThrIdAndUserIdAndStatus(invitation.getThrId(), userId,
+				ThrMbrStatus.ACTIVE);
+		if (joined) {
 			thrMbrRepository.save(new ThrMbr(invitation.getThrId(), userId, ThrMbrRole.MEMBER,
 					invitation.getCreatedByUserId()));
 		}
 		invitation.end(ThrInvStatus.ACCEPTED, FIRST_LOGIN);
 		thrInvRepository.save(invitation);
+		return joined;
 	}
 
 	/** 방이 사라졌으면(cascade로 초대도 지워지므로 보통 여기 오지 않는다) 전환하지 않는다. */

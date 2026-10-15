@@ -77,7 +77,7 @@ class WsFrameGoldenTest {
 				"검토가 필요한 내용이 감지되었습니다.", "trace-1"));
 		samples.put("error", new ErrorFrame(THREAD_ID, "FORBIDDEN", "권한이 없습니다.", "trace-1"));
 		samples.put("participant.changed", new ParticipantChangedFrame(THREAD_ID, ParticipantChangeAction.INVITED,
-				"kc-2", "이한결"));
+				"kc-2", "이한결", MSG_ID, 43L));
 		samples.put("chat.queued", new ChatQueuedFrame(THREAD_ID, TURN_ID, ChatQueuedStatus.QUEUED));
 		samples.put("pong", new PongFrame());
 		samples.put("chat.typing", new ChatTypingFrame(THREAD_ID, participant.subject(), participant.displayName(),

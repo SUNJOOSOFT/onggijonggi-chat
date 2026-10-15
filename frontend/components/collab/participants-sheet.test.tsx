@@ -46,6 +46,7 @@ const owner: ThreadParticipant = {
   self: true,
   displayName: '방장',
   pending: false,
+  workspaceAccess: true,
 };
 
 const member: ThreadParticipant = {
@@ -54,6 +55,7 @@ const member: ThreadParticipant = {
   self: false,
   displayName: '참가자',
   pending: false,
+  workspaceAccess: true,
 };
 
 const pendingInvite: ThreadParticipant = {
@@ -62,6 +64,7 @@ const pendingInvite: ThreadParticipant = {
   self: false,
   displayName: '대기 초대',
   pending: true,
+  workspaceAccess: true,
 };
 
 const candidate: InviteCandidate = {
@@ -127,6 +130,18 @@ describe('ParticipantsSheet(#173)', () => {
 
     expect(screen.getByText('최신 응답')).toBeTruthy();
     expect(screen.queryByText('오래된 응답')).toBeNull();
+  });
+
+  it('워크스페이스 권한을 잃은 참가자에게만 권한 없음을 표시한다', async () => {
+    await openSheet([
+      owner,
+      { ...member, displayName: '권한 잃은 참가자', workspaceAccess: false },
+    ]);
+
+    expect(screen.getAllByText('권한 없음')).toHaveLength(1);
+    expect(
+      screen.getByText('권한 잃은 참가자').parentElement?.textContent,
+    ).toContain('권한 없음');
   });
 
   it('초대 성공 뒤 참여자 목록을 직접 다시 조회하지 않는다', async () => {

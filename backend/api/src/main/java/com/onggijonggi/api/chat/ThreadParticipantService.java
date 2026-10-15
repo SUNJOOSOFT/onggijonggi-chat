@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
+import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
@@ -54,6 +55,9 @@ public class ThreadParticipantService {
 
 	private static final String OWNER_REVOKED = "OWNER_REVOKED";
 
+	/** 명단의 워크스페이스 판정(Casbin)을 한 번에 이만큼만 내보낸다. */
+	private static final int WORKSPACE_ACCESS_LOOKUP_CONCURRENCY = 8;
+
 	/** 후보 검색 상한. 초대창은 좁혀서 고르는 자리라, 많이 주기보다 검색어를 좁히게 하는 편이 낫다. */
 	private static final int CANDIDATE_SEARCH_MAX = 20;
 
@@ -71,13 +75,14 @@ public class ThreadParticipantService {
 	private final RankedDisplayNames rankedDisplayNames;
 	private final PeopleSearch peopleSearch;
 	private final OwnerTransferAuditService ownerTransferAuditService;
+	private final MembershipNoticeService membershipNoticeService;
 
 	public ThreadParticipantService(ThrMbrRepository thrMbrRepository, ThrRepository thrRepository,
 			AppUserRepository appUserRepository, RoomSessionRegistry roomSessionRegistry,
 			KeycloakAdminClient keycloakAdminClient, ThrInvRepository thrInvRepository,
 			InvitationAcceptanceService invitationAcceptanceService, ThreadMembershipService threadMembershipService,
 			RankedDisplayNames rankedDisplayNames, PeopleSearch peopleSearch,
-			OwnerTransferAuditService ownerTransferAuditService) {
+			OwnerTransferAuditService ownerTransferAuditService, MembershipNoticeService membershipNoticeService) {
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrRepository = thrRepository;
 		this.appUserRepository = appUserRepository;
@@ -89,15 +94,27 @@ public class ThreadParticipantService {
 		this.rankedDisplayNames = rankedDisplayNames;
 		this.peopleSearch = peopleSearch;
 		this.ownerTransferAuditService = ownerTransferAuditService;
+		this.membershipNoticeService = membershipNoticeService;
 	}
 
-	/** 참가자면 누구나 볼 수 있다 — 자기 방 구성원을 읽는 것뿐이라 OWNER로 좁히지 않는다. */
+	/**
+	* 참가자면 누구나 볼 수 있다 — 자기 방 구성원을 읽는 것뿐이라 OWNER로 좁히지 않는다.
+	* 참가자마다 그 방의 워크스페이스를 지금 볼 수 있는지도 붙인다 — 권한은 저장된 상태가 아니라 판정이라
+	* 읽을 때마다 묻는다.
+	*/
 	public Mono<List<ThreadParticipant>> list(UUID threadId, UUID actorUserId) {
 		return Mono.fromCallable(() -> {
 					requireActiveCollabParticipant(threadId, actorUserId);
 					return activeParticipants(threadId, actorUserId);
 				})
-				.subscribeOn(Schedulers.boundedElastic());
+				.subscribeOn(Schedulers.boundedElastic())
+				.flatMapMany(Flux::fromIterable)
+				.flatMapSequential(participant -> participant.pending()
+						? Mono.just(participant)
+						: threadMembershipService.canEnterWorkspace(threadId, participant.subject())
+								.map(participant::withWorkspaceAccess),
+						WORKSPACE_ACCESS_LOOKUP_CONCURRENCY)
+				.collectList();
 	}
 
 	/**
@@ -192,15 +209,19 @@ public class ThreadParticipantService {
 		return Mono.fromCallable(() -> {
 					if (thrMbrRepository.existsByThrIdAndUserIdAndStatus(threadId, inviteeUserId,
 							ThrMbrStatus.ACTIVE)) {
-						return false;
+						return Optional.<Msg>empty();
 					}
-					saveIgnoringDuplicate(new ThrMbr(threadId, inviteeUserId, ThrMbrRole.MEMBER, actorUserId));
-					return true;
+					if (!saveIgnoringDuplicate(new ThrMbr(threadId, inviteeUserId, ThrMbrRole.MEMBER, actorUserId))) {
+						// 동시에 같은 사람을 들인 쪽이 이미 입장 줄을 남긴다.
+						return Optional.<Msg>empty();
+					}
+					return Optional.of(membershipNoticeService.recordBlocking(threadId, MembershipNotice.Event.JOINED,
+							inviteeSubject));
 				})
 				.subscribeOn(Schedulers.boundedElastic())
-				.flatMap(changed -> changed
-						? notifyParticipantChanged(threadId, ParticipantChangeAction.INVITED, inviteeSubject)
-						: Mono.<Void>empty());
+				.flatMap(notice -> notice
+						.map(msg -> notifyParticipantChanged(threadId, ParticipantChangeAction.INVITED, inviteeSubject, msg))
+						.orElseGet(Mono::empty));
 	}
 
 	/**
@@ -263,6 +284,7 @@ public class ThreadParticipantService {
 		}
 		Optional<ThrInv> pending = thrInvRepository.findByThrIdAndSubjAndStatus(threadId,
 				inviteeSubject, ThrInvStatus.PENDING);
+		// 여기서 남긴 입장 줄은 통지에 싣지 않는다 — 좁은 경합 창이라, 보고 있던 사람은 방에 다시 들어올 때 이력에서 본다.
 		pending.ifPresent(invitation -> invitationAcceptanceService.acceptOneBlocking(
 				invitation.getId(), inviteeUserId.get()));
 		return pending.isPresent();
@@ -284,24 +306,24 @@ public class ThreadParticipantService {
 	* @param actorSubject 호출자 자신의 Keycloak subject(자진 탈퇴 판정용, 조회하지 않는다)
 	*/
 	public Mono<Void> remove(UUID threadId, UUID actorUserId, String actorSubject, String targetSubject) {
-		return Mono.<Void>fromCallable(() -> {
+		return Mono.fromCallable(() -> {
 					ThrMbr actor = requireActiveCollabParticipant(threadId, actorUserId);
 					if (targetSubject.equals(actorSubject)) {
 						leaveSelf(actor);
-						return null;
+					} else {
+						requireOwnerRole(actor);
+						UUID targetUserId = resolveUserId(targetSubject);
+						ThrMbr target = thrMbrRepository
+								.findByThrIdAndUserIdAndStatus(threadId, targetUserId, ThrMbrStatus.ACTIVE)
+								.orElseThrow(ThreadParticipantService::notParticipant);
+						target.end(ThrMbrStatus.REVOKED, OWNER_REVOKED);
+						thrMbrRepository.save(target);
 					}
-					requireOwnerRole(actor);
-					UUID targetUserId = resolveUserId(targetSubject);
-					ThrMbr target = thrMbrRepository
-							.findByThrIdAndUserIdAndStatus(threadId, targetUserId, ThrMbrStatus.ACTIVE)
-							.orElseThrow(ThreadParticipantService::notParticipant);
-					target.end(ThrMbrStatus.REVOKED, OWNER_REVOKED);
-					thrMbrRepository.save(target);
-					return null;
+					return membershipNoticeService.recordBlocking(threadId, MembershipNotice.Event.LEFT, targetSubject);
 				})
 				.subscribeOn(Schedulers.boundedElastic())
-				.then(Mono.defer(
-						() -> notifyParticipantChanged(threadId, ParticipantChangeAction.REMOVED, targetSubject)))
+				.flatMap(notice -> notifyParticipantChanged(threadId, ParticipantChangeAction.REMOVED, targetSubject,
+						notice))
 				.doOnSuccess(ignored -> roomSessionRegistry.evict(threadId, targetSubject));
 	}
 
@@ -341,10 +363,10 @@ public class ThreadParticipantService {
 				.collect(Collectors.toMap(AppUser::getId, AppUser::getKeycloakSubj));
 		Stream<ThreadParticipant> joined = members.stream()
 				.map(member -> new ThreadParticipant(subjectsByUserId.get(member.getUserId()), member.getRole(),
-						member.getUserId().equals(actorUserId), false));
+						member.getUserId().equals(actorUserId), false, true));
 		Stream<ThreadParticipant> pending = thrInvRepository
 				.findByThrIdAndStatus(threadId, ThrInvStatus.PENDING).stream()
-				.map(invitation -> new ThreadParticipant(invitation.getSubj(), ThrMbrRole.MEMBER, false, true));
+				.map(invitation -> new ThreadParticipant(invitation.getSubj(), ThrMbrRole.MEMBER, false, true, true));
 		// 대기 초대는 참가자 아래로 모은다 — 아직 방에 없는 사람이라 명단 사이에 섞이면 읽기 어렵다.
 		return Stream.concat(joined, pending)
 				.sorted(Comparator.comparing(ThreadParticipant::pending)
@@ -369,10 +391,17 @@ public class ThreadParticipantService {
 	* (ThreadMessageDispatcher의 "저장 실패는 채팅을 막지 않는다"와 같은 원칙).
 	*/
 	private Mono<Void> notifyParticipantChanged(UUID threadId, ParticipantChangeAction action, String subject) {
+		return notifyParticipantChanged(threadId, action, subject, null);
+	}
+
+	/** notice가 있으면 그 입퇴장 줄을 프레임에 실어, 듣고 있는 화면이 이력을 다시 읽지 않고 줄을 넣게 한다. */
+	private Mono<Void> notifyParticipantChanged(UUID threadId, ParticipantChangeAction action, String subject,
+			Msg notice) {
 		return rankedDisplayNames.displayName(subject)
 				.map(displayName -> displayName.orElse(subject))
 				.doOnNext(displayName -> roomSessionRegistry.notifyIfListening(threadId,
-						new ParticipantChangedFrame(threadId, action, subject, displayName)))
+						new ParticipantChangedFrame(threadId, action, subject, displayName,
+								notice == null ? null : notice.getId(), notice == null ? null : notice.getSeq())))
 				.onErrorResume(error -> {
 					log.error("참여자 변경 통지 실패 threadId={} action={}", threadId, action, error);
 					return Mono.empty();
@@ -393,12 +422,15 @@ public class ThreadParticipantService {
 	* 같은 사람을 동시에 두 번 초대하면 둘 다 "없다"를 보고 둘 다 저장을 시도할 수 있다. 그때 나는
 	* 활성 참가자 부분 유니크 위반은 실패로 답하지 않는다 — 진 쪽이 이루려던 상태를 이긴 쪽이 이미
 	* 만들어 놨다. UserIdentityService가 app_user 동시 생성을 다루는 방식과 같다.
+	* @return 이 호출이 참가 행을 만들었으면 true, 경합에서 졌으면 false
 	*/
-	private void saveIgnoringDuplicate(ThrMbr member) {
+	private boolean saveIgnoringDuplicate(ThrMbr member) {
 		try {
 			thrMbrRepository.save(member);
+			return true;
 		} catch (DataIntegrityViolationException raced) {
 			// 이긴 쪽이 만든 활성 참가 행이 이미 있으므로 그대로 성공으로 둔다.
+			return false;
 		}
 	}
 

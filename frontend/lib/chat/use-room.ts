@@ -38,7 +38,7 @@ import {
   dismissNotice as dismissNoticeIn,
   initialRoomState,
   isForbidden,
-  isPresenceNotice,
+  isMembershipNotice,
   noticeMessage,
 } from '@/lib/chat/room-state';
 import {
@@ -460,7 +460,7 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
   const cancellableTurnId = useMemo(() => {
     for (let index = state.messages.length - 1; index >= 0; index -= 1) {
       const entry = state.messages[index];
-      if (isPresenceNotice(entry)) continue;
+      if (isMembershipNotice(entry)) continue;
       if (!entry.streaming || entry.from !== null) continue;
       if (entry.turnId !== null && myTurnIdsRef.current.has(entry.turnId)) {
         return entry.turnId;

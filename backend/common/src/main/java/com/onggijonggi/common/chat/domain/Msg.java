@@ -118,6 +118,13 @@ public class Msg {
 		return new Msg(UUID.randomUUID(), thrId, seq, AthKind.SYSTEM, null, MsgStatus.COMPLETE, content);
 	}
 
+	/** 화면이 문구를 만들 사건(입퇴장 등)을 pylJson에 담는 SYSTEM 메시지. */
+	public static Msg system(UUID thrId, long seq, String content, String pylJson) {
+		Msg msg = system(thrId, seq, content);
+		msg.pylJson = pylJson;
+		return msg;
+	}
+
 	public void complete(String content) {
 		complete(content, null, null);
 	}

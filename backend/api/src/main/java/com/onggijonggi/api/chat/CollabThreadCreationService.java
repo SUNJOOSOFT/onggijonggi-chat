@@ -5,9 +5,12 @@ import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrIdmKey;
 import com.onggijonggi.common.chat.domain.ThrMbr;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
+import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrIdmKeyRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import com.onggijonggi.common.user.AppUser;
+import com.onggijonggi.common.user.AppUserRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.Objects;
@@ -15,6 +18,7 @@ import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import tools.jackson.databind.ObjectMapper;
 
 /**
  * Class Name : CollabThreadCreationService.java
@@ -41,12 +45,19 @@ public class CollabThreadCreationService {
 	private final ThrRepository thrRepository;
 	private final ThrMbrRepository thrMbrRepository;
 	private final ThrIdmKeyRepository thrIdmKeyRepository;
+	private final MsgRepository msgRepository;
+	private final AppUserRepository appUserRepository;
+	private final ObjectMapper objectMapper;
 
 	public CollabThreadCreationService(ThrRepository thrRepository, ThrMbrRepository thrMbrRepository,
-			ThrIdmKeyRepository thrIdmKeyRepository) {
+			ThrIdmKeyRepository thrIdmKeyRepository, MsgRepository msgRepository, AppUserRepository appUserRepository,
+			ObjectMapper objectMapper) {
 		this.thrRepository = thrRepository;
 		this.thrMbrRepository = thrMbrRepository;
 		this.thrIdmKeyRepository = thrIdmKeyRepository;
+		this.msgRepository = msgRepository;
+		this.appUserRepository = appUserRepository;
+		this.objectMapper = objectMapper;
 	}
 
 	/**
@@ -69,8 +80,13 @@ public class CollabThreadCreationService {
 		}
 		Thr thread = Thr.collab(actorUserId, title);
 		thread.placeIn(workspace.getTenantId(), workspace.getId());
-		thrRepository.save(thread);
+		// id를 앱이 정하는 엔티티라 save가 merge로 돌아 사본을 돌려준다 — 아래 채번이 저장되려면 그 사본을 써야 한다.
+		Thr saved = thrRepository.save(thread);
 		thrMbrRepository.save(new ThrMbr(thread.getId(), actorUserId, ThrMbrRole.OWNER, actorUserId));
+		// 만든 사람의 입장 줄. 아직 아무도 이 방을 듣지 않아 seq는 새 방의 첫 번호를 그대로 쓴다.
+		appUserRepository.findById(actorUserId).map(AppUser::getKeycloakSubj)
+				.ifPresent(subject -> msgRepository.save(MembershipNoticeService.newNotice(thread.getId(),
+						saved.reserveSeqBlock(1), MembershipNotice.Event.JOINED, subject, objectMapper)));
 		if (idempotencyKey != null) {
 			thrIdmKeyRepository.save(new ThrIdmKey(actorUserId, idempotencyKey, title, thread.getId()));
 		}

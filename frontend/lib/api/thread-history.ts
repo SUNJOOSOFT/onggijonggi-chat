@@ -33,6 +33,13 @@ export interface ThreadMessageItem {
    * #357). `@AI`로 답했거나 HUMAN·SYSTEM이면 null이다 — WS chat.answer의 같은 필드와 짝이다.
    * 이 필드가 없던 과거 응답의 역직렬화 호환을 위해 optional이다. */
   agent?: 'sol' | 'fin' | 'law' | null;
+  /** SYSTEM 메시지가 협업방 입퇴장 줄이면 그 내용. 그 밖의 메시지는 null이다 — WS
+   * participant.changed의 msgId·seq와 짝이다. 이 필드가 없던 과거 응답과 맞물리도록 optional이다. */
+  membership?: {
+    event: 'JOINED' | 'LEFT';
+    subject: string;
+    displayName: string;
+  } | null;
 }
 
 export async function fetchThreadMessages(

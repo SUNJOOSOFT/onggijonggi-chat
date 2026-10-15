@@ -331,7 +331,32 @@ class ThreadParticipantControllerTest {
 				.jsonPath("$[0].self").isEqualTo(false)
 				.jsonPath("$[0].displayName").isEqualTo("self-owner")
 				.jsonPath("$[1].self").isEqualTo(true)
-				.jsonPath("$[1].displayName").isEqualTo("self-member");
+				.jsonPath("$[1].displayName").isEqualTo("self-member")
+				.jsonPath("$[1].workspaceAccess").isEqualTo(true);
+	}
+
+	/** 들어오고 나간 사실이 대화 흐름에 한 줄씩 남아, 그때 접속해 있지 않던 사람도 이력에서 본다. */
+	@Test
+	void invitingAndRemovingLeaveJoinAndLeaveLinesInTheHistory() {
+		UUID threadId = rooms.openRoom("line-owner");
+		rooms.user("line-guest");
+
+		invite(threadId, "line-owner", "line-guest").expectStatus().isNoContent();
+		remove(threadId, "line-owner", "line-guest").expectStatus().isNoContent();
+
+		restTestClient.get()
+				.uri("/api/collab/threads/{threadId}/messages", threadId)
+				.header(HttpHeaders.AUTHORIZATION, bearer("line-owner"))
+				.exchange()
+				.expectStatus().isOk()
+				.expectBody()
+				.jsonPath("$.length()").isEqualTo(2)
+				.jsonPath("$[0].athKind").isEqualTo("SYSTEM")
+				.jsonPath("$[0].membership.event").isEqualTo("JOINED")
+				.jsonPath("$[0].membership.subject").isEqualTo("line-guest")
+				.jsonPath("$[0].membership.displayName").isEqualTo("line-guest")
+				.jsonPath("$[1].membership.event").isEqualTo("LEFT")
+				.jsonPath("$[1].membership.subject").isEqualTo("line-guest");
 	}
 
 	@Test

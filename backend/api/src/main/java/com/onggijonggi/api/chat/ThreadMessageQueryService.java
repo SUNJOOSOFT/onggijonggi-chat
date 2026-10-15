@@ -1,5 +1,6 @@
 package com.onggijonggi.api.chat;
 
+import com.onggijonggi.common.chat.domain.AthKind;
 import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.MsgFile;
 import com.onggijonggi.common.chat.domain.ThrMbr;
@@ -8,6 +9,7 @@ import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.user.AppUser;
 import com.onggijonggi.common.user.AppUserRepository;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
@@ -93,7 +95,9 @@ public class ThreadMessageQueryService {
 				.flatMap(lookups -> {
 					Map<UUID, String> subjectByThrMbrId = lookups.getT1();
 					Map<UUID, List<MsgFile>> filesByMsgId = lookups.getT2();
-					Set<String> subjects = Set.copyOf(subjectByThrMbrId.values());
+					Map<UUID, MembershipNotice> noticeByMsgId = membershipNotices(messages);
+					Set<String> subjects = new HashSet<>(subjectByThrMbrId.values());
+					noticeByMsgId.values().forEach(notice -> subjects.add(notice.subject()));
 					return Flux.fromIterable(subjects)
 							.flatMap(subject -> rankedDisplayNames.displayName(subject)
 									.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
@@ -104,9 +108,30 @@ public class ThreadMessageQueryService {
 											displayNameFor(msg, subjectByThrMbrId, displayNameBySubject),
 											filesByMsgId.getOrDefault(msg.getId(), List.of()).stream()
 													.map(MsgFileView::from).toList(),
+											membershipView(noticeByMsgId.get(msg.getId()), displayNameBySubject),
 											objectMapper))
 									.toList());
 				});
+	}
+
+	/** SYSTEM 메시지 중 입퇴장 줄만 골라 msgId로 묶는다. */
+	private Map<UUID, MembershipNotice> membershipNotices(List<Msg> messages) {
+		Map<UUID, MembershipNotice> notices = new HashMap<>();
+		for (Msg msg : messages) {
+			if (msg.getAthKind() != AthKind.SYSTEM) {
+				continue;
+			}
+			MembershipNotice notice = MembershipNotice.fromPylJson(objectMapper, msg.getPylJson());
+			if (notice != null) {
+				notices.put(msg.getId(), notice);
+			}
+		}
+		return notices;
+	}
+
+	private static MsgItem.Membership membershipView(MembershipNotice notice, Map<String, String> displayNameBySubject) {
+		return notice == null ? null : new MsgItem.Membership(notice.event().name(), notice.subject(),
+				displayNameBySubject.getOrDefault(notice.subject(), notice.subject()));
 	}
 
 	/** thrMbrId가 없는(AGENT·SYSTEM) 메시지는 subject도 없어 여기서 null로 끝난다. */

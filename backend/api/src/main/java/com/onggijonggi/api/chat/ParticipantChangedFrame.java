@@ -20,7 +20,15 @@ import java.util.UUID;
  *               트리거로만 쓴다
  * @param subject 변경 대상의 Keycloak subject — INVITED/REMOVED는 그 사람, OWNER_TRANSFERRED는
  *               새 OWNER
+ * @param msgId 이 변경으로 대화 흐름에 남긴 입퇴장 줄(MembershipNotice)의 id. 줄을 남기지 않은 변경이면 null이다
+ * @param seq 그 줄의 seq. msgId와 함께 채워진다 — 화면은 이력을 다시 읽지 않고 이 자리에 줄을 넣는다
  */
 public record ParticipantChangedFrame(UUID threadId, ParticipantChangeAction action, String subject,
-		String displayName) implements WsFrame {
+		String displayName, UUID msgId, Long seq) implements WsFrame {
+
+	/** 입퇴장 줄을 남기지 않는 변경(초대 대기·초대 취소·소유권 위임). */
+	public ParticipantChangedFrame(UUID threadId, ParticipantChangeAction action, String subject,
+			String displayName) {
+		this(threadId, action, subject, displayName, null, null);
+	}
 }

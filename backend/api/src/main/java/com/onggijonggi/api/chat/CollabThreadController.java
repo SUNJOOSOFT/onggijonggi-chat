@@ -325,7 +325,7 @@ public class CollabThreadController {
 				.map(displayNamesBySubject -> participants.stream()
 						.map(participant -> new ParticipantView(participant.subject(), participant.role(),
 								participant.self(), displayNamesBySubject.get(participant.subject()),
-								participant.pending()))
+								participant.pending(), participant.workspaceAccess()))
 						.toList());
 	}
 

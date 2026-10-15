@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.groups.Tuple.tuple;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
@@ -15,6 +16,7 @@ import com.onggijonggi.api.authz.MemberAttributes;
 import com.onggijonggi.api.auth.keycloak.KeycloakAdminClient;
 import com.onggijonggi.api.auth.keycloak.KeycloakUserSummary;
 import com.onggijonggi.common.authz.OrgUnitRepository;
+import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
@@ -82,6 +84,12 @@ class ThreadParticipantServiceTest {
 	@Mock
 	private OwnerTransferAuditService ownerTransferAuditService;
 
+	@Mock
+	private MembershipNoticeService membershipNoticeService;
+
+	/** 입퇴장 줄 저장의 결과로 돌려줄 행. 통지 프레임이 이 id·seq를 싣는지 본다. */
+	private static final Msg NOTICE = Msg.system(UUID.randomUUID(), 7L, "", "{}");
+
 	private ThreadParticipantService service;
 
 	@BeforeEach
@@ -90,7 +98,8 @@ class ThreadParticipantServiceTest {
 				roomSessionRegistry, keycloakAdminClient, thrInvRepository, invitationAcceptanceService,
 				threadMembershipService, new RankedDisplayNames(keycloakAdminClient, orgUnitMemberRepository),
 				new PeopleSearch(keycloakAdminClient, orgUnitMemberRepository, orgUnitRepository),
-				ownerTransferAuditService);
+				ownerTransferAuditService, membershipNoticeService);
+		lenient().when(membershipNoticeService.recordBlocking(any(), any(), any())).thenReturn(NOTICE);
 		// 워크스페이스 판정은 따로 검증한다(아래 워크스페이스 테스트). 나머지 테스트는 늘 볼 수 있는 것으로 둔다.
 		lenient().when(threadMembershipService.canEnterWorkspace(any(), any())).thenReturn(Mono.just(true));
 		when(thrRepository.findById(any())).thenAnswer(ignored ->
@@ -233,7 +242,8 @@ class ThreadParticipantServiceTest {
 
 		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
 				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.INVITED, "invitee-sub",
-						"Invitee")));
+						"Invitee", NOTICE.getId(), NOTICE.getSeq())));
+		verify(membershipNoticeService).recordBlocking(threadId, MembershipNotice.Event.JOINED, "invitee-sub");
 	}
 
 	/** 이미 ACTIVE인 사람을 다시 초대하면 명단이 바뀌지 않았으므로 통지하지 않는다(멱등, 이슈 #129). */
@@ -275,7 +285,8 @@ class ThreadParticipantServiceTest {
 
 		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
 				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.REMOVED, "target-sub",
-						"target-sub")));
+						"target-sub", NOTICE.getId(), NOTICE.getSeq())));
+		verify(membershipNoticeService).recordBlocking(threadId, MembershipNotice.Event.LEFT, "target-sub");
 	}
 
 	/** 자진 탈퇴도 참가자 명단이 바뀌는 일이라 남은 참가자에게 통지한다(이슈 #129). */
@@ -291,7 +302,9 @@ class ThreadParticipantServiceTest {
 		StepVerifier.create(service.remove(threadId, actorUserId, "actor-sub", "actor-sub")).verifyComplete();
 
 		verify(roomSessionRegistry).notifyIfListening(eq(threadId),
-				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.REMOVED, "actor-sub", "Actor")));
+				eq(new ParticipantChangedFrame(threadId, ParticipantChangeAction.REMOVED, "actor-sub", "Actor",
+						NOTICE.getId(), NOTICE.getSeq())));
+		verify(membershipNoticeService).recordBlocking(threadId, MembershipNotice.Event.LEFT, "actor-sub");
 	}
 
 	/**
@@ -579,6 +592,33 @@ class ThreadParticipantServiceTest {
 						.isInstanceOf(ResponseStatusException.class)
 						.extracting(e -> ((ResponseStatusException) e).getStatusCode())
 						.isEqualTo(HttpStatus.NOT_FOUND));
+	}
+
+	/**
+	* 워크스페이스 권한을 잃은 참가자는 명단에 남되 권한 없음으로 표시된다 — 권한을 잃는 것은 참가 기록을
+	* 바꾸지 않아 퇴장 줄이 남지 않으므로, 명단이 그 사실을 알린다.
+	*/
+	@Test
+	void listMarksParticipantsWhoCannotSeeTheWorkspace() {
+		UUID threadId = UUID.randomUUID();
+		AppUser owner = new AppUser("owner-sub");
+		AppUser cutOff = new AppUser("cut-off-sub");
+
+		when(thrMbrRepository.findByThrIdAndUserIdAndStatus(threadId, owner.getId(), ThrMbrStatus.ACTIVE))
+				.thenReturn(Optional.of(new ThrMbr(threadId, owner.getId(), ThrMbrRole.OWNER, owner.getId())));
+		when(thrMbrRepository.findByThrIdAndStatus(threadId, ThrMbrStatus.ACTIVE))
+				.thenReturn(List.of(new ThrMbr(threadId, owner.getId(), ThrMbrRole.OWNER, owner.getId()),
+						new ThrMbr(threadId, cutOff.getId(), ThrMbrRole.MEMBER, owner.getId())));
+		when(appUserRepository.findAllById(List.of(owner.getId(), cutOff.getId()))).thenReturn(List.of(owner, cutOff));
+		when(thrInvRepository.findByThrIdAndStatus(threadId, ThrInvStatus.PENDING)).thenReturn(List.of());
+		when(threadMembershipService.canEnterWorkspace(threadId, "cut-off-sub")).thenReturn(Mono.just(false));
+
+		StepVerifier.create(service.list(threadId, owner.getId()))
+				.assertNext(participants -> assertThat(participants)
+						.extracting(ThreadParticipant::subject, ThreadParticipant::workspaceAccess)
+						.containsExactly(tuple("owner-sub", true),
+								tuple("cut-off-sub", false)))
+				.verifyComplete();
 	}
 
 	/** 명단은 참가자 아래에 대기 초대를 얹는다 — 초대해도 아무것도 안 보이던 것을 없앤다(#172). */

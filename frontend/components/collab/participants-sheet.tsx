@@ -303,6 +303,14 @@ export function ParticipantsSheet({
                             ? '초대 대기'
                             : ROLE_LABEL[participant.role]}
                         </span>
+                        {!participant.workspaceAccess && (
+                          <span
+                            title="워크스페이스 권한이 없어 이 방에 들어올 수 없습니다"
+                            className="shrink-0 rounded bg-destructive/10 px-1.5 py-0.5 text-xs text-destructive"
+                          >
+                            권한 없음
+                          </span>
+                        )}
                       </span>
 
                       <span className="flex shrink-0 gap-1">

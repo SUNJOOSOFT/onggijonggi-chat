@@ -97,9 +97,9 @@ const systemNoticeFrameSchema = z.object({
 
 /**
  * 참여자 명단 변경 통지(#129·#172). action을 union으로 좁히지 않고 무엇이 와도 문자열로
- * 받는다 — 화면은 이 값으로 분기하지 않고 "명단을 다시 불러와"로만 쓰는데, 좁혀 두면 서버가
- * 새 액션을 추가한 순간 프론트를 배포하기 전까지 통지가 통째로 사라진다. system.notice의
- * severity와 같은 판단이다.
+ * 받는다 — 화면은 어느 액션이든 "명단을 다시 불러와"로 쓰고 입퇴장 줄만 INVITED·REMOVED로
+ * 가르는데, 좁혀 두면 서버가 새 액션을 추가한 순간 프론트를 배포하기 전까지 통지가 통째로
+ * 사라진다. system.notice의 severity와 같은 판단이다.
  */
 const participantChangedFrameSchema = z.object({
   type: z.literal('participant.changed'),
@@ -107,6 +107,15 @@ const participantChangedFrameSchema = z.object({
   action: z.string(),
   subject: z.string(),
   displayName: z.string(),
+  // 입퇴장 줄이 없는 변경은 null이다. 필드가 없던 서버와도 맞물리도록 없으면 null로 받는다.
+  msgId: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  seq: z
+    .number()
+    .nullish()
+    .transform((value) => value ?? null),
 });
 
 /** 시작 전 @AI 턴의 대기·취소(이슈 #160). */

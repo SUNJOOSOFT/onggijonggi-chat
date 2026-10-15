@@ -166,6 +166,8 @@ describe('routeFrame — system.notice(#29)', () => {
       action: 'INVITE_PENDING',
       subject: 'sub-1',
       displayName: '아직 로그인 전',
+      msgId: null,
+      seq: null,
     };
     const onParticipantChanged = vi.fn();
 

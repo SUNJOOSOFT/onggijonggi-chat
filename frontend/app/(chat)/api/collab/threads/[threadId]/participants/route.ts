@@ -24,6 +24,7 @@ const PARTICIPANTS: ThreadParticipant[] = [
     self: true,
     displayName: '나',
     pending: false,
+    workspaceAccess: true,
   },
   {
     subject: 'mock-member',
@@ -31,6 +32,8 @@ const PARTICIPANTS: ThreadParticipant[] = [
     self: false,
     displayName: '동료 목업 사용자',
     pending: false,
+    // 워크스페이스 권한을 잃은 참가자도 보여야 "권한 없음" 표시를 목업에서 확인할 수 있다.
+    workspaceAccess: false,
   },
   // 대기 초대 줄도 하나 둔다(이슈 #172) — 이 목업은 Sheet UI 확인용이라, 실제로 보여야 할
   // 상태가 화면에 안 나오면 목업으로서 쓸모가 없다.
@@ -40,6 +43,7 @@ const PARTICIPANTS: ThreadParticipant[] = [
     self: false,
     displayName: '초대만 해둔 목업 사용자',
     pending: true,
+    workspaceAccess: true,
   },
 ];
 

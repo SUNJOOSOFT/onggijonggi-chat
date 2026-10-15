@@ -17,7 +17,8 @@ import com.onggijonggi.common.chat.domain.ThrMbrRole;
  * @param displayName Keycloak Admin API로 해석한 표시 이름. 못 찾으면 subject로 대체된다
  * @param pending 아직 참가가 아니라 대기 초대인지(이슈 #172) — 화면이 "대기 중"으로 구분해
  *                보여주고 OWNER에게 취소를 내준다
+ * @param workspaceAccess 그 방의 워크스페이스를 지금 볼 수 있는지 — false면 화면이 "권한 없음"으로 표시한다
  */
 public record ParticipantView(String subject, ThrMbrRole role, boolean self, String displayName,
-		boolean pending) {
+		boolean pending, boolean workspaceAccess) {
 }

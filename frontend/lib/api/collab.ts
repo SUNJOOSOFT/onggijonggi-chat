@@ -108,6 +108,11 @@ export interface ThreadParticipant {
    * 실패와 구분되지 않던 것을 없앤다. 서버가 참가자 아래로 모아서 내려준다.
    */
   pending: boolean;
+  /**
+   * 그 방의 워크스페이스를 지금 볼 수 있는지. 참가자여도 false면 방에 들어오지 못한다. 권한을 잃는
+   * 것은 참가 기록을 바꾸지 않아 대화 흐름에 퇴장 줄이 남지 않으므로, 명단이 "권한 없음"으로 알린다.
+   */
+  workspaceAccess: boolean;
 }
 
 /** 초대 후보 검색 결과(이슈 #172). 사람은 displayName만 보고 고르고, subject는 화면이 되돌려 준다. */

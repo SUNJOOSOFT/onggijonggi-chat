@@ -9,8 +9,9 @@
  살아남을 규칙이라는 것이다 — 방 레지스트리(#16)와 `@AI` 분기(#17)가 서버에 들어와도 프레임을
  상태로 접는 방식 자체는 바뀌지 않는다.
 
- 입퇴장은 두 군데에 남는다 — 참여자 목록(#26)에는 지금 상태로, 메시지 흐름(#111)에는
- 일어난 사건으로. 같은 프레임을 두 번 쓰는 것이지 중복이 아니다.
+ 접속(presence)과 참가는 다르게 남는다. 참여자 목록(#26)은 지금 접속한 사람이라 presence 프레임으로
+ 갱신하고, 메시지 흐름의 입퇴장 줄은 참가자가 되거나 빠진 사건이라 서버가 저장한 SYSTEM 메시지(이력)와
+ participant.changed로만 들어온다 — 방 목록과 방을 오가는 것은 입퇴장이 아니다.
 
  `chat.answer`의 citations·restrictedResultsOmitted는 현재 AI 답변에 누적한다. 참여자 목록은
  붙는 순간 오는 `presence.snapshot`(#26)으로 채우고, 그 뒤로는 `presence.join`·`presence.leave`
@@ -89,30 +90,30 @@ export interface RoomMessage {
 }
 
 /**
- * 입퇴장을 시간 순서에 남기는 줄(이슈 #111). 목록(#26)이 "지금 누가 있나"라면 이쪽은
- * "언제 누가 오갔나"다 — 그래서 상태가 아니라 메시지 흐름에 낀다.
+ * 참가자가 되거나 참가가 끝난 것을 시간 순서에 남기는 줄. 목록(#26)이 "지금 누가 접속해 있나"라면
+ * 이쪽은 "언제 누가 이 방에 들어오고 나갔나"다 — 그래서 상태가 아니라 메시지 흐름에 낀다.
+ *
+ * 서버가 SYSTEM 메시지로 저장한 줄이라 id·seq가 메시지와 같은 체계다. 이력과 실시간
+ * (participant.changed)이 같은 줄을 id로 알아보고, seq 자리에 끼운다.
  *
  * 문구를 여기서 만들지 않고 사건과 사람만 담는다 — 어떻게 쓸지는 화면이 정하는 편이
  * 갈아끼우기 쉽다. 사람은 subject로 식별하고 표시는 displayName으로 한다(이슈 #130).
- *
- * 자기 입퇴장은 서버가 자기에게 보내지 않으므로 "내가 입장했습니다" 줄은 생기지 않는다.
- * 붙는 순간 받는 참여자 명단(presence.snapshot)도 여기에 줄을 만들지 않는다 — 명단은
- * 사건이 아니라 상태다.
  */
-export interface RoomPresenceNotice {
+export interface RoomMembershipNotice {
   id: string;
+  seq: number;
   event: 'join' | 'leave';
   participant: PresenceParticipant;
 }
 
 /** 대화 흐름에 놓이는 것. 사람·AI 메시지이거나, 입퇴장 시스템 라인이다. */
-export type RoomEntry = RoomMessage | RoomPresenceNotice;
+export type RoomEntry = RoomMessage | RoomMembershipNotice;
 
 /** 시스템 라인인지. 판별 태그를 따로 두지 않고 event 유무로 가른다 — 메시지 쪽 모양을
  * 건드리지 않으려는 것이다. */
-export function isPresenceNotice(
+export function isMembershipNotice(
   entry: RoomEntry,
-): entry is RoomPresenceNotice {
+): entry is RoomMembershipNotice {
   return 'event' in entry;
 }
 
@@ -153,8 +154,6 @@ export interface RoomState {
   /** 닫기 전까지 방 위에 남아 있는 알림. 도착 순서대로다. */
   notices: SystemNotice[];
   error: RoomError | null;
-  /** 다음 메시지에 붙일 번호. 순수 함수로 두려고 상태에 담았다 — 시계나 난수에 기대지 않는다. */
-  nextMessageId: number;
   /**
    * 지금까지 받은 가장 큰 seq — 재접속 따라잡기의 커서다(이슈 #190).
    *
@@ -170,7 +169,6 @@ export const initialRoomState: RoomState = {
   messages: [],
   notices: [],
   error: null,
-  nextMessageId: 1,
   lastSeq: null,
 };
 
@@ -247,7 +245,7 @@ function appendMessage(
 /** 같은 msgId가 이미 흐름에 있는지. 이력과 실시간이 겹칠 때 한 번만 남기는 근거다(#190). */
 function messageIndexById(state: RoomState, id: string): number | null {
   const index = state.messages.findIndex(
-    (entry) => !isPresenceNotice(entry) && entry.id === id,
+    (entry) => !isMembershipNotice(entry) && entry.id === id,
   );
   return index === -1 ? null : index;
 }
@@ -256,16 +254,15 @@ function messageIndexById(state: RoomState, id: string): number | null {
  * seq가 가리키는 자리에 메시지를 끼워 넣는다(이슈 #190).
  *
  * 앞에 붙는 진입 이력과 뒤에 붙는 재접속 따라잡기를 한 규칙으로 다루려는 것이다 — 어느
- * 쪽이든 "seq 순서대로 있어야 할 자리"는 같은 방식으로 구해진다. 입퇴장 줄은 seq가 없어
- * 비교에서 빼고, 그래서 도착했던 자리에 그대로 남는다.
+ * 쪽이든 "seq 순서대로 있어야 할 자리"는 같은 방식으로 구해진다. 입퇴장 줄도 seq가 있어
+ * 메시지와 같은 규칙으로 자리를 찾는다.
  *
- * 비교할 메시지가 하나도 없을 때(흐름이 비었거나 입퇴장 줄뿐일 때)는 커서로 가른다. 커서보다
- * 큰 seq면 따라잡기라 끝에, 아니면 진입 이력이라 앞에 둔다 — 이 경우에만 판단할 근거가
- * 흐름 안에 없다.
+ * 흐름이 비었을 때는 커서로 가른다. 커서보다 큰 seq면 따라잡기라 끝에, 아니면 진입 이력이라
+ * 앞에 둔다 — 이 경우에만 판단할 근거가 흐름 안에 없다.
  */
 function insertBySeq(
   messages: RoomEntry[],
-  incoming: RoomMessage[],
+  incoming: RoomEntry[],
   cursor: number | null,
 ): RoomEntry[] {
   const merged = [...messages];
@@ -273,7 +270,6 @@ function insertBySeq(
     let index: number | null = null;
     for (let i = merged.length - 1; i >= 0; i -= 1) {
       const entry = merged[i];
-      if (isPresenceNotice(entry)) continue;
       if (entry.seq <= message.seq) {
         index = i + 1;
         break;
@@ -302,26 +298,22 @@ export function advanceCursor(current: number | null, seq: number): number {
  * 이미 있는 msgId는 건너뛴다 — 이력을 받기 전에 WS로 먼저 도착한 메시지가 있을 수 있고,
  * 그때 같은 말이 두 번 보이면 안 된다. 남는 것들은 seq로 정렬해 앞에 통째로 붙인다: 이력은
  * 진입 시점의 과거이고 지금 흐름에 있는 것은 그보다 새것이라, 둘을 섞어 정렬할 이유가 없다.
- * 입퇴장 줄(seq가 없다)이 제자리에 남는 것도 같은 이유다.
  *
  * PENDING·CANCELLED처럼 본문이 빈 행은 그리지 않는다 — 빈 말풍선은 아무것도 알리지 못하면서
  * 자리만 차지한다(chat.answer의 빈 패킷을 버리는 것과 같은 결).
  *
- * SYSTEM도 그리지 않는다. 사람도 AI도 아닌 줄을 이 화면이 표현할 방법이 아직 없어서다 —
- * from이 null이면 AI 답변으로 보인다. 위험 알림은 system.notice 배너가 따로 전한다(#29).
+ * SYSTEM은 입퇴장 줄만 그린다. 나머지 SYSTEM은 사람도 AI도 아닌 줄을 이 화면이 표현할 방법이
+ * 아직 없어서 그리지 않는다 — from이 null이면 AI 답변으로 보인다. 위험 알림은 system.notice
+ * 배너가 따로 전한다(#29).
  */
 export function applyHistory(
   state: RoomState,
   items: ThreadMessageItem[],
 ): RoomState {
-  const known = new Set(
-    state.messages
-      .filter((entry) => !isPresenceNotice(entry))
-      .map((entry) => entry.id),
-  );
-  const restored = items
+  const known = new Set(state.messages.map((entry) => entry.id));
+  const restored: RoomEntry[] = items
     .filter((item) => !known.has(item.id))
-    .filter((item) => item.athKind !== 'SYSTEM')
+    .filter((item) => item.athKind !== 'SYSTEM' || item.membership != null)
     // 빈 본문은 아직 채워지지 않은 예약 행(PENDING)이라 그리지 않는다. 다만 중지·거부로 끝난
     // 답변은 비는 것이 정상이고 그 사실 자체가 보여야 할 내용이라 예외로 남긴다 — 여기서
     // 걸러 버리면 방을 다시 열었을 때 "중지됨"이 조용히 사라진다.
@@ -329,11 +321,12 @@ export function applyHistory(
     .filter(
       (item) =>
         item.content !== '' ||
+        item.membership != null ||
         terminalStatusOf(item.status) !== null ||
         item.attachments.length > 0,
     )
     .sort((left, right) => left.seq - right.seq)
-    .map(toRoomMessage);
+    .map(toRoomEntry);
 
   // 건너뛴 줄(SYSTEM·아직 빈 예약 행)도 커서는 지나쳐야 한다 — 그러지 않으면 다음 따라잡기가
   // 같은 것을 또 받아온다.
@@ -346,6 +339,20 @@ export function applyHistory(
     ...state,
     messages: insertBySeq(state.messages, restored, state.lastSeq),
     lastSeq,
+  };
+}
+
+/** 입퇴장 줄이면 그 줄로, 아니면 메시지로 옮긴다. */
+function toRoomEntry(item: ThreadMessageItem): RoomEntry {
+  if (item.membership == null) return toRoomMessage(item);
+  return {
+    id: item.id,
+    seq: item.seq,
+    event: item.membership.event === 'JOINED' ? 'join' : 'leave',
+    participant: {
+      subject: item.membership.subject,
+      displayName: item.membership.displayName,
+    },
   };
 }
 
@@ -407,20 +414,21 @@ function distinctBySubject(
   return [...bySubject.values()];
 }
 
-/** 입퇴장 줄 하나를 덧붙인다. 번호는 메시지와 같은 자리에서 뽑는다 — 한 목록에 섞이므로
- * key가 겹치면 안 된다. */
-function appendNotice(
+/**
+ * participant.changed에 실려 온 입퇴장 줄을 seq 자리에 넣는다. 이미 이력으로 받은 줄이면 건너뛴다.
+ *
+ * 커서(lastSeq)는 밀지 않는다. 이 줄의 seq는 방송 워커 밖에서 정해져, 그보다 작은 seq의 대화가
+ * 아직 오는 중일 수 있다 — 여기서 커서를 밀면 그때 끊겼을 때 따라잡기가 그 대화를 건너뛴다.
+ * 커서를 밀지 않아 다음 따라잡기가 이 줄을 다시 받아도 id로 걸러진다.
+ */
+function insertMembershipNotice(
   state: RoomState,
-  event: 'join' | 'leave',
-  participant: PresenceParticipant,
+  notice: RoomMembershipNotice,
 ): RoomState {
+  if (state.messages.some((entry) => entry.id === notice.id)) return state;
   return {
     ...state,
-    messages: [
-      ...state.messages,
-      { id: `m${state.nextMessageId}`, event, participant },
-    ],
-    nextMessageId: state.nextMessageId + 1,
+    messages: insertBySeq(state.messages, [notice], state.lastSeq),
   };
 }
 
@@ -448,7 +456,7 @@ function mergeCitations(current: Citation[], incoming: Citation[]): Citation[] {
 function streamingAnswerIndex(state: RoomState): number | null {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
-    if (isPresenceNotice(message)) continue;
+    if (isMembershipNotice(message)) continue;
     if (message.from === null && message.streaming) return index;
   }
   return null;
@@ -493,18 +501,17 @@ function extendAnswer(
  */
 export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
   switch (frame.type) {
+    // 접속은 참여자 목록만 바꾼다. 방 목록과 방을 오가는 것은 입퇴장이 아니라 흐름에 줄을 남기지 않는다.
     case 'presence.join': {
-      // 이미 아는 사람의 join이 또 오면(재연결 등) 목록도 흐름도 건드리지 않는다.
+      // 이미 아는 사람의 join이 또 오면(재연결 등) 목록을 건드리지 않는다.
       if (hasParticipant(state, frame.subject)) return state;
-      const participant = {
-        subject: frame.subject,
-        displayName: frame.displayName,
-      };
-      const joined = {
+      return {
         ...state,
-        participants: [...state.participants, participant],
+        participants: [
+          ...state.participants,
+          { subject: frame.subject, displayName: frame.displayName },
+        ],
       };
-      return appendNotice(joined, 'join', participant);
     }
 
     // 명단은 서버가 방금 뜬 것이라 지금까지 쌓인 것보다 정확하다 — 덧붙이지 않고 갈아끼운다.
@@ -513,26 +520,32 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       return { ...state, participants: distinctBySubject(frame.participants) };
 
     case 'presence.leave': {
-      // join과 대칭이다. 모르는 사람의 퇴장은 목록도 흐름도 건드리지 않는다 — 본 적 없는
-      // 사람이 나갔다는 줄만 남으면 읽는 쪽은 놓친 입장이 있다고 오해한다.
+      // join과 대칭이다. 모르는 사람의 퇴장은 목록을 건드리지 않는다.
       if (!hasParticipant(state, frame.subject)) return state;
-      const left = {
+      return {
         ...state,
         participants: state.participants.filter(
           (participant) => participant.subject !== frame.subject,
         ),
       };
-      return appendNotice(left, 'leave', {
-        subject: frame.subject,
-        displayName: frame.displayName,
-      });
     }
 
-    // 참여자 명단이 바뀌었다는 신호일 뿐 이 상태에 접을 것이 없다(이슈 #129·#172).
-    // 여기 participants는 접속자(presence)라 명단과 다른 목록이고, 명단은 REST로 읽는
-    // 참여자 시트가 들고 있다 — 재조회는 use-collab-room이 신호로 내보낸다.
+    // 여기 participants는 접속자(presence)라 참가자 명단과 다른 목록이고, 명단은 REST로 읽는
+    // 참여자 시트가 들고 있다 — 재조회는 use-room이 신호로 내보낸다(이슈 #129·#172).
+    // 참가자가 되거나 빠진 변경이면 서버가 남긴 입퇴장 줄이 함께 실려 와 흐름에 넣는다.
     case 'participant.changed':
-      return state;
+      if (frame.msgId === null || frame.seq === null) return state;
+      if (frame.action !== 'INVITED' && frame.action !== 'REMOVED')
+        return state;
+      return insertMembershipNotice(state, {
+        id: frame.msgId,
+        seq: frame.seq,
+        event: frame.action === 'INVITED' ? 'join' : 'leave',
+        participant: {
+          subject: frame.subject,
+          displayName: frame.displayName,
+        },
+      });
 
     // AI 턴 대기·시작 전 취소(이슈 #160). 이 화면은 아직 "대기 중"을 그리지 않는다 — 1:1을 이
     // 프레임으로 옮기는 #162가 두 화면에 함께 붙인다. 시작한 턴은 chat.answer가 따로 온다.

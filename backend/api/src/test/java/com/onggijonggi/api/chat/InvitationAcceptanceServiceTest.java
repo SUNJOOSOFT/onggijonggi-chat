@@ -1,8 +1,10 @@
 package com.onggijonggi.api.chat;
 
+import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
-import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doReturn;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -11,6 +13,7 @@ import com.onggijonggi.common.chat.domain.ThrInv;
 import com.onggijonggi.common.chat.domain.ThrInvStatus;
 import com.onggijonggi.common.chat.persistence.ThrInvRepository;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,11 +36,15 @@ class InvitationAcceptanceServiceTest {
 	@Mock
 	private PendingInvitationAcceptance pendingInvitationAcceptance;
 
+	@Mock
+	private MembershipNoticeService membershipNoticeService;
+
 	private InvitationAcceptanceService service;
 
 	@BeforeEach
 	void setUp() {
-		service = new InvitationAcceptanceService(thrInvRepository, pendingInvitationAcceptance);
+		service = new InvitationAcceptanceService(thrInvRepository, pendingInvitationAcceptance,
+				membershipNoticeService);
 	}
 
 	/** 방이 여럿이면 초대도 여럿이다 — 건별로 각자의 트랜잭션에서 전환한다. */
@@ -69,7 +76,7 @@ class InvitationAcceptanceServiceTest {
 		when(thrInvRepository.findBySubjAndStatus("raced-sub", ThrInvStatus.PENDING))
 				.thenReturn(List.of(invitation));
 		doThrow(new DataIntegrityViolationException("ux_thr_mbr_active_participant"))
-				.doNothing()
+				.doReturn(false)
 				.when(pendingInvitationAcceptance)
 				.acceptOneBlocking(invitation.getId(), userId);
 
@@ -89,16 +96,34 @@ class InvitationAcceptanceServiceTest {
 		when(thrInvRepository.findBySubjAndStatus("mixed-sub", ThrInvStatus.PENDING))
 				.thenReturn(List.of(raced, healthy));
 		doThrow(new DataIntegrityViolationException("ux_thr_mbr_active_participant"))
-				.doNothing()
+				.doReturn(false)
 				.when(pendingInvitationAcceptance)
 				.acceptOneBlocking(eq(raced.getId()), eq(userId));
-		doNothing().when(pendingInvitationAcceptance)
+		doReturn(false).when(pendingInvitationAcceptance)
 				.acceptOneBlocking(eq(healthy.getId()), eq(userId));
 
 		service.acceptPendingBlocking(userId, "mixed-sub");
 
 		verify(pendingInvitationAcceptance, times(2)).acceptOneBlocking(raced.getId(), userId);
 		verify(pendingInvitationAcceptance).acceptOneBlocking(healthy.getId(), userId);
+	}
+
+	/** 참가자가 되면 그 방에 입장 줄을 남긴다. 이미 참가해 있어 전환만 한 경우는 남기지 않는다. */
+	@Test
+	void recordsAJoinLineOnlyWhenTheInvitationCreatedAParticipant() {
+		UUID userId = UUID.randomUUID();
+		ThrInv joined = new ThrInv(UUID.randomUUID(), "join-sub", UUID.randomUUID());
+		ThrInv alreadyIn = new ThrInv(UUID.randomUUID(), "join-sub", UUID.randomUUID());
+
+		when(pendingInvitationAcceptance.acceptOneBlocking(joined.getId(), userId)).thenReturn(true);
+		when(pendingInvitationAcceptance.acceptOneBlocking(alreadyIn.getId(), userId)).thenReturn(false);
+		when(thrInvRepository.findById(joined.getId())).thenReturn(Optional.of(joined));
+
+		service.acceptOneBlocking(joined.getId(), userId);
+		service.acceptOneBlocking(alreadyIn.getId(), userId);
+
+		verify(membershipNoticeService).recordBlocking(joined.getThrId(), MembershipNotice.Event.JOINED, "join-sub");
+		verify(membershipNoticeService, never()).recordBlocking(eq(alreadyIn.getThrId()), any(), any());
 	}
 
 }

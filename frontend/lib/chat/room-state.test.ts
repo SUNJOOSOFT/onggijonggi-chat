@@ -16,7 +16,7 @@ import {
   dismissNotice,
   initialRoomState,
   isForbidden,
-  isPresenceNotice,
+  isMembershipNotice,
 } from './room-state';
 
 const THREAD = 'thread-1';
@@ -110,10 +110,27 @@ function answer(
   };
 }
 
-/** 입퇴장 시스템 라인(#111)을 뺀 사람·AI 메시지만. 대화 쪽을 보는 테스트가 쓴다. */
+/** 참가자가 되거나 빠진 변경. 서버는 이 변경마다 입퇴장 줄을 남기고 그 msgId·seq를 싣는다. */
+function membershipChanged(
+  action: 'INVITED' | 'REMOVED',
+  subject: string,
+  msgId: string,
+  seq: number,
+): WsFrame {
+  return {
+    type: 'participant.changed',
+    threadId: THREAD,
+    action,
+    ...person(subject),
+    msgId,
+    seq,
+  };
+}
+
+/** 입퇴장 시스템 라인을 뺀 사람·AI 메시지만. 대화 쪽을 보는 테스트가 쓴다. */
 function chats(state: RoomState): RoomMessage[] {
   return state.messages.filter(
-    (entry): entry is RoomMessage => !isPresenceNotice(entry),
+    (entry): entry is RoomMessage => !isMembershipNotice(entry),
   );
 }
 
@@ -172,10 +189,6 @@ describe('applyFrame - presence.leave', () => {
     // 스냅샷을 못 받아 존재를 모르던 사람의 퇴장이 도착할 수 있다(#26 코멘트).
     const state = fold([join('sujin'), leave('minho')]);
     expect(state.participants).toEqual([person('sujin')]);
-    // 흐름에도 남기지 않는다 — 목록에서 지울 사람이 없으면 알릴 사건도 없다.
-    expect(state.messages).toEqual([
-      { id: 'm1', event: 'join', participant: person('sujin') },
-    ]);
   });
 
   it('나갔다 다시 들어오면 맨 뒤에 붙는다', () => {
@@ -195,66 +208,93 @@ describe('applyFrame - presence.leave', () => {
       leave('sujin'),
     ]);
     expect(state.participants).toEqual([]);
-    // 흐름에는 입장·퇴장 시스템 라인이 함께 남는다(#111) — 대화 메시지만 세어 확인한다.
     expect(chats(state)).toHaveLength(1);
   });
 });
 
-describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
-  it('입장과 퇴장을 흐름에 시간 순서로 남긴다', () => {
+describe('applyFrame - 입퇴장 줄', () => {
+  it('접속·해제는 흐름에 줄을 남기지 않는다 — 방 목록과 방을 오가는 것은 입퇴장이 아니다', () => {
     const state = fold([
       join('sujin'),
       say('sujin', '안녕하세요'),
       leave('sujin'),
     ]);
-    expect(state.messages).toEqual([
-      { id: 'm1', event: 'join', participant: person('sujin') },
-      {
-        id: expect.any(String),
-        seq: expect.any(Number),
-        from: person('sujin'),
-        content: '안녕하세요',
-        streaming: false,
-        terminalStatus: null,
-        turnId: null,
-        citations: [],
-        restrictedResultsOmitted: false,
-        groundingNotice: null,
-        agent: null,
-        attachments: [],
-      },
-      // 입퇴장 줄 번호는 서버 msgId를 쓰는 메시지와 카운터를 나눠 쓰지 않는다(이슈 #190).
-      { id: 'm2', event: 'leave', participant: person('sujin') },
-    ]);
+    expect(state.messages).toHaveLength(1);
+    expect(chats(state)).toHaveLength(1);
   });
 
   it('명단(스냅샷)은 줄을 만들지 않는다 — 상태이지 사건이 아니다', () => {
-    // 붙는 순간 받는 명단으로 "N명이 입장했습니다"가 우수수 뜨면 안 된다. B안(전용 스냅샷
-    // 프레임)을 택한 이유가 이것이다(#26).
     const state = fold([snapshot('sujin', 'minho')]);
     expect(state.messages).toEqual([]);
     expect(state.participants).toEqual([person('sujin'), person('minho')]);
   });
 
-  it('이미 아는 사람의 join이 또 와도 줄을 늘리지 않는다', () => {
-    const state = fold([join('sujin'), join('sujin')]);
+  it('참가자가 되거나 빠지면 서버가 남긴 줄을 seq 자리에 넣는다', () => {
+    const state = fold([
+      say('sujin', '먼저', 'a', 1),
+      say('sujin', '나중', 'c', 3),
+      membershipChanged('INVITED', 'minho', 'j', 2),
+      membershipChanged('REMOVED', 'minho', 'l', 4),
+    ]);
+    expect(state.messages.map((entry) => entry.id)).toEqual([
+      'a',
+      'j',
+      'c',
+      'l',
+    ]);
+    expect(state.messages[1]).toEqual({
+      id: 'j',
+      seq: 2,
+      event: 'join',
+      participant: person('minho'),
+    });
+    expect(state.messages[3]).toEqual({
+      id: 'l',
+      seq: 4,
+      event: 'leave',
+      participant: person('minho'),
+    });
+  });
+
+  it('줄을 남기지 않은 변경(초대 대기 등)은 흐름을 건드리지 않는다', () => {
+    const before = fold([say('sujin', '안녕하세요')]);
+    const after = applyFrame(before, {
+      type: 'participant.changed',
+      threadId: THREAD,
+      action: 'INVITE_PENDING',
+      ...person('minho'),
+      msgId: null,
+      seq: null,
+    });
+    expect(after).toBe(before);
+  });
+
+  it('같은 줄이 이력과 실시간으로 겹쳐 와도 한 번만 남는다', () => {
+    const live = fold([membershipChanged('INVITED', 'minho', 'j', 2)]);
+    const state = applyFrame(
+      live,
+      membershipChanged('INVITED', 'minho', 'j', 2),
+    );
     expect(state.messages).toHaveLength(1);
   });
 
-  it('시스템 라인이 흐르는 AI 답변을 끊지 않는다', () => {
-    // 답변이 흐르는 도중 누가 들어와도 이어지는 delta는 같은 말풍선에 붙어야 한다.
+  it('실시간 줄은 커서를 밀지 않는다 — 그보다 작은 seq의 대화가 아직 오는 중일 수 있다', () => {
+    const state = fold([
+      say('sujin', '먼저', 'a', 1),
+      membershipChanged('INVITED', 'minho', 'j', 5),
+    ]);
+    expect(state.lastSeq).toBe(1);
+  });
+
+  it('입퇴장 줄이 흐르는 AI 답변을 끊지 않는다', () => {
     const state = fold([
       answer('요약을 ', 'streaming'),
-      join('minho'),
+      membershipChanged('INVITED', 'minho', 'j', 1001),
       answer('시작합니다', 'done'),
     ]);
     expect(chats(state)).toHaveLength(1);
     expect(chats(state)[0].content).toBe('요약을 시작합니다');
-    expect(state.messages[1]).toEqual({
-      id: 'm1',
-      event: 'join',
-      participant: person('minho'),
-    });
+    expect(isMembershipNotice(state.messages[1])).toBe(true);
   });
 });
 
@@ -606,6 +646,8 @@ describe('system.notice(#29)', () => {
       action: 'INVITE_PENDING',
       subject: 'sub-2',
       displayName: '초대된 사람',
+      msgId: null,
+      seq: null,
     });
 
     expect(after).toBe(before);
@@ -706,11 +748,28 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
     expect(state.messages).toEqual([]);
   });
 
-  it('입퇴장 줄은 제자리에 남는다 — seq가 없어 정렬 대상이 아니다', () => {
-    const live = fold([join('minho')]);
-    const state = applyHistory(live, [historyItem('old-1', 0, '예전 말')]);
-    expect(state.messages).toHaveLength(2);
-    expect(isPresenceNotice(state.messages[1])).toBe(true);
+  it('SYSTEM이어도 입퇴장 줄은 seq 자리에 그린다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('b', 2, '나중 말'),
+      historyItem('j', 1, '', {
+        athKind: 'SYSTEM',
+        authorSubject: null,
+        authorDisplayName: null,
+        membership: {
+          event: 'JOINED',
+          subject: 'minho',
+          displayName: 'minho 님',
+        },
+      }),
+      historyItem('a', 0, '예전 말'),
+    ]);
+    expect(state.messages.map((entry) => entry.id)).toEqual(['a', 'j', 'b']);
+    expect(state.messages[1]).toEqual({
+      id: 'j',
+      seq: 1,
+      event: 'join',
+      participant: person('minho'),
+    });
   });
 
   it('첨부만 보낸 메시지는 본문이 비어도 첨부와 함께 남는다', () => {

@@ -114,6 +114,28 @@ class ThreadMessageDispatcherTest {
 		assertThat(request.getValue().timeZone()).isEqualTo("America/New_York");
 	}
 
+	/** 입퇴장 줄은 대화가 아니라 모델 문맥에 넣지 않는다. 같은 SYSTEM이라도 위험 알림처럼 본문이 있는 줄은 그대로 간다. */
+	@Test
+	void leavesMembershipLinesOutOfTheLlmContext() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.persistHumanMessageAndFetchContextBlocking(any(), anyLong(), eq(room.threadId),
+				eq(room.userId), eq("@AI 요약해줘"), anyList(), anyInt())).thenReturn(List.of(
+						MembershipNoticeService.newNotice(room.threadId, 0L, MembershipNotice.Event.JOINED, "kc-9",
+								new ObjectMapper()),
+						Msg.system(room.threadId, 1L, "위험할 수 있는 발화가 감지되었습니다.")));
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm, msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "@AI 요약해줘"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().messages()).extracting(ChatMessage::content)
+				.containsExactly("위험할 수 있는 발화가 감지되었습니다.", "요약해줘");
+	}
+
 	@Test
 	void broadcastsOrdinaryMessagesWithoutCallingTheLlm() {
 		TestRoom room = new TestRoom();
@@ -1377,6 +1399,28 @@ class ThreadMessageDispatcherTest {
 		verify(msgPersistenceService, timeout(1000)).persistHumanMessageBlocking(any(), anyLong(), eq(room.threadId),
 				eq(room.userId), eq("@AI stop me"), anyList());
 		verify(llm, never()).streamChat(any());
+	}
+
+	/**
+	* 대화가 오가는 방의 입퇴장 줄은 그 방의 블록에서 seq를 받는다 — DB에서 따로 뽑으면 이미 예약된 블록 뒤
+	* 번호라 그 뒤의 대화보다 뒤로 정렬된다. 대화가 없는 방은 DB에서 하나만 뽑는다.
+	*/
+	@Test
+	void allocateSeqUsesTheOpenRoomsBlockAndFallsBackToTheDatabaseOtherwise() {
+		TestRoom room = new TestRoom();
+		UUID quietThreadId = UUID.randomUUID();
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.allocateSeqBlockBlocking(room.threadId, 100)).thenReturn(500L);
+		when(msgPersistenceService.allocateSeqBlockBlocking(quietThreadId, 1)).thenReturn(900L);
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, mock(LlmChatStreamService.class),
+				msgPersistenceService);
+
+		dispatcher.dispatch(command(room, "안녕하세요"), room.membership.generation());
+		awaitFrameCount(room.frames, 1);
+
+		assertThat(((ChatMessageFrame) room.frames.get(0)).seq()).isEqualTo(500L);
+		assertThat(dispatcher.allocateSeqBlocking(room.threadId)).isEqualTo(501L);
+		assertThat(dispatcher.allocateSeqBlocking(quietThreadId)).isEqualTo(900L);
 	}
 
 	/** DIRECT는 멘션 파서를 안 타고 모든 발화에 답하며, HUMAN·AGENT 모두 미리 예약된 msgId·seq를

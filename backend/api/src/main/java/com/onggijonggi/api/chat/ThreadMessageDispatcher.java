@@ -238,6 +238,32 @@ public class ThreadMessageDispatcher {
 	}
 
 	/**
+	* 대화 밖에서 생긴 줄(입퇴장)의 seq. 지금 대화가 오가는 방이면 그 방의 블록에서 꺼낸다 — DB에서
+	* 따로 뽑으면 이미 예약된 블록 뒤의 번호를 받아, 그 뒤에 오간 대화보다 뒤로 정렬되고 따라잡기
+	* 커서도 그 대화를 건너뛴다. 대화가 없는 방이면 다음에 예약될 블록보다 앞이라 DB에서 하나 뽑는다.
+	*
+	* 블로킹이라 호출부가 이벤트 루프 밖이어야 한다.
+	*/
+	public long allocateSeqBlocking(UUID threadId) {
+		for (Map.Entry<RoomKey, RoomAiState> entry : states.entrySet()) {
+			RoomAiState state = entry.getValue();
+			if (!entry.getKey().threadId().equals(threadId)) {
+				continue;
+			}
+			boolean open;
+			synchronized (state) {
+				open = !state.closed;
+			}
+			// 블록은 DB에 이미 예약돼 있어 그 사이 방이 닫혀도 번호가 겹치지 않는다. 블록이 바닥나면
+			// DB를 부르므로 방 잠금 밖에서 꺼낸다.
+			if (open) {
+				return state.seqBlock.allocate();
+			}
+		}
+		return msgPersistenceService.allocateSeqBlockBlocking(threadId, 1);
+	}
+
+	/**
 	* 워커가 큐에서 하나씩 꺼내 실행한다 — 방 단위로 직렬이므로 방송 순서가 여기서 확정된다.
 	*
 	* 방송이 실패하면(sink 고장) generation을 닫고 끝낸다. 이전에는 MESSAGE_DELIVERY_FAILED를
@@ -836,6 +862,10 @@ public class ThreadMessageDispatcher {
 		}
 		boolean humanInContext = false;
 		for (Msg msg : context) {
+			// 입퇴장 줄(MembershipNotice)은 본문이 없고 대화도 아니라 모델에 넘기지 않는다.
+			if (msg.getAthKind() == AthKind.SYSTEM && msg.getPylJson() != null) {
+				continue;
+			}
 			String role = msg.getAthKind() == AthKind.HUMAN ? "user"
 					: msg.getAthKind() == AthKind.SYSTEM ? "system" : "assistant";
 			messages.add(new ChatMessage(role, MsgFileService.withFiles(msg.getContent(), files.get(msg.getId()))));

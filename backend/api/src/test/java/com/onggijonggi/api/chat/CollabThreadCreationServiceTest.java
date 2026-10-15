@@ -8,12 +8,17 @@ import static org.mockito.Mockito.when;
 import com.onggijonggi.common.authz.WorkspaceNode;
 import com.onggijonggi.common.authz.WorkspaceNodeKind;
 import com.onggijonggi.common.authz.WorkspaceNodeRepository;
+import com.onggijonggi.common.chat.domain.AthKind;
+import com.onggijonggi.common.chat.domain.Msg;
 import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrIdmKey;
 import com.onggijonggi.common.chat.domain.ThrMbr;
+import com.onggijonggi.common.chat.persistence.MsgRepository;
 import com.onggijonggi.common.chat.persistence.ThrIdmKeyRepository;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
+import com.onggijonggi.common.user.AppUser;
+import com.onggijonggi.common.user.AppUserRepository;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.List;
@@ -54,8 +59,29 @@ class CollabThreadCreationServiceTest {
 	@Autowired
 	private ThrIdmKeyRepository thrIdmKeyRepository;
 
+	@Autowired
+	private MsgRepository msgRepository;
+
+	@Autowired
+	private AppUserRepository appUserRepository;
+
 	@MockitoBean
 	private ThrMbrRepository thrMbrRepository;
+
+	/** 만든 사람의 입장 줄이 새 방의 첫 seq로 남고, 다음 채번은 그 뒤에서 시작한다. */
+	@Test
+	void leavesTheCreatorsJoinLineAsTheFirstMessage() {
+		AppUser creator = appUserRepository.save(new AppUser("creation-line-owner"));
+
+		UUID threadId = collabThreadCreationService.createBlocking(creator.getId(), "입장 줄 방", null, workspace());
+
+		List<Msg> messages = msgRepository.findByThrIdOrderBySeqAsc(threadId);
+		assertThat(messages).hasSize(1);
+		assertThat(messages.get(0).getAthKind()).isEqualTo(AthKind.SYSTEM);
+		assertThat(messages.get(0).getSeq()).isZero();
+		assertThat(messages.get(0).getPylJson()).contains("JOINED", "creation-line-owner");
+		assertThat(thrRepository.findById(threadId).orElseThrow().getNextSeq()).isEqualTo(1L);
+	}
 
 	@Test
 	void rollsBackThreadCreationWhenInitialOwnerMembershipCannotBeSaved() {
