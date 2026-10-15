@@ -82,6 +82,7 @@ class WsFrameGoldenTest {
 		samples.put("pong", new PongFrame());
 		samples.put("chat.typing", new ChatTypingFrame(THREAD_ID, participant.subject(), participant.displayName(),
 				true));
+		samples.put("room.subscribed", new RoomSubscribedFrame(THREAD_ID));
 		return samples;
 	}
 

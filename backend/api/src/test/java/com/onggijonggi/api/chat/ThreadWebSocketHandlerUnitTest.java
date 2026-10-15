@@ -656,6 +656,9 @@ class ThreadWebSocketHandlerUnitTest {
 		handler.handle(session).block();
 
 		assertThat(sent).noneMatch(frame -> frame.contains("\"type\":\"presence."));
+		// 스냅샷 대신 구독 완료를 알린다 — 선제 토큰 갱신이 새 소켓의 구독 완료를 이것으로 안다(이슈 #382).
+		assertThat(sent).containsExactly(
+				"{\"type\":\"room.subscribed\",\"threadId\":\"" + threadId + "\"}");
 	}
 
 	@Test

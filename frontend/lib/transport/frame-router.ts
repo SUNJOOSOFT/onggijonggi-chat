@@ -17,6 +17,7 @@ import type {
   PresenceJoinFrame,
   PresenceLeaveFrame,
   PresenceSnapshotFrame,
+  RoomSubscribedFrame,
   SystemNoticeFrame,
   WsErrorFrame,
   WsFrame,
@@ -34,6 +35,7 @@ export interface FrameHandlers {
   onChatQueued?: (frame: ChatQueuedFrame) => void;
   onPong?: (frame: PongFrame) => void;
   onChatTyping?: (frame: ChatTypingFrame) => void;
+  onRoomSubscribed?: (frame: RoomSubscribedFrame) => void;
 }
 
 export function routeFrame(frame: WsFrame, handlers: FrameHandlers): void {
@@ -70,6 +72,9 @@ export function routeFrame(frame: WsFrame, handlers: FrameHandlers): void {
       return;
     case 'chat.typing':
       handlers.onChatTyping?.(frame);
+      return;
+    case 'room.subscribed':
+      handlers.onRoomSubscribed?.(frame);
       return;
     default: {
       // frames.ts에 새 서브타입을 추가하고 여기 case를 안 채우면, frame이 never로 좁혀지지

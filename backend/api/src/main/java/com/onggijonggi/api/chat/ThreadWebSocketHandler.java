@@ -70,7 +70,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	private static final int TYPING_PER_WINDOW = 60;
 
 	private static final Set<String> SERVER_ONLY_TYPES = Set.of("chat.answer", "presence.join",
-			"presence.leave", "presence.snapshot", "error", "system.notice", "chat.queued", "pong");
+			"presence.leave", "presence.snapshot", "error", "system.notice", "chat.queued", "pong",
+			"room.subscribed");
 
 	private final ObjectMapper objectMapper;
 
@@ -685,6 +686,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 아니라 이 구독의 값이라 방 버퍼 밖에서 맨 앞에 붙인다 — 클라이언트는 이것을 구독 완료로 읽는다.
 	* presenceEnabled가 false면(DIRECT, 이슈 #162) presence 자체가 없는 방이라 스냅샷을 붙이지
 	* 않는다 — 붙이면 클라이언트가 참가자 0명짜리 presence 상태를 만들어야 하는 의미 없는 부담이 된다.
+	* 대신 구독 완료만 알리는 {@link RoomSubscribedFrame}을 붙인다(이슈 #382).
 	*
 	* 강제 해지(evict)와 버퍼 넘침 신호는 방송·evict를 부른 스레드가 방 상태 잠금을 쥔 채 낸다. 그
 	* 자리에서 곧장 leave를 부르면 순회 중인 연결 목록을 고치게 되므로 스레드를 옮겨 처리한다.
@@ -706,7 +708,8 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.filter(frame -> !(frame instanceof ChatTypingFrame typing && typing.subject().equals(subject))),
 				overflow)
 				.takeUntilOther(Mono.firstWithSignal(membership.left(), membership.kicked()));
-		connection.attach(presenceEnabled ? roomFrames.startWith(membership.snapshot()) : roomFrames);
+		connection.attach(roomFrames.startWith(
+				presenceEnabled ? membership.snapshot() : new RoomSubscribedFrame(threadId)));
 
 		membership.kicked()
 				.publishOn(Schedulers.parallel())

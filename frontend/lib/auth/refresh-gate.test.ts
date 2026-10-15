@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
-import { needsProactiveRefresh } from './refresh-gate';
+import {
+  FORCED_REFRESH_REQUEST,
+  allowsForcedRefresh,
+  isForcedRefreshRequest,
+  needsProactiveRefresh,
+} from './refresh-gate';
 
 const NOW = 1_700_000_000_000;
 
@@ -91,5 +96,81 @@ describe('needsProactiveRefresh', () => {
     vi.spyOn(Date, 'now').mockReturnValue(expiresAtMs - 10_000);
     expect(needsProactiveRefresh(token, expiresAtMs)).toBe(true);
     vi.restoreAllMocks();
+  });
+});
+
+describe('allowsForcedRefresh', () => {
+  it('수명 300초 토큰 — 남은 수명이 절반(150초) 이하일 때만 강제 갱신을 허용한다(이슈 #382)', () => {
+    const expiresAtMs = NOW + 300_000;
+    const token = jwt(NOW, expiresAtMs);
+    expect(allowsForcedRefresh(token, expiresAtMs, expiresAtMs - 150_000)).toBe(
+      true,
+    );
+    expect(allowsForcedRefresh(token, expiresAtMs, expiresAtMs - 150_001)).toBe(
+      false,
+    );
+    // WS가 실제로 묻는 시점(만료 30초 전)은 넉넉히 창 안이다.
+    expect(allowsForcedRefresh(token, expiresAtMs, expiresAtMs - 30_000)).toBe(
+      true,
+    );
+  });
+
+  it('수명 60초 토큰 — 허용 창도 30초로 비례해서 줄어든다', () => {
+    const expiresAtMs = NOW + 60_000;
+    const token = jwt(NOW, expiresAtMs);
+    expect(allowsForcedRefresh(token, expiresAtMs, expiresAtMs - 30_000)).toBe(
+      true,
+    );
+    expect(allowsForcedRefresh(token, expiresAtMs, expiresAtMs - 30_001)).toBe(
+      false,
+    );
+  });
+
+  it('기준은 accessTokenExpires가 아니라 토큰의 exp다 — 갱신 왕복만큼 늦게 잡힌 값과 엇갈리지 않는다', () => {
+    const expiresAtMs = NOW + 300_000;
+    const token = jwt(NOW, expiresAtMs);
+    // accessTokenExpires가 exp보다 1초 늦게 잡혀 있어도(갱신 응답을 받은 순간 기준) 판정은 exp로 한다.
+    expect(
+      allowsForcedRefresh(token, expiresAtMs + 1_000, expiresAtMs - 150_000),
+    ).toBe(true);
+  });
+
+  it('iat이 없거나 파싱할 수 없으면 기존 마진 판정을 따른다', () => {
+    const expiresAtMs = NOW + 300_000;
+    const noIat = `h.${btoa(JSON.stringify({ exp: Math.floor(expiresAtMs / 1000) }))}.s`;
+    for (const token of [noIat, 'not-a-jwt', undefined]) {
+      for (const now of [expiresAtMs - 10_000, expiresAtMs - 100_000]) {
+        expect(allowsForcedRefresh(token, expiresAtMs, now)).toBe(
+          needsProactiveRefresh(token, expiresAtMs, now),
+        );
+      }
+    }
+  });
+});
+
+describe('isForcedRefreshRequest', () => {
+  it('세션 update에 갱신 요청 표시가 있을 때만 참이다(이슈 #382)', () => {
+    expect(isForcedRefreshRequest('update', FORCED_REFRESH_REQUEST)).toBe(true);
+    expect(isForcedRefreshRequest('update', { refreshAccessToken: true })).toBe(
+      true,
+    );
+  });
+
+  it('update가 아니거나 다른 용도의 update면 갱신 요청으로 읽지 않는다', () => {
+    expect(isForcedRefreshRequest(undefined, FORCED_REFRESH_REQUEST)).toBe(
+      false,
+    );
+    expect(isForcedRefreshRequest('signIn', FORCED_REFRESH_REQUEST)).toBe(
+      false,
+    );
+    for (const data of [
+      undefined,
+      null,
+      'refreshAccessToken',
+      { name: '홍길동' },
+      { refreshAccessToken: 'true' },
+    ]) {
+      expect(isForcedRefreshRequest('update', data)).toBe(false);
+    }
   });
 });

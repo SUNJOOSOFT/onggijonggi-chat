@@ -6,8 +6,9 @@
  *********************************************************/
 
 import {
+  allowsForcedRefresh,
+  isForcedRefreshRequest,
   needsProactiveRefresh,
-  proactiveRefreshMarginMs,
 } from '@/lib/auth/refresh-gate';
 import NextAuth from 'next-auth';
 import type { JWT } from 'next-auth/jwt';
@@ -36,14 +37,12 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
         }),
       },
     );
-    const refreshed = await response.json();
-    // [#181 계측] 리프레시 결과 — 근본 원인 규명 후 제거한다.
-    console.info(
-      `[#181][auth] refresh status=${response.status} ok=${response.ok} hasToken=${!!refreshed.access_token} expiresIn=${refreshed.expires_in} err=${refreshed.error ?? 'none'}`,
-    );
+    // 앞단 프록시가 HTML 오류 페이지를 주면 파싱 오류 메시지에 본문이 섞이고 상태 코드도 잃는다 —
+    // 빈 본문으로 보고 아래 실패 처리로 넘긴다.
+    const refreshed = await response.json().catch(() => ({}));
     // 성공 응답인데 access_token이 없으면 실패로 간주한다 — "error 없이 토큰만 사라지는" 상태를 막는다.
     if (!response.ok || !refreshed.access_token) {
-      throw refreshed;
+      throw { status: response.status, error: refreshed.error };
     }
 
     return {
@@ -54,7 +53,16 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       refreshToken: refreshed.refresh_token ?? token.refreshToken,
       error: undefined,
     };
-  } catch {
+  } catch (failure) {
+    // 운영에서 갱신 실패로 세션이 끊기면 원인을 볼 곳이 있어야 한다 — 응답 상태와 오류 이름만 남기고
+    // 토큰 값은 남기지 않는다(이슈 #382). 네트워크 오류는 상태 없이 메시지만 남는다.
+    const { status, error } = (failure ?? {}) as {
+      status?: number;
+      error?: string;
+    };
+    console.warn(
+      `[auth] Keycloak 토큰 갱신 실패 status=${status ?? '-'} error=${error ?? (failure instanceof Error ? failure.message : '-')}`,
+    );
     return { ...token, error: 'RefreshAccessTokenError' as const };
   }
 }
@@ -83,12 +91,14 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     },
     // accessToken은 세션까지, refreshToken은 JWT(httpOnly 쿠키)에만 두고 만료 임박 시
     // 여기서 선제 로테이션한다. 매 요청(authFetch의 getSession())이 이 콜백을 거치므로
-    // 별도 배치/타이머 없이 "다음 요청 전 선제 리프레시"가 된다.
-    async jwt({ token, account, profile }) {
+    // 별도 배치/타이머 없이 "다음 요청 전 선제 리프레시"가 된다. 다만 WS 선제 갱신은 연결을 오래 붙잡아
+    // 경계에서 옛 토큰을 받으면 끊기므로, POST(update)로 갱신을 직접 요청한다(이슈 #382).
+    async jwt({ token, account, profile, trigger, session }) {
       if (account) {
         // 사이드바의 내 이름. Keycloak 기본 name은 "이름 성" 순서라 성+이름으로 붙인다 — 서버의 표시 이름
         // (PersonNames)과 같은 규칙이다. 둘 다 없으면 NextAuth가 채운 name(없으면 username)을 그대로 둔다.
-        const fullName = `${profile?.family_name ?? ''}${profile?.given_name ?? ''}`.trim();
+        const fullName =
+          `${profile?.family_name ?? ''}${profile?.given_name ?? ''}`.trim();
         if (fullName) token.name = fullName;
         token.idToken = account.id_token;
         token.accessToken = account.access_token;
@@ -99,24 +109,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         return token;
       }
 
-      // [#181 계측] accessTokenExpires가 실제로 세팅되는지 + 리프레시 게이트 판정 — 근본 원인 규명 후 제거한다.
-      const expIn =
-        typeof token.accessTokenExpires === 'number'
-          ? Math.round((token.accessTokenExpires - Date.now()) / 1000)
-          : 'unset';
-      if (!needsProactiveRefresh(token.accessToken, token.accessTokenExpires)) {
-        const marginS = Math.round(
-          proactiveRefreshMarginMs(token.accessToken) / 1000,
-        );
-        console.info(
-          `[#181][auth] jwt: token still valid, skipping refresh (expIn=${expIn}s, margin=${marginS}s)`,
-        );
-        return token;
+      // WS 선제 갱신이 직접 요청한 갱신(이슈 #382). 마진 판정 대신 허용 창(수명의 절반)만 본다 — 묻는
+      // 시점(토큰 exp·브라우저 시계)과 마진 판정(accessTokenExpires·서버 시계)의 기준이 달라 경계에서
+      // 옛 토큰을 돌려주던 문제를 없앤다. session 본문은 갱신 요청 표시로만 읽고 토큰에 합치지 않는다.
+      if (isForcedRefreshRequest(trigger, session)) {
+        return allowsForcedRefresh(token.accessToken, token.accessTokenExpires)
+          ? refreshAccessToken(token)
+          : token;
       }
 
-      console.info(
-        `[#181][auth] jwt: refreshing (expIn=${expIn}s, prevError=${token.error ?? 'none'})`,
-      );
+      if (!needsProactiveRefresh(token.accessToken, token.accessTokenExpires)) {
+        return token;
+      }
       return refreshAccessToken(token);
     },
     async session({ session, token }) {

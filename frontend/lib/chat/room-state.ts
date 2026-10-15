@@ -544,6 +544,10 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
     case 'pong':
       return state;
 
+    // DIRECT 구독 완료(#382)는 선제 갱신이 쓰는 신호라 방 상태와 무관하다. 허브가 화면에 넘기지 않는다.
+    case 'room.subscribed':
+      return state;
+
     // 입력 중 표시는 만료 시각이 있어 이 순수 상태에 두지 않는다 — use-room이 typing.ts로 따로 든다.
     case 'chat.typing':
       return state;
