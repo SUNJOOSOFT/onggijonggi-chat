@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 from zipfile import BadZipFile, ZipFile
 
 from fastapi import UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from app.core.config import Settings
 from app.errors import WorkerError
@@ -146,8 +147,8 @@ class DocumentService:
                     if size > self._settings.max_output_bytes:
                         raise WorkerError(413, "OUTPUT_TOO_LARGE", "Template exceeds the maximum size")
                     destination.write(chunk)
-            validate_template_content(path)
-            self._storage.upload(object_key, path, content_type)
+            await run_in_threadpool(validate_template_content, path)
+            await run_in_threadpool(self._storage.upload, object_key, path, content_type)
 
         return TemplateResponse(
             template_id=template_id,

@@ -1,4 +1,5 @@
 import asyncio
+import threading
 from io import BytesIO
 from pathlib import Path
 from zipfile import ZipFile
@@ -10,6 +11,7 @@ from starlette.datastructures import Headers
 from app.core.config import Settings
 from app.errors import WorkerError
 from app.models.document import TEMPLATE_CONTENT_TYPES
+from app.services import document_service
 from app.services.document_service import DocumentService
 
 
@@ -93,3 +95,34 @@ def test_template_service_rejects_invalid_document_content() -> None:
                 "request-1",
             )
         )
+
+
+def test_template_service_runs_blocking_steps_off_the_event_loop(monkeypatch: pytest.MonkeyPatch) -> None:
+    loop_thread = threading.get_ident()
+    threads: dict[str, int] = {}
+
+    class RecordingStorage(FakeStorage):
+        def upload(self, object_key: str, path: Path, content_type: str) -> None:
+            threads["upload"] = threading.get_ident()
+            super().upload(object_key, path, content_type)
+
+    def record_validate(path: Path) -> None:
+        threads["validate"] = threading.get_ident()
+
+    monkeypatch.setattr(document_service, "validate_template_content", record_validate)
+    service = DocumentService(Settings(internal_api_key="test-key"), storage=RecordingStorage())
+
+    async def run() -> int:
+        await service.save_template(
+            make_upload(
+                "template.docx",
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            ),
+            "tenant-a",
+            "request-1",
+        )
+        return threading.get_ident()
+
+    assert asyncio.run(run()) == loop_thread
+    assert threads["validate"] != loop_thread
+    assert threads["upload"] != loop_thread
