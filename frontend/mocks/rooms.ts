@@ -119,6 +119,7 @@ const SERVER_ONLY_TYPES = [
   'system.notice',
   'chat.queued',
   'pong',
+  'room.subscribed',
 ];
 
 function nonEmptyString(value: unknown): value is string {

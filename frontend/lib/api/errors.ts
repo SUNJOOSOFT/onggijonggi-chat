@@ -20,6 +20,7 @@ export type BffErrorCode =
   | 'INVITEE_NO_WORKSPACE_ACCESS' // 409 CORE — 초대 대상이 그 방의 워크스페이스를 볼 수 없음
   | 'RBAC_STATE_CONFLICT' // 409 CORE — Workspace·부여 관리가 현재 권한 구성 때문에 거부됨(선언 리소스, 마지막 ADMIN 등)
   | 'MODEL_UNAVAILABLE' // 502 CORE — 게이트웨이가 모델 호출을 거절
+  | 'AI_TURN_TIMEOUT' // WS CORE — AI 턴이 시간 제한(turn-timeout)을 넘겨 중단됨(이슈 #389)
   | 'MESSAGE_DELIVERY_FAILED' // WS — 협업방 메시지 방송 실패
   | 'UNSUPPORTED_FILE' // 400·415 CORE — 첨부·방 문서 형식이 txt·md·csv·pdf·docx가 아님(방 문서는 415)
   | 'FILE_TOO_LARGE' // 413 CORE — 첨부·방 문서가 크기 상한을 넘음
@@ -85,6 +86,9 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
   // 때문이다. 그래서 고르기 전에 막지 못하고 이 시점에 안내한다.
   MODEL_UNAVAILABLE:
     '이 모델을 사용할 수 없어요. API 키가 설정되어 있는지 확인하거나 다른 모델을 선택해 주세요.',
+  // 답이 길어 턴 시간 제한에 걸렸다(이슈 #389). 모델 문제가 아니라서 API 키 안내를 띄우지 않는다.
+  AI_TURN_TIMEOUT:
+    '답변이 시간 제한을 넘겨 중단됐어요. 질문을 나눠서 다시 요청해 주세요.',
   // 서버가 이 방 구독을 잃었다(버퍼 넘침 등, 이슈 #161). 다시 구독하고 놓친 대화는 따라잡지만,
   // 그 사이 보낸 메시지는 들어가지 않았을 수 있다.
   NOT_SUBSCRIBED:

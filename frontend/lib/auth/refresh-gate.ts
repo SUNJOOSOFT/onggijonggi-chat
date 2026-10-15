@@ -7,6 +7,8 @@
  따라간다. 최초 구현은 마진을 30초로 고정했는데, 그건 그 순간의 실서버 값(300초)에 맞춘
  것일 뿐이라 lifespan이 바뀌면 다시 안 맞는다 — 2026-09-11 지적으로 비례식으로 교체했다.
 
+ WS 선제 갱신이 서버에 갱신을 직접 요청할 때의 허용 창(남은 수명이 절반 이하, 이슈 #382)도 여기서 판정한다.
+
  auth.ts에서도 쓰지만 별도 모듈로 뗀 이유는 그대로다 — auth.ts는 next-auth를 로드해
  vitest(node) 환경에서 import되지 않는다(`Cannot find module 'next/server'`).
  *********************************************************/
@@ -70,4 +72,40 @@ export function needsProactiveRefresh(
 ): boolean {
   if (!expiresAtMs) return true;
   return now >= expiresAtMs - proactiveRefreshMarginMs(accessToken);
+}
+
+/** WS 선제 갱신이 POST /api/auth/session의 data로 보내는 갱신 요청 표시(이슈 #382). 보내는 쪽
+ * (ws-connection.ts)과 읽는 쪽(auth.ts의 jwt 콜백)이 이 값 하나를 함께 써서 서로 어긋나지 않게 한다. */
+export const FORCED_REFRESH_REQUEST = { refreshAccessToken: true } as const;
+
+/** jwt 콜백이 받은 요청이 WS 선제 갱신의 직접 요청인가. 다른 용도의 세션 update(data가 다른 것)는
+ * 갱신 요청으로 읽지 않는다. */
+export function isForcedRefreshRequest(
+  trigger: string | undefined,
+  data: unknown,
+): boolean {
+  return (
+    trigger === 'update' &&
+    typeof data === 'object' &&
+    data !== null &&
+    (data as { refreshAccessToken?: unknown }).refreshAccessToken ===
+      FORCED_REFRESH_REQUEST.refreshAccessToken
+  );
+}
+
+/** WS 선제 갱신이 서버에 "지금 갱신해"를 직접 요청했을 때(이슈 #382) 갱신해도 되는가. 남은 수명이 토큰
+ * 수명의 절반 이하일 때만 허용한다 — 브라우저·서버 시계 차를 넉넉히 흡수하면서, 반복 요청이 Keycloak을
+ * 계속 부르지 못하게 한다. 기준은 accessTokenExpires가 아니라 토큰의 exp다 — WS가 갱신 시점을 정할 때
+ * 쓰는 것과 같은 기준이라, 갱신 왕복만큼 늦게 잡히는 accessTokenExpires와 경계에서 엇갈리지 않는다.
+ * 디코드 실패·iat 없음이면 판단할 수명이 없으니 기존 마진 판정을 따른다. */
+export function allowsForcedRefresh(
+  accessToken: string | null | undefined,
+  expiresAtMs: number | undefined | null,
+  now: number = Date.now(),
+): boolean {
+  const times = decodeJwtTimes(accessToken);
+  if (!times || times.issuedAtMs === null) {
+    return needsProactiveRefresh(accessToken, expiresAtMs, now);
+  }
+  return times.expiresAtMs - now <= (times.expiresAtMs - times.issuedAtMs) / 2;
 }

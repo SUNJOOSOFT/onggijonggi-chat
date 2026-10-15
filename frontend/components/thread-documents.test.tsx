@@ -20,6 +20,8 @@ vi.mock('@/lib/api/thread-documents', () => ({
   uploadThreadDocument: vi.fn(),
   changeThreadDocument: vi.fn(),
   downloadThreadDocument: vi.fn(),
+  downloadThreadAttachment: vi.fn(),
+  registerThreadAttachment: vi.fn(),
 }));
 const doc: api.ThreadDocument = {
   id: 'doc1',
@@ -39,6 +41,18 @@ const listing: api.ThreadDocumentsListing = {
   threadStatus: 'ACTIVE',
   canUpload: true,
   documents: [doc],
+  attachments: [],
+};
+const attachment: api.ThreadAttachment = {
+  id: 'file1',
+  fileName: '근로기준법.pdf',
+  size: 2048,
+  senderSubject: 'sub-kim',
+  own: false,
+  canReadOriginal: true,
+  canRegister: true,
+  registered: false,
+  createdAt: '2026-10-14T00:00:00Z',
 };
 /** 좁은 화면 구성: 헤더 버튼으로 여는 시트. */
 function room(threadId: string, available = true) {
@@ -557,6 +571,131 @@ describe('방 문서 실제 UI', () => {
       );
     },
   );
+});
+
+describe('채팅 첨부', () => {
+  it('다른 사람이 보낸 첨부에는 화면이 아는 보낸 사람 이름을 붙인다', async () => {
+    vi.mocked(api.listThreadDocuments).mockResolvedValue({
+      ...listing,
+      attachments: [
+        attachment,
+        { ...attachment, id: 'file2', senderSubject: 'sub-unknown' },
+      ],
+    });
+    render(
+      <ThreadDocumentsProvider
+        threadId="room"
+        senderNames={new Map([['sub-kim', '김부장']])}
+      >
+        <ThreadDocumentsButton />
+      </ThreadDocumentsProvider>,
+    );
+    open();
+    expect(await screen.findByText('2KB · 김부장')).toBeTruthy();
+    // 이름을 모르면 지어내지 않고 비워 둔다.
+    expect(screen.getAllByText('2KB')).toHaveLength(1);
+  });
+
+  async function attachmentMenu(item: string) {
+    fireEvent.keyDown(screen.getByRole('button', { name: '첨부 작업' }), {
+      key: 'Enter',
+    });
+    return screen.findByRole('menuitem', { name: item });
+  }
+
+  it('보낸 첨부를 방 문서와 따로 보이고 원본을 내려받는다', async () => {
+    vi.mocked(api.listThreadDocuments).mockResolvedValue({
+      ...listing,
+      attachments: [attachment],
+    });
+    vi.mocked(api.downloadThreadAttachment).mockResolvedValue(new Blob(['x']));
+    URL.createObjectURL = vi.fn(() => 'blob:x');
+    URL.revokeObjectURL = vi.fn();
+    render(room('room'));
+    open();
+    expect(await screen.findByText('근로기준법.pdf')).toBeTruthy();
+    expect(screen.getByText('채팅 첨부 1')).toBeTruthy();
+    expect(screen.getByText('2KB')).toBeTruthy();
+    fireEvent.click(await attachmentMenu('원본 내려받기'));
+    await waitFor(() =>
+      expect(api.downloadThreadAttachment).toHaveBeenCalledWith(
+        'room',
+        'file1',
+      ),
+    );
+    expect(api.downloadThreadDocument).not.toHaveBeenCalled();
+  });
+
+  it('방 문서로 등록하면 목록을 다시 읽는다', async () => {
+    vi.mocked(api.listThreadDocuments).mockResolvedValue({
+      ...listing,
+      attachments: [attachment],
+    });
+    vi.mocked(api.registerThreadAttachment).mockResolvedValue(doc);
+    render(room('room'));
+    open();
+    await screen.findByText('근로기준법.pdf');
+    const before = vi.mocked(api.listThreadDocuments).mock.calls.length;
+    fireEvent.click(await attachmentMenu('방 문서로 등록'));
+    await waitFor(() =>
+      expect(api.registerThreadAttachment).toHaveBeenCalledWith(
+        'room',
+        'file1',
+      ),
+    );
+    await waitFor(() =>
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(before + 1),
+    );
+  });
+
+  it('등록된 첨부와 원본 없는 첨부는 상태만 보이고 할 일을 숨긴다', async () => {
+    vi.mocked(api.listThreadDocuments).mockResolvedValue({
+      ...listing,
+      attachments: [
+        { ...attachment, registered: true, canRegister: false },
+        {
+          ...attachment,
+          id: 'old',
+          fileName: '예전.txt',
+          size: null,
+          own: true,
+          canReadOriginal: false,
+          canRegister: false,
+        },
+      ],
+    });
+    render(room('room'));
+    open();
+    expect(await screen.findByText(/방 문서로 등록됨/)).toBeTruthy();
+    expect(screen.getByText('내가 보냄 · 원본 없음')).toBeTruthy();
+    expect(screen.getAllByRole('button', { name: '첨부 작업' })).toHaveLength(
+      1,
+    );
+    expect(
+      (await attachmentMenu('원본 내려받기')).getAttribute('aria-disabled'),
+    ).not.toBe('true');
+    expect(
+      screen.queryByRole('menuitem', { name: '방 문서로 등록' }),
+    ).toBeNull();
+  });
+
+  it('첨부가 실린 메시지가 오면 폴링을 기다리지 않고 다시 읽는다', async () => {
+    const view = (count: number) => (
+      <ThreadDocumentsProvider threadId="room" attachmentCount={count}>
+        <ThreadDocumentsButton />
+      </ThreadDocumentsProvider>
+    );
+    const { rerender } = render(view(0));
+    await waitFor(() =>
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(1),
+    );
+    rerender(view(0));
+    expect(api.listThreadDocuments).toHaveBeenCalledTimes(1);
+    rerender(view(1));
+    await waitFor(() =>
+      expect(api.listThreadDocuments).toHaveBeenCalledTimes(2),
+    );
+  });
 });
 
 describe('넓은 화면 오른쪽 패널', () => {

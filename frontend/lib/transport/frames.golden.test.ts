@@ -47,6 +47,7 @@ const OUTBOUND_TYPES: Record<WsFrameType, true> = {
   'chat.queued': true,
   pong: true,
   'chat.typing': true,
+  'room.subscribed': true,
 };
 
 /**

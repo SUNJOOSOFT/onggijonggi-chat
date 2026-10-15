@@ -13,13 +13,14 @@
  "완성된 발화 하나"라 합칠 여지가 생겼지만 이번 범위는 아니다.
  *********************************************************/
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 
 import { AttachButton, PendingAttachments } from '@/components/attachments';
 import { ArrowUpIcon, StopIcon } from '@/components/icons';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
+import { TYPING_RESEND_MS } from '@/lib/chat/typing';
 import { useAttachments } from '@/lib/chat/use-attachments';
 import { AI_MENTION, mentionsAi } from '@/lib/collab/mention';
 
@@ -38,7 +39,8 @@ export function CollabInput({
   onCancel?: () => void;
   /** 다른 사람이 입력 중이면 그 문구(lib/chat/typing.ts의 typingLabel). 안내 줄 자리에 대신 보인다. */
   typingLabel?: string | null;
-  /** 입력창에 글자가 있는지 바뀔 때마다(키를 누를 때마다) 부른다. 얼마나 자주 알릴지는 받는 쪽이 정한다. */
+  /** 입력창에 글자가 있는지 바뀔 때마다(키를 누를 때마다) 부른다. 첨부가 올라가는 동안에도 부른다.
+   * 얼마나 자주 알릴지는 받는 쪽이 정한다. */
   onTyping?: (active: boolean) => void;
 }) {
   const [input, setInput] = useState('');
@@ -49,6 +51,19 @@ export function CollabInput({
   // 올라가는 중인 첨부가 있으면 기다린다 — 지금 보내면 그 파일이 빠진다.
   const hasContent = input.trim() !== '' || attachments.uploaded.length > 0;
   const canSubmit = hasContent && !attachments.uploading;
+
+  // 첨부가 올라가는 동안은 키를 누르지 않아도 입력 중으로 알린다. 받는 쪽에는 파일 이름도, 올리는
+  // 중이라는 것도 드러내지 않는다 — 보내지 않은 첨부는 아직 초안이다.
+  const onTypingRef = useRef(onTyping);
+  onTypingRef.current = onTyping;
+  const uploading = attachments.uploading;
+  useEffect(() => {
+    if (!uploading) return;
+    const notify = () => onTypingRef.current?.(true);
+    notify();
+    const timer = setInterval(notify, TYPING_RESEND_MS);
+    return () => clearInterval(timer);
+  }, [uploading]);
 
   const submit = () => {
     // 공백뿐인 입력만 막고, 정상 content의 앞뒤 공백은 지우지 않고 원문 그대로 보낸다 —
@@ -123,6 +138,12 @@ export function CollabInput({
         items={attachments.items}
         onRemove={attachments.remove}
       />
+      {/* 보낸 첨부는 방 문서 패널에서 다른 참여자도 원본을 내려받는다. 보내기 전에 알린다. */}
+      {attachments.items.length > 0 && (
+        <p className="px-1 text-xs text-muted-foreground">
+          보내면 이 방 참여자가 원본을 내려받을 수 있습니다.
+        </p>
+      )}
 
       <div className="relative w-full">
         <Textarea
@@ -134,7 +155,7 @@ export function CollabInput({
           value={input}
           onChange={(event) => {
             setInput(event.target.value);
-            onTyping?.(event.target.value.trim() !== '');
+            onTyping?.(event.target.value.trim() !== '' || uploading);
           }}
           className="max-h-[40dvh] min-h-[80px] resize-none overflow-auto rounded-2xl bg-muted pb-10 !text-base dark:border-zinc-700"
           rows={2}

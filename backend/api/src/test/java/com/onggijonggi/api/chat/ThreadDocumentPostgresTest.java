@@ -58,6 +58,7 @@ class ThreadDocumentPostgresTest {
 		r.add("app.rbac.workspace-setup-path", () -> Path.of("../../infra/config/workspace-setup.default.yml").toAbsolutePath().normalize().toString());
 	}
 	@Autowired ThreadDocumentService service;
+	@Autowired MsgFileService attachments;
 	@Autowired JdbcTemplate jdbc;
 	@Autowired ThrRepository threads;
 	@Autowired ThrMbrRepository members;
@@ -647,6 +648,86 @@ class ThreadDocumentPostgresTest {
 	private void tag(UUID document, int runSeq, String status, String category, String keywords, String summary) {
 		jdbc.update("insert into thr_doc_tag(id, doc_id, tnn_id, thr_id, run_seq, status, ctg, kyw, smm, tag_cnf) values (?, ?, ?, ?, ?, ?, ?, ?::text[], ?, 'v1')",
 				UUID.randomUUID(), document, tenant, room, runSeq, status, category, keywords, summary);
+	}
+
+	@Test void sentAttachmentIsListedAndDownloadableByOtherParticipants() {
+		UUID file = attach(member, room, "근로기준법.txt", bytes);
+		var attachment = service.list(room, owner).attachments();
+		assertThat(attachment).singleElement().satisfies(value -> {
+			assertThat(value.id()).isEqualTo(file);
+			assertThat(value.fileName()).isEqualTo("근로기준법.txt");
+			assertThat(value.size()).isEqualTo(bytes.length);
+			assertThat(value.senderSubject()).isEqualTo(member.subject());
+			assertThat(value.own()).isFalse();
+			assertThat(value.canReadOriginal()).isTrue();
+			assertThat(value.canRegister()).isTrue();
+		});
+		assertThat(service.list(room, member).attachments().get(0).own()).isTrue();
+		assertThat(service.attachmentOriginal(room, file, owner).bytes()).isEqualTo(bytes);
+		status(() -> service.attachmentOriginal(room, file, actor()), HttpStatus.NOT_FOUND);
+	}
+
+	@Test void unsentOrOtherRoomAttachmentIsNotExposed() {
+		UUID unsent = attachments.uploadBlocking(member.userId(), "초안.txt", bytes).getId();
+		Thr other = Thr.collab(owner.userId(), "다른 방");
+		other.placeIn(tenant, jdbc.queryForObject("select id from wrk_node where node_key='common'", UUID.class));
+		threads.saveAndFlush(other);
+		members.saveAndFlush(new ThrMbr(other.getId(), owner.userId(), ThrMbrRole.OWNER, owner.userId()));
+		UUID elsewhere = attach(owner, other.getId(), "다른.txt", bytes);
+		assertThat(service.list(room, owner).attachments()).isEmpty();
+		status(() -> service.attachmentOriginal(room, unsent, member), HttpStatus.NOT_FOUND);
+		status(() -> service.attachmentOriginal(room, elsewhere, owner), HttpStatus.NOT_FOUND);
+	}
+
+	@Test void attachmentWithoutOriginalIsListedButNotDownloadable() {
+		UUID file = attach(member, room, "예전.txt", null);
+		assertThat(service.list(room, owner).attachments()).singleElement().satisfies(value -> {
+			assertThat(value.size()).isNull();
+			assertThat(value.canReadOriginal()).isFalse();
+			assertThat(value.canRegister()).isFalse();
+		});
+		status(() -> service.attachmentOriginal(room, file, owner), HttpStatus.NOT_FOUND);
+	}
+
+	@Test void registeringAttachmentCreatesOneUnpinnedDocumentWithTheSameId() {
+		UUID file = attach(member, room, "근로기준법.txt", bytes);
+		var document = service.registerAttachment(room, file, owner);
+		assertThat(document.id()).isEqualTo(file);
+		assertThat(document.pinned()).isFalse();
+		assertThat(document.own()).isTrue();
+		assertThat(service.registerAttachment(room, file, owner)).isEqualTo(document);
+		verify(storage, times(1)).save(eq(tenant), eq(room), eq(file), eq(ThreadDocumentService.digest(bytes)), eq(bytes), any(), any());
+		assertThat(service.list(room, owner).documents()).singleElement().extracting(ThreadDocumentView::fileName).isEqualTo("근로기준법.txt");
+		assertThat(service.list(room, member).attachments()).singleElement().satisfies(value -> {
+			assertThat(value.registered()).isTrue();
+			assertThat(value.canRegister()).isFalse();
+		});
+	}
+
+	@Test void lockedRoomAttachmentIsDownloadableButNotRegistrable() {
+		UUID file = attach(member, room, "근로기준법.txt", bytes);
+		jdbc.update("update thr set status='LOCKED',locked_at=now() where id=?", room);
+		assertThat(service.list(room, owner).attachments().get(0).canRegister()).isFalse();
+		assertThat(service.attachmentOriginal(room, file, owner).bytes()).isEqualTo(bytes);
+		status(() -> service.registerAttachment(room, file, owner), HttpStatus.CONFLICT);
+	}
+
+	/**
+	 * who가 thread에 보낸 메시지 하나와 거기 실린 첨부. 첨부는 채팅 업로드(MsgFileService)로 올린다.
+	 * content가 null이면 원본을 두기 전에 올린 첨부(텍스트만 있는 행)다.
+	 */
+	private UUID attach(CurrentActor who, UUID thread, String name, byte[] content) {
+		UUID message = UUID.randomUUID();
+		UUID membership = jdbc.queryForObject("select id from thr_mbr where thr_id=? and user_id=?", UUID.class, thread, who.userId());
+		jdbc.update("insert into msg(id,thr_id,seq,ath_kind,thr_mbr_id,status,content,completed_at) values (?,?,(select coalesce(max(seq),0)+1 from msg where thr_id=?),'HUMAN',?,'COMPLETE','',now())",
+				message, thread, thread, membership);
+		UUID file;
+		if (content == null) {
+			file = UUID.randomUUID();
+			jdbc.update("insert into msg_file(id,user_id,file_name,file_text) values (?,?,?,?)", file, who.userId(), name, "본문");
+		} else file = attachments.uploadBlocking(who.userId(), name, content).getId();
+		jdbc.update("update msg_file set msg_id=? where id=?", message, file);
+		return file;
 	}
 
 	/** ETL이 1회차를 끝낸 상태: 문서 READY, 회차 DONE. */

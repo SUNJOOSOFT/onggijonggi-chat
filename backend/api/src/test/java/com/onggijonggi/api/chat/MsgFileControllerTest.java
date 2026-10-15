@@ -16,6 +16,7 @@ import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.MediaType;
 import org.springframework.http.client.MultipartBodyBuilder;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.ActiveProfiles;
 import org.springframework.test.web.servlet.client.RestTestClient;
 
@@ -43,10 +44,15 @@ class MsgFileControllerTest {
 	@Autowired
 	private MsgFileRepository msgFileRepository;
 
+	@Autowired
+	private JdbcTemplate jdbc;
+
 	private RestTestClient restTestClient;
 
 	@BeforeEach
 	void setUp() {
+		// H2 스키마는 엔티티로 만들어져 JDBC로만 쓰는 원본 표가 없다. 마이그레이션(V20261014120000000)과 같은 모양으로 둔다.
+		jdbc.execute("create table if not exists msg_file_org (file_id uuid primary key references msg_file (id) on delete cascade, content varbinary not null)");
 		restTestClient = RestTestClient.bindToServer()
 				.baseUrl("http://localhost:" + port)
 				.build();

@@ -492,6 +492,10 @@ function ChatSession({
         !isInaccessible &&
         (!isNewDraft || roomMessages.some((message) => message.from !== null))
       }
+      attachmentCount={roomMessages.reduce(
+        (count, message) => count + message.attachments.length,
+        0,
+      )}
     >
       <div className="flex flex-col min-w-0 h-dvh bg-background">
         <ChatHeader

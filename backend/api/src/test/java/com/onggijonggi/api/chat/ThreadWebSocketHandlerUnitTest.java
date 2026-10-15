@@ -510,6 +510,60 @@ class ThreadWebSocketHandlerUnitTest {
 	}
 
 	/**
+	* 재시도가 이미 FAILED인 턴을 가리키면 실패 원인(모델 오류·턴 제한 초과)을 저장하지 않아 모르므로,
+	* API 키 안내로 이어지는 MODEL_UNAVAILABLE이 아니라 INTERNAL_ERROR로 알린다(이슈 #389).
+	*/
+	@Test
+	void replaysAFailedTurnAsInternalErrorBecauseTheCauseIsNotStored() throws Exception {
+		UUID threadId = UUID.randomUUID();
+		UUID userId = UUID.randomUUID();
+		RoomSessionRegistry registry = new RoomSessionRegistry(Duration.ofMillis(50));
+		var provisioning = mock(com.onggijonggi.api.auth.UserIdentityService.class);
+		var directChatTurnService = mock(DirectChatTurnService.class);
+		ThreadMembershipService membership = mock(ThreadMembershipService.class);
+		when(membership.isActiveParticipant(any(), any())).thenReturn(Mono.just(true));
+		when(membership.kindOf(any())).thenReturn(Mono.just(Optional.of(ThrKind.DIRECT)));
+		when(membership.isActiveDirectOwner(any(), any())).thenReturn(Mono.just(true));
+		when(membership.canUseDirect(any(), any(), any())).thenReturn(Mono.just(true));
+		when(membership.isOpenForWriting(any())).thenReturn(Mono.just(true));
+		when(directChatTurnService.prepareExistingWithPendingAgentBlocking(eq(threadId), any(), any(), anyList(), any()))
+				.thenReturn(new DirectChatTurnService.StoredTurn(UUID.randomUUID(), 0L, UUID.randomUUID(), threadId,
+						1L, true, MsgStatus.FAILED));
+		WebSocketSession session = mock(WebSocketSession.class);
+		HandshakeInfo handshakeInfo = mock(HandshakeInfo.class);
+		Principal principal = () -> "direct-user";
+		List<String> sent = new CopyOnWriteArrayList<>();
+
+		when(handshakeInfo.getPrincipal()).thenReturn(Mono.just(principal));
+		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
+		when(provisioning.resolveOrProvision("direct-user")).thenReturn(Mono.just(userId));
+		stubTextMessages(session);
+		when(session.receive()).thenReturn(Flux.just(inboundText(WsTestExchange.subscribeFrame(threadId)),
+				inboundText(WsTestExchange.chatMessageFrame(threadId, "안녕"))));
+		when(session.send(any())).thenAnswer(invocation -> Flux.from(
+				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
+				.doOnNext(message -> sent.add(message.getPayloadAsText())).then());
+		when(session.close(any(CloseStatus.class))).thenReturn(Mono.empty());
+
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.never());
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(registry, llm,
+				mock(MsgPersistenceService.class), noOpDocumentSearch(), new ObjectMapper(), "test-model",
+				Duration.ofSeconds(120), 20, 20, Schedulers.parallel());
+		ThreadWebSocketHandler handler = new ThreadWebSocketHandler(new JsonMapper(), registry, dispatcher,
+				new CollabAuthorizationRevoker(registry, dispatcher),
+				provisioning, membership, directChatTurnService, noRanks(), mock(MsgFileService.class), Clock.systemUTC(), WINDOW_SECONDS,
+				MESSAGES_PER_WINDOW);
+
+		handler.handle(session).block();
+
+		assertThat(sent).anyMatch(frame -> frame.contains("\"type\":\"error\"")
+				&& frame.contains("\"code\":\"INTERNAL_ERROR\""));
+		assertThat(sent).noneMatch(frame -> frame.contains("MODEL_UNAVAILABLE"));
+		verify(llm, never()).streamChat(any());
+	}
+
+	/**
 	* 새 DIRECT 방 동시 생성 경합(이슈 #162, §2.1) — 첫 시도가 PK 충돌로 실패하면
 	* `prepareExistingWithPendingAgentBlocking`으로 재조회해 이어쓴다. 재조회까지 성공하면
 	* bootstrap이 정상 완료돼 발화가 방송된다.
@@ -656,6 +710,9 @@ class ThreadWebSocketHandlerUnitTest {
 		handler.handle(session).block();
 
 		assertThat(sent).noneMatch(frame -> frame.contains("\"type\":\"presence."));
+		// 스냅샷 대신 구독 완료를 알린다 — 선제 토큰 갱신이 새 소켓의 구독 완료를 이것으로 안다(이슈 #382).
+		assertThat(sent).containsExactly(
+				"{\"type\":\"room.subscribed\",\"threadId\":\"" + threadId + "\"}");
 	}
 
 	@Test
