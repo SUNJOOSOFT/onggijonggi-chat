@@ -44,6 +44,7 @@ const FORBIDDEN_CODE = 'FORBIDDEN';
 const TERMINAL_AI_ERROR_CODES = new Set([
   'MODEL_UNAVAILABLE',
   'INTERNAL_ERROR',
+  'AI_TURN_TIMEOUT',
 ]);
 
 /** 메시지 하나. 사람과 AI를 role이 아니라 보낸 사람 유무로 가른다 — 협업방에는 보낸 사람이 여럿이다. */
@@ -542,6 +543,10 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
     // 연결 생존 확인의 응답이라 방 상태와 무관하다. 허브(ws-rooms.ts)가 화면에 넘기지 않지만
     // WsFrame 유니온의 한 갈래라 여기서도 받는다.
     case 'pong':
+      return state;
+
+    // DIRECT 구독 완료(#382)는 선제 갱신이 쓰는 신호라 방 상태와 무관하다. 허브가 화면에 넘기지 않는다.
+    case 'room.subscribed':
       return state;
 
     // 입력 중 표시는 만료 시각이 있어 이 순수 상태에 두지 않는다 — use-room이 typing.ts로 따로 든다.

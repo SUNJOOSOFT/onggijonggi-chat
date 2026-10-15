@@ -241,6 +241,16 @@ export interface ChatTypingFrame {
   active: boolean;
 }
 
+/**
+ * presence가 없는 방(DIRECT)의 구독이 걸렸다는 답(이슈 #382). COLLAB 방의 presence.snapshot과 같은
+ * 자리에 오고, 방 상태에 접을 것은 없다 — 선제 갱신이 새 소켓의 구독 완료를 아는 데만 쓴다
+ * (ws-connection.ts).
+ */
+export interface RoomSubscribedFrame {
+  type: 'room.subscribed';
+  threadId: string;
+}
+
 /** 서버 WsFrame과 대응하는 전체 유니온. 새 타입이 추가되면 여기 한 곳만 넓히면 되고,
  * frame-router.ts의 exhaustive switch가 미처리 케이스를 컴파일 타임에 잡아준다. */
 export type WsFrame =
@@ -254,7 +264,8 @@ export type WsFrame =
   | WsErrorFrame
   | ChatQueuedFrame
   | PongFrame
-  | ChatTypingFrame;
+  | ChatTypingFrame
+  | RoomSubscribedFrame;
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */
 export type WsFrameType = WsFrame['type'];

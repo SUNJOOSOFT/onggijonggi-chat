@@ -76,6 +76,7 @@ class LlmChatStreamServiceTest {
 	@Test
 	void attachesTheDocumentToolOnlyWhenTheTurnHasOne() {
 		AtomicReference<String> searched = new AtomicReference<>();
+		AtomicReference<String> revised = new AtomicReference<>();
 		LlmChatStreamService service = new LlmChatStreamService(ChatClient.builder(model), new CurrentTimeTool("Asia/Seoul"),
 				mock(WebTools.class));
 		List<ChatMessage> messages = List.of(new ChatMessage("user", "연차는 며칠 전에 신청해?"));
@@ -84,6 +85,9 @@ class LlmChatStreamServiceTest {
 				new ThreadDocumentTool(query -> {
 					searched.set(query);
 					return "근거";
+				}, (fileName, edits) -> {
+					revised.set(fileName + ":" + edits);
+					return "등록함";
 				}))).blockLast();
 
 		ToolCallback callback = ((ToolCallingChatOptions) received.get().getOptions()).getToolCallbacks().stream()
@@ -91,9 +95,16 @@ class LlmChatStreamServiceTest {
 				.findFirst().orElseThrow();
 		assertThat(callback.call("{\"query\":\"연차 신청 기한\"}")).contains("근거");
 		assertThat(searched).hasValue("연차 신청 기한");
+		// 개정본 도구는 수정 목록(before·after)을 받아 그대로 넘긴다.
+		ToolCallback revise = ((ToolCallingChatOptions) received.get().getOptions()).getToolCallbacks().stream()
+				.filter(candidate -> candidate.getToolDefinition().name().equals(ThreadDocumentTool.REVISE_NAME))
+				.findFirst().orElseThrow();
+		assertThat(revise.getToolDefinition().inputSchema()).contains("\"before\"").contains("\"after\"").contains("원래 문장");
+		assertThat(revise.call("{\"fileName\":\"규정.docx\",\"edits\":[{\"before\":\"12시간\",\"after\":\"18시간\"}]}")).contains("등록함");
+		assertThat(revised).hasValue("규정.docx:[Edit[before=12시간, after=18시간]]");
 
 		service.streamChat(new ChatStreamRequest(UUID.randomUUID(), "test-model", messages, null)).blockLast();
 		assertThat(((ToolCallingChatOptions) received.get().getOptions()).getToolCallbacks())
-				.extracting(candidate -> candidate.getToolDefinition().name()).doesNotContain(ThreadDocumentTool.NAME);
+				.extracting(candidate -> candidate.getToolDefinition().name()).doesNotContain(ThreadDocumentTool.NAME, ThreadDocumentTool.REVISE_NAME);
 	}
 }

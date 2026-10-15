@@ -2,11 +2,12 @@
 
 이 문서는 Spring AI BFF가 현재 `document-worker`를 내부 HTTP로 호출하는 방법을 정리한다. FrontEnd는 Worker나 SeaweedFS를 직접 호출하지 않고 BFF만 호출한다.
 
-현재 Worker는 다음 세 기능을 제공한다.
+현재 Worker는 다음 네 기능을 제공한다.
 
 1. 검증된 DOCX renderer DSL로 DOCX, PDF 또는 Markdown을 생성하고 SeaweedFS에 저장한다.
 2. 템플릿 원본 파일을 검증해 SeaweedFS에 저장한다.
 3. 대화방(Thread) 문서의 원본을 변환 없이 저장·조회·삭제한다(`/api/v1/thread-sources`). 경로·헤더 계약은 [worker README](../../README.md)「Thread 문서 원본」에 있다. 이 경로의 `X-Tenant-Id`는 UUID다.
+4. 원본 DOCX의 서식을 유지한 채 지정한 문장만 바꾸고 신구조문 대비표를 붙인 개정본을 돌려준다(`/api/v1/documents/revisions`). 저장하지 않는다.
 
 템플릿을 생성 문서에 적용하는 기능, `TemplateManifest`, 템플릿 선택은 아직 구현하지 않았다.
 
@@ -216,6 +217,25 @@ webClient.post()
     .retrieve()
     .bodyToMono(TemplateResponse.class);
 ```
+
+## 개정본 만들기
+
+원본 DOCX의 문단 스타일·번호·표·머리글은 그대로 두고, 바꿀 문장이 걸친 run의 글자만 고친다(바꾼 글은 시작 run의 서식을 따른다). 문서 끝에는 쪽을 나눠 「신구조문 대비표」(현행 / 개정, 바뀐 문단 전체)를 붙인다. 결과는 응답 본문으로만 돌려주고 저장하지 않는다 — 방 문서 등록과 권한 확인은 BFF(`ThreadDocumentRevision`)가 한다.
+
+```http
+POST /api/v1/documents/revisions HTTP/1.1
+Host: document-worker:8100
+Content-Type: multipart/form-data
+X-Internal-Api-Key: <worker-api-key>
+X-Tenant-Id: <tenant uuid>
+
+file=<원본 docx>
+edits=[{"before": "나누어 사용할 수 없다.", "after": "3회까지 나누어 사용할 수 있다."}]
+```
+
+- `edits`는 1~50개, `before`는 1~2,000자, `after`는 0~2,000자(빈 글이면 지운다)다.
+- `before`는 문서 전체(본문·표 칸)에서 **한 문단 안에 정확히 한 번** 있어야 한다. 비교할 때만 공백 묶음(줄바꿈·연속 공백)을 공백 하나로 본다.
+- 성공하면 `200`과 DOCX 본문을 돌려준다. 없으면 `422 EDIT_NOT_FOUND`, 여러 곳이면 `422 EDIT_AMBIGUOUS`(메시지에 몇 번째 수정인지), DOCX가 아니면 `422 UNPROCESSABLE_DOCUMENT`, `edits` 형식이 틀리면 `400 VALIDATION_ERROR`다.
 
 ## 오류 처리
 

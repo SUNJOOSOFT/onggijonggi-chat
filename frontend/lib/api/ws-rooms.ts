@@ -81,7 +81,13 @@ export function createRoomHub(
   const route = (data: string) => {
     // 해석되지 않는 프레임은 parse-frame.ts가 null로 흘려보낸다 — 화면을 멈출 이유가 아니다.
     const frame = parseFrameFromText(data);
-    if (frame === null || frame.type === 'pong') return;
+    // pong과 room.subscribed는 커넥션 계층(ws-connection.ts)의 신호라 화면에 넘기지 않는다.
+    if (
+      frame === null ||
+      frame.type === 'pong' ||
+      frame.type === 'room.subscribed'
+    )
+      return;
     const { threadId } = frame;
     const entry = threadId === null ? undefined : rooms.get(threadId);
     if (

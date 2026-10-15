@@ -260,7 +260,9 @@ describe('applyFrame - 입퇴장 시스템 라인(#111)', () => {
 
 describe('applyFrame - chat.message', () => {
   it('보낸 사람을 함께 남긴다', () => {
-    const state = fold([say('sujin', '이 계약서 확인 부탁해요', 'msg-sujin-1')]);
+    const state = fold([
+      say('sujin', '이 계약서 확인 부탁해요', 'msg-sujin-1'),
+    ]);
     expect(state.messages).toEqual([
       {
         id: 'msg-sujin-1',
@@ -499,6 +501,28 @@ describe('applyFrame - error', () => {
     });
   });
 
+  it('턴 시간 제한 초과도 종결 오류다 — 부분 답변을 남기고 시간 초과 문구를 띄운다(이슈 #389)', () => {
+    const state = fold([
+      answer('부분 답변', 'streaming'),
+      {
+        type: 'error',
+        threadId: THREAD,
+        code: 'AI_TURN_TIMEOUT',
+        message: '응답 시간 제한을 넘었습니다.',
+        traceId: 'trace-ai',
+      },
+    ]);
+
+    expect(state.messages[0]).toMatchObject({
+      content: '부분 답변',
+      streaming: false,
+      terminalStatus: null,
+    });
+    expect(state.error?.message).toBe(
+      '답변이 시간 제한을 넘겨 중단됐어요. 질문을 나눠서 다시 요청해 주세요.',
+    );
+  });
+
   it('비종결 오류는 진행 중 AI 답변을 끝내지 않고 알림만 닫을 수 있다', () => {
     const state = fold([
       answer('진행 중', 'streaming'),
@@ -610,7 +634,6 @@ describe('system.notice(#29)', () => {
 
     expect(after).toBe(before);
   });
-
 });
 describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
   const historyItem = (
@@ -671,7 +694,9 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
 
   it('이미 WS로 받은 메시지는 msgId로 걸러 두 번 그리지 않는다', () => {
     const live = fold([say('sujin', '실시간으로 먼저 왔다', 'dup-1')]);
-    const state = applyHistory(live, [historyItem('dup-1', 3, '실시간으로 먼저 왔다')]);
+    const state = applyHistory(live, [
+      historyItem('dup-1', 3, '실시간으로 먼저 왔다'),
+    ]);
     expect(chats(state)).toHaveLength(1);
   });
 
