@@ -175,7 +175,7 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   const senderNames = useMemo(() => {
     const names = new Map<string, string>();
     for (const entry of state.messages) {
-      if (!isPresenceNotice(entry) && entry.from) {
+      if (!isMembershipNotice(entry) && entry.from) {
         names.set(entry.from.subject, entry.from.displayName);
       }
     }
@@ -205,7 +205,7 @@ export function CollabRoom({ threadId }: { threadId: string }) {
       threadId={threadId}
       attachmentCount={state.messages.reduce(
         (count, entry) =>
-          isPresenceNotice(entry) ? count : count + entry.attachments.length,
+          isMembershipNotice(entry) ? count : count + entry.attachments.length,
         0,
       )}
       senderNames={senderNames}
