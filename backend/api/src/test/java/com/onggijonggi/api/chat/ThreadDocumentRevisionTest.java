@@ -57,7 +57,7 @@ class ThreadDocumentRevisionTest {
 	private void inRoom(String... fileNames) {
 		when(documents.list(eq(room), any())).thenReturn(new ThreadDocumentView.Listing("ACTIVE", true, List.of(fileNames).stream()
 				.map(name -> new ThreadDocumentView(UUID.randomUUID(), name, 1, "READY", false, true, true, false, true, true, false, null))
-				.toList()));
+				.toList(), List.of()));
 	}
 
 	@Test
