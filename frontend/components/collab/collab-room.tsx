@@ -18,6 +18,9 @@
  메시지 시각과 AI 라벨(@FIN 같은 에이전트 구분)은 기획 시안에 있으나 그리지 않는다 — 프레임
  계약(#8)에 그 필드가 없어 서버가 보내주지 않는다. 계약이 넓어지면 여기에 붙일 자리다.
 
+ 승인 요청(#407)은 메시지에 붙는 "승인 요청" 버튼으로 시작하고, 처리할 요청은 헤더의 "승인 대기" 버튼과 토스트로
+ 모달을 연다. 목록 조회와 토스트 판단은 use-thread-approvals.ts가 맡고 이 파일은 모달을 여는 상태만 든다.
+
  시스템 알림(#29)은 오류 배너와 자리는 같지만 성격이 다르다 — 오류는 방금 한 일이 실패했다는
  신호라 닫으면 끝이고, 알림은 배치가 사후에 알려주는 것이라 닫기 전까지 남는다. 색을 나눠 둔
  것도 그래서다. info 알림은 여기 오지 않는다(토스트, use-collab-room.ts).
@@ -35,7 +38,9 @@ import { Markdown } from '@/components/markdown';
 import { NoticeBanner } from '@/components/notice-banner';
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
+import { Button } from '@/components/ui/button';
 import { fetchCollabThreads } from '@/lib/api/collab';
+import type { ThreadApproval } from '@/lib/api/thread-approvals';
 import type {
   RoomApprovalNotice,
   RoomMembershipNotice,
@@ -48,10 +53,13 @@ import {
   isNotice,
 } from '@/lib/chat/room-state';
 import { typingLabel } from '@/lib/chat/typing';
+import { useThreadApprovals } from '@/lib/collab/use-thread-approvals';
 import {
   type RoomConnection,
   useCollabRoom,
 } from '@/lib/collab/use-collab-room';
+import { ApprovalDialog } from './approval-dialog';
+import { ApprovalRequestDialog } from './approval-request-dialog';
 import { CollabInput } from './collab-input';
 import { ParticipantsSheet } from './participants-sheet';
 import { PresenceAvatars } from './presence-avatars';
@@ -106,11 +114,19 @@ function agentLabel(agent: RoomMessage['agent']): string {
 
 /** 사람 메시지는 보낸 사람 이름을, AI 답변은 "AI" 또는 역할별 에이전트 이름을 머리에 달고
  * 배경으로 구분한다(이슈 #357). */
-function MessageRow({ message }: { message: RoomMessage }) {
+function MessageRow({
+  message,
+  onRequestApproval,
+}: {
+  message: RoomMessage;
+  onRequestApproval: (messageId: string) => void;
+}) {
   const isAi = message.from === null;
+  // 쓰는 중인 답변은 서버가 승인 대상에서 제외하고, 본문 없는 메시지는 보여 줄 내용이 없어 요청하지 않는다.
+  const canRequestApproval = !message.streaming && message.content !== '';
   return (
     <div
-      className={`flex flex-col gap-1 ${
+      className={`group flex flex-col gap-1 ${
         isAi ? 'rounded-lg bg-muted/60 px-3 py-2' : 'px-3 py-2'
       }`}
     >
@@ -143,6 +159,15 @@ function MessageRow({ message }: { message: RoomMessage }) {
             <p className="whitespace-pre-wrap text-sm">{message.content}</p>
           )}
         </>
+      )}
+      {canRequestApproval && (
+        <Button
+          variant="ghost"
+          className="h-auto w-fit self-start px-1 py-0 text-xs text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
+          onClick={() => onRequestApproval(message.id)}
+        >
+          승인 요청
+        </Button>
       )}
     </div>
   );
@@ -192,9 +217,20 @@ export function CollabRoom({ threadId }: { threadId: string }) {
     dismissError,
     dismissNotice,
     participantsRevision,
+    approvalsRevision,
     typing,
     setTyping,
   } = useCollabRoom(threadId);
+  const [requestingMessageId, setRequestingMessageId] = useState<string | null>(
+    null,
+  );
+  const [reviewing, setReviewing] = useState<ThreadApproval | null>(null);
+  const { decidable, nameOf, reload } = useThreadApprovals(threadId, {
+    revision: approvalsRevision,
+    open: connection === 'open',
+    participantsRevision,
+    onOpenRequest: setReviewing,
+  });
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
   const title = useThreadTitle(threadId);
   // 방 문서 패널의 첨부에 보낸 사람 이름을 붙인다. 첨부는 메시지에 실려 오므로 작성자에서 찾는다.
@@ -207,6 +243,14 @@ export function CollabRoom({ threadId }: { threadId: string }) {
     }
     return names;
   }, [state.messages]);
+
+  const reviewingContent = useMemo(() => {
+    if (reviewing === null) return null;
+    const found = state.messages.find(
+      (entry) => !isNotice(entry) && entry.id === reviewing.messageId,
+    );
+    return found && !isNotice(found) ? found.content : null;
+  }, [reviewing, state.messages]);
 
   if (isForbidden(state.error)) {
     return (
@@ -249,6 +293,15 @@ export function CollabRoom({ threadId }: { threadId: string }) {
             refreshSignal={participantsRevision}
           />
           <div className="ml-auto flex items-center gap-2">
+            {decidable.length > 0 && (
+              <Button
+                variant="outline"
+                className="h-7 px-2 text-xs"
+                onClick={() => setReviewing(decidable[0])}
+              >
+                승인 대기 {decidable.length}건
+              </Button>
+            )}
             <PresenceAvatars participants={state.participants} />
             <span className="whitespace-nowrap pr-2 text-xs text-muted-foreground">
               {CONNECTION_LABEL[connection]}
@@ -300,7 +353,11 @@ export function CollabRoom({ threadId }: { threadId: string }) {
                 ) : isApprovalNotice(entry) ? (
                   <ApprovalRow key={entry.id} notice={entry} />
                 ) : (
-                  <MessageRow key={entry.id} message={entry} />
+                  <MessageRow
+                    key={entry.id}
+                    message={entry}
+                    onRequestApproval={setRequestingMessageId}
+                  />
                 ),
               )}
               <div ref={endRef} className="min-h-6 shrink-0" />
@@ -326,6 +383,21 @@ export function CollabRoom({ threadId }: { threadId: string }) {
           <ThreadDocumentsPanel />
         </div>
       </div>
+
+      <ApprovalRequestDialog
+        threadId={threadId}
+        messageId={requestingMessageId}
+        onRequested={reload}
+        onClose={() => setRequestingMessageId(null)}
+      />
+      <ApprovalDialog
+        threadId={threadId}
+        approval={reviewing}
+        messageContent={reviewingContent}
+        requesterName={reviewing ? nameOf(reviewing.requesterSubject) : ''}
+        onDecided={reload}
+        onClose={() => setReviewing(null)}
+      />
     </ThreadDocumentsProvider>
   );
 }
