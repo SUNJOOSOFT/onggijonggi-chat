@@ -123,6 +123,10 @@ export interface RoomApprovalNotice {
   event: 'requested' | 'approved' | 'rejected';
   requester: PresenceParticipant;
   target: PresenceParticipant;
+  /** 승인을 요청한 원글의 id(이슈 #416). 이 필드가 생기기 전에 저장된 줄은 null이라 한 줄 문구로만 보인다. */
+  originMsgId: string | null;
+  /** 반려 사유(이슈 #416). 반려가 아니거나 사유를 적지 않았으면 null이다. */
+  reason: string | null;
 }
 
 export type RoomNotice = RoomMembershipNotice | RoomApprovalNotice;
@@ -445,6 +449,8 @@ function toRoomEntry(item: ThreadMessageItem): RoomEntry {
         subject: item.approval.targetSubject,
         displayName: item.approval.targetDisplayName,
       },
+      originMsgId: item.approval.originMsgId ?? null,
+      reason: item.approval.reason ?? null,
     };
   }
   if (item.membership == null) return toRoomMessage(item);
@@ -690,6 +696,8 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
           subject: frame.targetSubject,
           displayName: frame.targetDisplayName,
         },
+        originMsgId: frame.originMsgId,
+        reason: frame.reason,
       });
     }
 

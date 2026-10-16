@@ -51,6 +51,10 @@ export interface ThreadMessageItem {
     requesterDisplayName: string;
     targetSubject: string;
     targetDisplayName: string;
+    /** 승인을 요청한 원글의 id(이슈 #416). 이 필드가 생기기 전에 저장된 줄은 null이다. */
+    originMsgId?: string | null;
+    /** 반려 사유(이슈 #416). 반려가 아니거나 사유를 적지 않았으면 null이다. */
+    reason?: string | null;
   } | null;
   /** AGENT 답변에 저장된 근거(방 문서·웹 출처) — 실시간 chat.answer DONE 프레임과 같은 값이다(이슈 #401).
    * 근거 없이 답했거나 HUMAN·SYSTEM이면 빈 배열이다. 목업·과거 응답 호환을 위해 optional이다. */

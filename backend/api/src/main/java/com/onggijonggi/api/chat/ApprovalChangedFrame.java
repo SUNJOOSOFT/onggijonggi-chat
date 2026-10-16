@@ -11,11 +11,16 @@ import java.util.UUID;
  *
  *               msgId·seq는 그 사건으로 대화 흐름에 남긴 승인 줄(ApprovalNotice)의 id와 순서다. 줄을 남기지 못했으면
  *               null이고, 화면은 이 자리에 줄을 넣지 않는다(participant.changed와 같은 규칙).
+ *
+ *               originMsgId는 승인을 요청한 원글의 id이고 reason은 반려 사유다 — 둘 다 승인 줄에 담긴 값과 같다(#416).
+ *               원글의 내용은 싣지 않는다 — 내용은 같은 방의 대화에 이미 있다.
  * @param event 요청이 생겼는지, 승인·반려로 처리됐는지
  * @param requesterDisplayName 요청한 사람의 표시 이름. 찾지 못하면 subject다
  * @param targetDisplayName 지정된 사람의 표시 이름. 찾지 못하면 subject다
+ * @param originMsgId 승인을 요청한 원글(msg)의 id
+ * @param reason 반려 사유. 반려가 아니거나 사유를 적지 않았으면 null이다
  */
 public record ApprovalChangedFrame(UUID threadId, UUID approvalId, ApprovalNotice.Event event,
 		String requesterSubject, String requesterDisplayName, String targetSubject, String targetDisplayName,
-		UUID msgId, Long seq) implements WsFrame {
+		UUID msgId, Long seq, UUID originMsgId, String reason) implements WsFrame {
 }

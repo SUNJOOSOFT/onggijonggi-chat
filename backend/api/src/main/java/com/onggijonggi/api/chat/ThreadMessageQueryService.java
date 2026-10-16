@@ -153,7 +153,8 @@ public class ThreadMessageQueryService {
 	private static MsgItem.Approval approvalView(ApprovalNotice notice, Map<String, String> displayNameBySubject) {
 		return notice == null ? null : new MsgItem.Approval(notice.event().name(), notice.approvalId(),
 				notice.requesterSubject(), displayNameBySubject.getOrDefault(notice.requesterSubject(), notice.requesterSubject()),
-				notice.targetSubject(), displayNameBySubject.getOrDefault(notice.targetSubject(), notice.targetSubject()));
+				notice.targetSubject(), displayNameBySubject.getOrDefault(notice.targetSubject(), notice.targetSubject()),
+				notice.originMsgId(), notice.reason());
 	}
 
 	private static MsgItem.Membership membershipView(MembershipNotice notice, Map<String, String> displayNameBySubject) {

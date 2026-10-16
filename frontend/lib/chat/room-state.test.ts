@@ -135,6 +135,8 @@ function approvalChanged(
   event: string,
   msgId: string | null,
   seq: number | null,
+  originMsgId: string | null = 'orig-1',
+  reason: string | null = null,
 ): WsFrame {
   return {
     type: 'approval.changed',
@@ -147,6 +149,8 @@ function approvalChanged(
     targetDisplayName: 'minho 님',
     msgId,
     seq,
+    originMsgId,
+    reason,
   };
 }
 
@@ -336,9 +340,22 @@ describe('applyFrame - approval.changed', () => {
       event: 'requested',
       requester: person('sujin'),
       target: person('minho'),
+      originMsgId: 'orig-1',
+      reason: null,
     });
     expect(isApprovalNotice(state.messages[1])).toBe(true);
     expect(isMembershipNotice(state.messages[1])).toBe(false);
+  });
+
+  it('원글 id와 반려 사유를 줄에 싣는다', () => {
+    const state = fold([
+      approvalChanged('REJECTED', 'q', 3, 'orig-2', '3번 항목 근거가 없다'),
+    ]);
+    expect(state.messages[0]).toMatchObject({
+      event: 'rejected',
+      originMsgId: 'orig-2',
+      reason: '3번 항목 근거가 없다',
+    });
   });
 
   it('승인·반려 줄은 각각 approved·rejected가 된다', () => {
@@ -970,6 +987,8 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
           requesterDisplayName: 'sujin 님',
           targetSubject: 'minho',
           targetDisplayName: 'minho 님',
+          originMsgId: 'orig-1',
+          reason: null,
         },
       });
     const state = applyHistory(initialRoomState, [
@@ -987,9 +1006,34 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
       event: 'requested',
       requester: person('sujin'),
       target: person('minho'),
+      originMsgId: 'orig-1',
+      reason: null,
     });
     // 건너뛴 줄도 커서는 지나친다.
     expect(state.lastSeq).toBe(3);
+  });
+
+  it('원글 id·반려 사유가 생기기 전에 저장된 승인 줄은 둘 다 null로 읽는다', () => {
+    const state = applyHistory(initialRoomState, [
+      historyItem('r', 1, '', {
+        athKind: 'SYSTEM',
+        authorSubject: null,
+        authorDisplayName: null,
+        approval: {
+          event: 'REQUESTED',
+          approvalId: 'apv-1',
+          requesterSubject: 'sujin',
+          requesterDisplayName: 'sujin 님',
+          targetSubject: 'minho',
+          targetDisplayName: 'minho 님',
+        },
+      }),
+    ]);
+    expect(state.messages[0]).toMatchObject({
+      event: 'requested',
+      originMsgId: null,
+      reason: null,
+    });
   });
 
   it('첨부만 보낸 메시지는 본문이 비어도 첨부와 함께 남는다', () => {

@@ -153,6 +153,15 @@ const approvalChangedFrameSchema = z.object({
     .number()
     .nullish()
     .transform((value) => value ?? null),
+  // 원글 id와 반려 사유(이슈 #416). 이 필드가 없던 서버와도 맞물리도록 없으면 null로 읽는다.
+  originMsgId: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  reason: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
 });
 
 /** 시작 전 @AI 턴의 대기·취소(이슈 #160). */

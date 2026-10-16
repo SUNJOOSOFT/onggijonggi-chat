@@ -61,9 +61,11 @@ public record MsgItem(
 	* @param event REQUESTED/APPROVED/REJECTED
 	* @param requesterDisplayName 요청한 사람의 표시 이름. 찾지 못하면 subject다
 	* @param targetDisplayName 지정된 사람의 표시 이름. 찾지 못하면 subject다
+	* @param originMsgId 승인을 요청한 원글의 id. 이 필드가 생기기 전에 저장된 줄은 null이다
+	* @param reason 반려 사유. 반려가 아니거나 사유를 적지 않았으면 null이다
 	*/
 	public record Approval(String event, UUID approvalId, String requesterSubject, String requesterDisplayName,
-			String targetSubject, String targetDisplayName) {
+			String targetSubject, String targetDisplayName, UUID originMsgId, String reason) {
 	}
 
 	/** pyl_json은 종류마다 담는 것이 달라, AGENT만 에이전트 표시로·SYSTEM만 입퇴장 줄로 읽는다. */

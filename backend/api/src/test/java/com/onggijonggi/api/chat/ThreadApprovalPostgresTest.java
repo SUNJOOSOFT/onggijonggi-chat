@@ -203,6 +203,14 @@ class ThreadApprovalPostgresTest {
 				String.class, room)).isEmpty();
 	}
 
+	@Test void theLinesCarryTheOriginalMessageAndTheRejectionReason() {
+		UUID id = UUID.randomUUID();
+		service.request(room, id, message, target.subject(), requester);
+		service.decide(room, id, false, "  기준 금액을 다시 확인해 주세요  ", target);
+		assertThat(lineField("originMsgId")).containsExactly(message.toString(), message.toString());
+		assertThat(lineField("reason")).containsExactly(null, "기준 금액을 다시 확인해 주세요");
+	}
+
 	@Test void deletingTheRoomRemovesItsRequests() {
 		service.request(room, UUID.randomUUID(), message, target.subject(), requester);
 		assertThat(jdbc.queryForObject("select count(*) from thr_apv where thr_id=?", Integer.class, room)).isEqualTo(1);
@@ -216,6 +224,12 @@ class ThreadApprovalPostgresTest {
 		long first = thread.reserveSeqBlock(1);
 		threads.saveAndFlush(thread);
 		return first;
+	}
+
+	/** 승인 줄 pyl_json의 필드 하나를 순서대로 읽는다. 값이 없으면 null이 들어간다. */
+	private java.util.List<String> lineField(String field) {
+		return jdbc.queryForList("select pyl_json->'approval'->>'" + field + "' from msg where thr_id=? and ath_kind='SYSTEM' "
+				+ "and pyl_json->'approval' is not null order by seq", String.class, room);
 	}
 
 	private java.util.List<String> lineEvents() {
