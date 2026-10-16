@@ -96,8 +96,13 @@ public class ThreadMessageQueryService {
 					Map<UUID, String> subjectByThrMbrId = lookups.getT1();
 					Map<UUID, List<MsgFile>> filesByMsgId = lookups.getT2();
 					Map<UUID, MembershipNotice> noticeByMsgId = membershipNotices(messages);
+					Map<UUID, ApprovalNotice> approvalByMsgId = approvalNotices(messages);
 					Set<String> subjects = new HashSet<>(subjectByThrMbrId.values());
 					noticeByMsgId.values().forEach(notice -> subjects.add(notice.subject()));
+					approvalByMsgId.values().forEach(notice -> {
+						subjects.add(notice.requesterSubject());
+						subjects.add(notice.targetSubject());
+					});
 					return Flux.fromIterable(subjects)
 							.flatMap(subject -> rankedDisplayNames.displayName(subject)
 									.map(displayName -> Map.entry(subject, displayName.orElse(subject))),
@@ -109,6 +114,7 @@ public class ThreadMessageQueryService {
 											filesByMsgId.getOrDefault(msg.getId(), List.of()).stream()
 													.map(MsgFileView::from).toList(),
 											membershipView(noticeByMsgId.get(msg.getId()), displayNameBySubject),
+											approvalView(approvalByMsgId.get(msg.getId()), displayNameBySubject),
 											objectMapper))
 									.toList());
 				});
@@ -127,6 +133,27 @@ public class ThreadMessageQueryService {
 			}
 		}
 		return notices;
+	}
+
+	/** SYSTEM 메시지 중 승인 요청·처리 줄만 골라 msgId로 묶는다. */
+	private Map<UUID, ApprovalNotice> approvalNotices(List<Msg> messages) {
+		Map<UUID, ApprovalNotice> notices = new HashMap<>();
+		for (Msg msg : messages) {
+			if (msg.getAthKind() != AthKind.SYSTEM) {
+				continue;
+			}
+			ApprovalNotice notice = ApprovalNotice.fromPylJson(objectMapper, msg.getPylJson());
+			if (notice != null) {
+				notices.put(msg.getId(), notice);
+			}
+		}
+		return notices;
+	}
+
+	private static MsgItem.Approval approvalView(ApprovalNotice notice, Map<String, String> displayNameBySubject) {
+		return notice == null ? null : new MsgItem.Approval(notice.event().name(), notice.approvalId(),
+				notice.requesterSubject(), displayNameBySubject.getOrDefault(notice.requesterSubject(), notice.requesterSubject()),
+				notice.targetSubject(), displayNameBySubject.getOrDefault(notice.targetSubject(), notice.targetSubject()));
 	}
 
 	private static MsgItem.Membership membershipView(MembershipNotice notice, Map<String, String> displayNameBySubject) {

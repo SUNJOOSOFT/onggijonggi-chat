@@ -566,6 +566,10 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
     case 'chat.typing':
       return state;
 
+    // 승인 요청·처리(#407)는 아직 화면이 다루지 않아 방 상태를 바꾸지 않는다.
+    case 'approval.changed':
+      return state;
+
     case 'chat.message':
       // 같은 메시지가 이력으로도 실시간으로도 올 수 있다 — msgId로 한 번만 남긴다(이슈 #190).
       if (messageIndexById(state, frame.msgId) !== null) return state;

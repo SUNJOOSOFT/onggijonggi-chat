@@ -29,6 +29,8 @@ import tools.jackson.databind.ObjectMapper;
  *        `@AI`로 답했거나 HUMAN·SYSTEM 메시지면 null이다 — WS chat.answer의 같은 필드와 짝이다
  * @param membership SYSTEM 메시지가 입퇴장 줄이면 그 내용. 그 밖의 메시지는 null이다. 표시 이름은 authorDisplayName처럼
  *        요청마다 다시 조회한다 — WS participant.changed의 msgId·seq와 짝이다
+ * @param approval SYSTEM 메시지가 승인 요청·처리 줄이면 그 내용. 그 밖의 메시지는 null이다 — WS approval.changed의
+ *        msgId·seq와 짝이다
  */
 public record MsgItem(
 		UUID id,
@@ -43,7 +45,8 @@ public record MsgItem(
 		List<MsgFileView> attachments,
 		List<Citation> citations,
 		Agent agent,
-		Membership membership
+		Membership membership,
+		Approval approval
 ) {
 
 	/**
@@ -54,14 +57,23 @@ public record MsgItem(
 	public record Membership(String event, String subject, String displayName) {
 	}
 
+	/**
+	* @param event REQUESTED/APPROVED/REJECTED
+	* @param requesterDisplayName 요청한 사람의 표시 이름. 찾지 못하면 subject다
+	* @param targetDisplayName 지정된 사람의 표시 이름. 찾지 못하면 subject다
+	*/
+	public record Approval(String event, UUID approvalId, String requesterSubject, String requesterDisplayName,
+			String targetSubject, String targetDisplayName) {
+	}
+
 	/** pyl_json은 종류마다 담는 것이 달라, AGENT만 에이전트 표시로·SYSTEM만 입퇴장 줄로 읽는다. */
 	static MsgItem from(Msg msg, String authorSubject, String authorDisplayName, List<MsgFileView> attachments,
-			Membership membership, ObjectMapper objectMapper) {
+			Membership membership, Approval approval, ObjectMapper objectMapper) {
 		return new MsgItem(msg.getId(), msg.getSeq(), msg.getAthKind().name(), msg.getStatus().name(),
 				msg.getContent(), authorSubject, authorDisplayName, msg.getCreatedAt(), msg.getCompletedAt(),
 				attachments, Citation.fromSrcJson(objectMapper, msg.getSrcJson()),
 				msg.getAthKind() == AthKind.AGENT ? Agent.fromPylJson(objectMapper, msg.getPylJson()) : null,
-				membership);
+				membership, approval);
 	}
 
 }

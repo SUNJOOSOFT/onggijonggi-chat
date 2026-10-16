@@ -207,6 +207,31 @@ export interface ParticipantChangedFrame {
 }
 
 /**
+ * 승인 요청이 생겼거나 승인·반려로 처리됐음을 방 전체에 알린다(이슈 #407). 요청한 메시지의 내용은 싣지 않는다 —
+ * 토스트·모달은 화면이 requesterSubject·targetSubject가 자기 자신인지로 띄울지 정하고, 내용은 REST 목록에서 읽는다.
+ * 저장하지 않으므로 접속하지 않았던 사람은 목록 조회로 대기 중인 요청을 본다. 사건마다 대화 흐름에 승인 줄이
+ * 남고, 그 줄의 msgId·seq를 함께 싣는다.
+ */
+export interface ApprovalChangedFrame {
+  type: 'approval.changed';
+  threadId: string;
+  approvalId: string;
+  /**
+   * 서버가 지금 보내는 값은 REQUESTED·APPROVED·REJECTED 셋이지만 union으로 좁히지 않는다 —
+   * participant.changed의 action과 같은 판단이다.
+   */
+  event: string;
+  requesterSubject: string;
+  requesterDisplayName: string;
+  targetSubject: string;
+  targetDisplayName: string;
+  /** 이 사건으로 남은 승인 줄의 id. 줄을 남기지 못했으면 null이다. */
+  msgId: string | null;
+  /** 그 줄의 seq. msgId와 함께 채워진다. */
+  seq: number | null;
+}
+
+/**
  * 아직 시작하지 않은 @AI 턴의 상태(이슈 #160). 방마다 AI 턴은 한 번에 하나라, 앞 턴이 있으면 뒤
  * 턴은 기다린다 — 이 신호가 없으면 화면은 "느린 응답"과 "대기 중"을 구분하지 못한다.
  *
@@ -269,7 +294,8 @@ export type WsFrame =
   | ChatQueuedFrame
   | PongFrame
   | ChatTypingFrame
-  | RoomSubscribedFrame;
+  | RoomSubscribedFrame
+  | ApprovalChangedFrame;
 
 /** WsFrame 서브타입의 type 태그 리터럴만 뽑은 유니온. parse-frame.ts의 태그 검증에 쓴다. */
 export type WsFrameType = WsFrame['type'];

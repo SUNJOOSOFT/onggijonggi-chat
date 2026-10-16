@@ -55,6 +55,7 @@ class WsFrameGoldenTest {
 	private static final UUID TURN_ID = UUID.fromString("44444444-4444-4444-8444-444444444444");
 
 	private static final UUID FILE_ID = UUID.fromString("55555555-5555-4555-8555-555555555555");
+	private static final UUID APPROVAL_ID = UUID.fromString("66666666-6666-4666-8666-666666666666");
 
 	private final ObjectMapper objectMapper = new JsonMapper();
 
@@ -83,6 +84,9 @@ class WsFrameGoldenTest {
 		samples.put("chat.typing", new ChatTypingFrame(THREAD_ID, participant.subject(), participant.displayName(),
 				true));
 		samples.put("room.subscribed", new RoomSubscribedFrame(THREAD_ID));
+		samples.put("approval.changed", new ApprovalChangedFrame(THREAD_ID, APPROVAL_ID,
+				ApprovalNotice.Event.REQUESTED, participant.subject(), participant.displayName(), "kc-2", "이한결",
+				MSG_ID, 44L));
 		return samples;
 	}
 

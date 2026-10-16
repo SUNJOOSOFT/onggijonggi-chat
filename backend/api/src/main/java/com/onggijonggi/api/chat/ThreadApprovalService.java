@@ -46,15 +46,17 @@ public class ThreadApprovalService {
 	private final ThrRepository threads;
 	private final AppUserRepository users;
 	private final WorkspaceAuthorizer authorizer;
+	private final ApprovalNoticeService notices;
 	@PersistenceContext private EntityManager entityManager;
 
 	public ThreadApprovalService(JdbcTemplate jdbc, PlatformTransactionManager manager, ThrRepository threads,
-			AppUserRepository users, WorkspaceAuthorizer authorizer) {
+			AppUserRepository users, WorkspaceAuthorizer authorizer, ApprovalNoticeService notices) {
 		this.jdbc = jdbc;
 		this.transactions = new TransactionTemplate(manager);
 		this.threads = threads;
 		this.users = users;
 		this.authorizer = authorizer;
+		this.notices = notices;
 	}
 
 	private record Access(Thr thread) {
@@ -63,6 +65,9 @@ public class ThreadApprovalService {
 
 	private record Row(UUID id, UUID thread, UUID message, UUID requester, UUID target, String requesterSubject,
 			String targetSubject, String status, String reason, Instant created, Instant completed) { }
+
+	/** notice는 이번 호출로 상태가 실제로 바뀐 때만 있다 — 재전송이나 같은 결정의 반복은 null이다. */
+	private record Outcome(ThreadApprovalView view, ApprovalNotice notice) { }
 
 	private Access access(UUID threadId, CurrentActor actor, boolean write) {
 		Thr thread = threads.findById(threadId).orElseThrow(ThreadApprovalService::notFound);
@@ -91,7 +96,7 @@ public class ThreadApprovalService {
 	 */
 	public ThreadApprovalView request(UUID threadId, UUID approvalId, UUID messageId, String targetSubject,
 			CurrentActor actor) {
-		return transactions.execute(tx -> {
+		return announce(threadId, transactions.execute(tx -> {
 			Access access = access(threadId, actor, true);
 			AppUser target = users.findByKeycloakSubj(targetSubject)
 					.filter(user -> user.getStatus() == AppUserStatus.ACTIVE).orElseThrow(ThreadApprovalService::badTarget);
@@ -108,8 +113,11 @@ public class ThreadApprovalService {
 					on conflict (id) do nothing""", approvalId, access.thread().getTenantId(), threadId, messageId,
 					actor.userId(), target.getId());
 			Row row = find(approvalId);
-			if (inserted == 0 && !sameRequest(row, threadId, messageId, actor.userId(), target.getId())) throw conflict();			return view(row, actor, access);
-		});
+			if (inserted == 0 && !sameRequest(row, threadId, messageId, actor.userId(), target.getId())) throw conflict();
+			ApprovalNotice notice = inserted == 1 ? new ApprovalNotice(ApprovalNotice.Event.REQUESTED, approvalId,
+					row.requesterSubject(), row.targetSubject()) : null;
+			return new Outcome(view(row, actor, access), notice);
+		}));
 	}
 
 	/**
@@ -120,7 +128,7 @@ public class ThreadApprovalService {
 		String note = reason == null || reason.isBlank() ? null : reason.strip();
 		if (note != null && (approved || note.length() > MAX_REASON_LENGTH))
 			throw new ResponseStatusException(HttpStatus.BAD_REQUEST);
-		return transactions.execute(tx -> {
+		return announce(threadId, transactions.execute(tx -> {
 			Access access = access(threadId, actor, true);
 			// 같은 건을 동시에 처리하는 요청을 이 잠금으로 한 줄로 세운다. 잠근 뒤의 상태로 멱등·충돌을 판정한다.
 			List<UUID> locked = jdbc.queryForList("select trg_user_id from thr_apv where id = ? and thr_id = ? for update",
@@ -128,13 +136,22 @@ public class ThreadApprovalService {
 			if (locked.isEmpty() || !locked.get(0).equals(actor.userId())) throw notFound();
 			Row current = find(approvalId);
 			String wanted = approved ? "APPROVED" : "REJECTED";
+			ApprovalNotice notice = null;
 			if (current.status().equals("PENDING")) {
 				jdbc.update("update thr_apv set status = ?, rsn = ?, completed_at = now() where id = ?", wanted, note, approvalId);
+				notice = new ApprovalNotice(ApprovalNotice.Event.valueOf(wanted), approvalId, current.requesterSubject(),
+						current.targetSubject());
 			} else if (!current.status().equals(wanted)) {
 				throw conflict();
 			}
-			return view(find(approvalId), actor, access);
-		});
+			return new Outcome(view(find(approvalId), actor, access), notice);
+		}));
+	}
+
+	/** 요청·처리가 커밋된 뒤에만 줄과 알림을 남긴다 — 상태가 바뀌지 않은 호출(notice가 null)은 방에 아무것도 알리지 않는다. */
+	private ThreadApprovalView announce(UUID threadId, Outcome outcome) {
+		if (outcome.notice() != null) notices.recordBlocking(threadId, outcome.notice());
+		return outcome.view();
 	}
 
 	/** 이 사람이 요청했거나 지정된 건만 오래된 순으로 돌려준다. 잠기거나 보관된 방도 읽을 수 있다. */

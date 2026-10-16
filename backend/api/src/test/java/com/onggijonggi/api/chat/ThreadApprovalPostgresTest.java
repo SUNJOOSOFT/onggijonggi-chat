@@ -71,7 +71,6 @@ class ThreadApprovalPostgresTest {
 	UUID tenant;
 	UUID node;
 	UUID message;
-	long seq;
 
 	@BeforeEach void setup() {
 		reset(storage, authorizer);
@@ -87,8 +86,7 @@ class ThreadApprovalPostgresTest {
 		ThrMbr first = members.saveAndFlush(new ThrMbr(room, requester.userId(), ThrMbrRole.OWNER, requester.userId()));
 		members.saveAndFlush(new ThrMbr(room, target.userId(), ThrMbrRole.MEMBER, requester.userId()));
 		members.saveAndFlush(new ThrMbr(room, bystander.userId(), ThrMbrRole.MEMBER, requester.userId()));
-		seq = 0;
-		message = messages.saveAndFlush(Msg.human(UUID.randomUUID(), room, ++seq, first.getId(), "개정안 제안")).getId();
+		message = messages.saveAndFlush(Msg.human(UUID.randomUUID(), room, nextSeq(), first.getId(), "개정안 제안")).getId();
 	}
 
 	@Test void requestIsPendingAndVisibleOnlyToRequesterAndTarget() {
@@ -154,9 +152,9 @@ class ThreadApprovalPostgresTest {
 	}
 
 	@Test void onlyCompletedHumanOrAgentMessagesOfThisRoomCanBeApproved() {
-		UUID system = messages.saveAndFlush(Msg.system(room, ++seq, "")).getId();
-		UUID pending = messages.saveAndFlush(Msg.pendingAgent(UUID.randomUUID(), room, ++seq)).getId();
-		UUID agent = messages.saveAndFlush(Msg.completedAgent(UUID.randomUUID(), room, ++seq, "AI 개정안")).getId();
+		UUID system = messages.saveAndFlush(Msg.system(room, nextSeq(), "")).getId();
+		UUID pending = messages.saveAndFlush(Msg.pendingAgent(UUID.randomUUID(), room, nextSeq())).getId();
+		UUID agent = messages.saveAndFlush(Msg.completedAgent(UUID.randomUUID(), room, nextSeq(), "AI 개정안")).getId();
 		status(() -> service.request(room, UUID.randomUUID(), system, target.subject(), requester), HttpStatus.BAD_REQUEST);
 		status(() -> service.request(room, UUID.randomUUID(), pending, target.subject(), requester), HttpStatus.BAD_REQUEST);
 		status(() -> service.request(room, UUID.randomUUID(), UUID.randomUUID(), target.subject(), requester), HttpStatus.NOT_FOUND);
@@ -192,11 +190,37 @@ class ThreadApprovalPostgresTest {
 		status(() -> service.list(direct.getId(), requester), HttpStatus.NOT_FOUND);
 	}
 
+	@Test void everyRealChangeLeavesOneSystemLineAndRepeatsLeaveNone() {
+		UUID id = UUID.randomUUID();
+		service.request(room, id, message, target.subject(), requester);
+		service.request(room, id, message, target.subject(), requester);
+		assertThat(lineEvents()).containsExactly("REQUESTED");
+		service.decide(room, id, true, null, target);
+		service.decide(room, id, true, null, target);
+		status(() -> service.decide(room, id, false, null, target), HttpStatus.CONFLICT);
+		assertThat(lineEvents()).containsExactly("REQUESTED", "APPROVED");
+		assertThat(jdbc.queryForObject("select content from msg where thr_id=? and pyl_json->'approval' is not null limit 1",
+				String.class, room)).isEmpty();
+	}
+
 	@Test void deletingTheRoomRemovesItsRequests() {
 		service.request(room, UUID.randomUUID(), message, target.subject(), requester);
 		assertThat(jdbc.queryForObject("select count(*) from thr_apv where thr_id=?", Integer.class, room)).isEqualTo(1);
 		jdbc.update("delete from thr where id=?", room);
 		assertThat(jdbc.queryForObject("select count(*) from thr_apv where thr_id=?", Integer.class, room)).isZero();
+	}
+
+	/** 서버가 승인 줄에 쓰는 방의 순번 카운터에서 뽑는다 — 직접 번호를 정하면 줄과 겹친다. */
+	private long nextSeq() {
+		Thr thread = threads.findById(room).orElseThrow();
+		long first = thread.reserveSeqBlock(1);
+		threads.saveAndFlush(thread);
+		return first;
+	}
+
+	private java.util.List<String> lineEvents() {
+		return jdbc.queryForList("select pyl_json->'approval'->>'event' from msg where thr_id=? and ath_kind='SYSTEM' "
+				+ "and pyl_json->'approval' is not null order by seq", String.class, room);
 	}
 
 	private CurrentActor actor() {

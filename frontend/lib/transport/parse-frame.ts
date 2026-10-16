@@ -118,6 +118,27 @@ const participantChangedFrameSchema = z.object({
     .transform((value) => value ?? null),
 });
 
+/** 승인 요청의 생성·처리(이슈 #407). event를 좁히지 않는 이유는 participant.changed의 action과 같다. */
+const approvalChangedFrameSchema = z.object({
+  type: z.literal('approval.changed'),
+  threadId: z.string(),
+  approvalId: z.string(),
+  event: z.string(),
+  requesterSubject: z.string(),
+  requesterDisplayName: z.string(),
+  targetSubject: z.string(),
+  targetDisplayName: z.string(),
+  // 승인 줄을 남기지 못한 사건은 null이다.
+  msgId: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? null),
+  seq: z
+    .number()
+    .nullish()
+    .transform((value) => value ?? null),
+});
+
 /** 시작 전 @AI 턴의 대기·취소(이슈 #160). */
 const chatQueuedFrameSchema = z.object({
   type: z.literal('chat.queued'),
@@ -154,7 +175,7 @@ const wsErrorFrameSchema = z.object({
   traceId: z.string(),
 });
 
-/** type 필드로 판별하는 유니온. 알려진 12개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
+/** type 필드로 판별하는 유니온. 알려진 13개 타입 중 하나와 정확히 일치하지 않으면(미지 타입
  * 포함) 파싱이 실패한다 — parseFrame이 그 실패를 null로 흡수한다. frames.ts의 WsFrame 유니온에
  * 타입을 더하면 여기 스키마도 함께 더해야 한다 — 빠뜨리면 컴파일은 통과하고 그 프레임만
  * 조용히 버려진다. */
@@ -171,6 +192,7 @@ const wsFrameSchema = z.discriminatedUnion('type', [
   pongFrameSchema,
   chatTypingFrameSchema,
   roomSubscribedFrameSchema,
+  approvalChangedFrameSchema,
 ]);
 
 /** 이미 JSON.parse된 값을 검증한다. 객체가 아니거나, type이 없거나, 알려지지 않은 type이거나,
