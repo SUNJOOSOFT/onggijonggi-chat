@@ -8,7 +8,7 @@
  보낸 사람이 없다)를 전제하기 때문이다. 협업방은 여러 사람의 메시지를 이름과 함께 보여줘야 한다.
  스크롤 붙임(use-scroll-to-bottom)과 마크다운 렌더는 그대로 재사용한다.
 
- 참여자 목록 사이드바와 입퇴장 라인은 프레임이 실어 보낸 표시 이름을 그대로 쓴다(#26·#130).
+ 참여자 목록 사이드바와 입퇴장·승인 라인은 프레임이 실어 보낸 표시 이름을 그대로 쓴다(#26·#130·#407).
  subject는 화면에 그리지 않고 title로만 남긴다 — 같은 이름이 둘일 때 구분할 수단은 있어야 한다.
 
  이 사이드바(#26)는 "지금 붙어 있는 사람"이고, 방에 들어올 자격이 있는 참여자 "명단" 관리는
@@ -36,8 +36,17 @@ import { NoticeBanner } from '@/components/notice-banner';
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import { fetchCollabThreads } from '@/lib/api/collab';
-import type { RoomMessage, RoomMembershipNotice } from '@/lib/chat/room-state';
-import { isForbidden, isMembershipNotice } from '@/lib/chat/room-state';
+import type {
+  RoomApprovalNotice,
+  RoomMembershipNotice,
+  RoomMessage,
+} from '@/lib/chat/room-state';
+import {
+  isApprovalNotice,
+  isForbidden,
+  isMembershipNotice,
+  isNotice,
+} from '@/lib/chat/room-state';
 import { typingLabel } from '@/lib/chat/typing';
 import {
   type RoomConnection,
@@ -69,6 +78,23 @@ function MembershipRow({ notice }: { notice: RoomMembershipNotice }) {
     >
       {notice.participant.displayName}님이{' '}
       {notice.event === 'join' ? '입장했습니다' : '퇴장했습니다'}
+    </p>
+  );
+}
+
+/** 승인 요청이 생기거나 승인·반려로 처리된 줄(이슈 #407). 입퇴장 줄처럼 흐름 가운데에 옅게 남긴다. */
+function ApprovalRow({ notice }: { notice: RoomApprovalNotice }) {
+  const { requester, target } = notice;
+  return (
+    <p
+      title={`${requester.subject} → ${target.subject}`}
+      className="px-3 py-1 text-center text-xs text-muted-foreground"
+    >
+      {notice.event === 'requested'
+        ? `${requester.displayName}님이 ${target.displayName}님에게 승인을 요청했습니다`
+        : `${target.displayName}님이 ${requester.displayName}님의 요청을 ${
+            notice.event === 'approved' ? '승인' : '반려'
+          }했습니다`}
     </p>
   );
 }
@@ -175,7 +201,7 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   const senderNames = useMemo(() => {
     const names = new Map<string, string>();
     for (const entry of state.messages) {
-      if (!isMembershipNotice(entry) && entry.from) {
+      if (!isNotice(entry) && entry.from) {
         names.set(entry.from.subject, entry.from.displayName);
       }
     }
@@ -205,7 +231,7 @@ export function CollabRoom({ threadId }: { threadId: string }) {
       threadId={threadId}
       attachmentCount={state.messages.reduce(
         (count, entry) =>
-          isMembershipNotice(entry) ? count : count + entry.attachments.length,
+          isNotice(entry) ? count : count + entry.attachments.length,
         0,
       )}
       senderNames={senderNames}
@@ -271,6 +297,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
               {state.messages.map((entry) =>
                 isMembershipNotice(entry) ? (
                   <MembershipRow key={entry.id} notice={entry} />
+                ) : isApprovalNotice(entry) ? (
+                  <ApprovalRow key={entry.id} notice={entry} />
                 ) : (
                   <MessageRow key={entry.id} message={entry} />
                 ),

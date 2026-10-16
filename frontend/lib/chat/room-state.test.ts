@@ -16,7 +16,9 @@ import {
   dismissNotice,
   initialRoomState,
   isForbidden,
+  isApprovalNotice,
   isMembershipNotice,
+  isNotice,
 } from './room-state';
 
 const THREAD = 'thread-1';
@@ -127,10 +129,30 @@ function membershipChanged(
   };
 }
 
+/** 승인 요청이 생기거나 처리된 사건. 서버는 사건마다 승인 줄을 남기고 그 msgId·seq를 싣는다. */
+function approvalChanged(
+  event: string,
+  msgId: string | null,
+  seq: number | null,
+): WsFrame {
+  return {
+    type: 'approval.changed',
+    threadId: THREAD,
+    approvalId: 'apv-1',
+    event,
+    requesterSubject: 'sujin',
+    requesterDisplayName: 'sujin 님',
+    targetSubject: 'minho',
+    targetDisplayName: 'minho 님',
+    msgId,
+    seq,
+  };
+}
+
 /** 입퇴장 시스템 라인을 뺀 사람·AI 메시지만. 대화 쪽을 보는 테스트가 쓴다. */
 function chats(state: RoomState): RoomMessage[] {
   return state.messages.filter(
-    (entry): entry is RoomMessage => !isMembershipNotice(entry),
+    (entry): entry is RoomMessage => !isNotice(entry),
   );
 }
 
@@ -295,6 +317,65 @@ describe('applyFrame - 입퇴장 줄', () => {
     expect(chats(state)).toHaveLength(1);
     expect(chats(state)[0].content).toBe('요약을 시작합니다');
     expect(isMembershipNotice(state.messages[1])).toBe(true);
+  });
+});
+
+describe('applyFrame - approval.changed', () => {
+  it('서버가 남긴 승인 줄을 seq 자리에 넣는다', () => {
+    const state = fold([
+      say('sujin', '먼저', 'a', 1),
+      say('sujin', '나중', 'c', 3),
+      approvalChanged('REQUESTED', 'r', 2),
+    ]);
+    expect(state.messages.map((entry) => entry.id)).toEqual(['a', 'r', 'c']);
+    expect(state.messages[1]).toEqual({
+      id: 'r',
+      seq: 2,
+      approvalId: 'apv-1',
+      event: 'requested',
+      requester: person('sujin'),
+      target: person('minho'),
+    });
+    expect(isApprovalNotice(state.messages[1])).toBe(true);
+    expect(isMembershipNotice(state.messages[1])).toBe(false);
+  });
+
+  it('승인·반려 줄은 각각 approved·rejected가 된다', () => {
+    const state = fold([
+      approvalChanged('APPROVED', 'p', 2),
+      approvalChanged('REJECTED', 'q', 3),
+    ]);
+    expect(
+      state.messages.map((entry) => 'event' in entry && entry.event),
+    ).toEqual(['approved', 'rejected']);
+  });
+
+  it('줄을 남기지 못했거나 모르는 사건이면 흐름을 건드리지 않는다', () => {
+    const before = fold([say('sujin', '안녕하세요')]);
+    expect(applyFrame(before, approvalChanged('REQUESTED', null, null))).toBe(
+      before,
+    );
+    expect(applyFrame(before, approvalChanged('EXPIRED', 'x', 9))).toBe(before);
+  });
+
+  it('같은 줄이 이력과 실시간으로 겹쳐 와도 한 번만 남고 커서는 밀지 않는다', () => {
+    const state = fold([
+      say('sujin', '먼저', 'a', 1),
+      approvalChanged('REQUESTED', 'r', 5),
+      approvalChanged('REQUESTED', 'r', 5),
+    ]);
+    expect(state.messages).toHaveLength(2);
+    expect(state.lastSeq).toBe(1);
+  });
+
+  it('승인 줄이 흐르는 AI 답변을 끊지 않는다', () => {
+    const state = fold([
+      answer('요약을 ', 'streaming'),
+      approvalChanged('REQUESTED', 'r', 1001),
+      answer('시작합니다', 'done'),
+    ]);
+    expect(chats(state)).toHaveLength(1);
+    expect(chats(state)[0].content).toBe('요약을 시작합니다');
   });
 });
 
@@ -795,6 +876,45 @@ describe('applyHistory - 방 진입 시 과거 대화(#190)', () => {
       event: 'join',
       participant: person('minho'),
     });
+  });
+
+  it('SYSTEM이어도 승인 줄은 seq 자리에 그린다', () => {
+    const approval = (
+      id: string,
+      seq: number,
+      event: string,
+    ): ThreadMessageItem =>
+      historyItem(id, seq, '', {
+        athKind: 'SYSTEM',
+        authorSubject: null,
+        authorDisplayName: null,
+        approval: {
+          event,
+          approvalId: 'apv-1',
+          requesterSubject: 'sujin',
+          requesterDisplayName: 'sujin 님',
+          targetSubject: 'minho',
+          targetDisplayName: 'minho 님',
+        },
+      });
+    const state = applyHistory(initialRoomState, [
+      historyItem('b', 3, '나중 말'),
+      approval('r', 1, 'REQUESTED'),
+      approval('x', 2, 'EXPIRED'),
+      historyItem('a', 0, '예전 말'),
+    ]);
+    // 모르는 사건(EXPIRED)은 그리지 않는다.
+    expect(state.messages.map((entry) => entry.id)).toEqual(['a', 'r', 'b']);
+    expect(state.messages[1]).toEqual({
+      id: 'r',
+      seq: 1,
+      approvalId: 'apv-1',
+      event: 'requested',
+      requester: person('sujin'),
+      target: person('minho'),
+    });
+    // 건너뛴 줄도 커서는 지나친다.
+    expect(state.lastSeq).toBe(3);
   });
 
   it('첨부만 보낸 메시지는 본문이 비어도 첨부와 함께 남는다', () => {

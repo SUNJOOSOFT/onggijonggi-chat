@@ -40,6 +40,17 @@ export interface ThreadMessageItem {
     subject: string;
     displayName: string;
   } | null;
+  /** SYSTEM 메시지가 협업방 승인 요청·처리 줄이면 그 내용(이슈 #407). 그 밖의 메시지는 null이다 — WS
+   * approval.changed의 msgId·seq와 짝이다. 이 필드가 없던 과거 응답과 맞물리도록 optional이다. event는
+   * 서버가 사건을 더해도 깨지지 않게 string으로 받는다. */
+  approval?: {
+    event: string;
+    approvalId: string;
+    requesterSubject: string;
+    requesterDisplayName: string;
+    targetSubject: string;
+    targetDisplayName: string;
+  } | null;
 }
 
 export async function fetchThreadMessages(

@@ -11,7 +11,8 @@
 
  접속(presence)과 참가는 다르게 남는다. 참여자 목록(#26)은 지금 접속한 사람이라 presence 프레임으로
  갱신하고, 메시지 흐름의 입퇴장 줄은 참가자가 되거나 빠진 사건이라 서버가 저장한 SYSTEM 메시지(이력)와
- participant.changed로만 들어온다 — 방 목록과 방을 오가는 것은 입퇴장이 아니다.
+ participant.changed로만 들어온다 — 방 목록과 방을 오가는 것은 입퇴장이 아니다. 승인 요청·처리 줄(#407)도
+ 같은 방식으로 SYSTEM 메시지(이력)와 approval.changed로만 들어온다.
 
  `chat.answer`의 citations·restrictedResultsOmitted는 현재 AI 답변에 누적한다. 참여자 목록은
  붙는 순간 오는 `presence.snapshot`(#26)으로 채우고, 그 뒤로는 `presence.join`·`presence.leave`
@@ -107,15 +108,43 @@ export interface RoomMembershipNotice {
   participant: PresenceParticipant;
 }
 
-/** 대화 흐름에 놓이는 것. 사람·AI 메시지이거나, 입퇴장 시스템 라인이다. */
-export type RoomEntry = RoomMessage | RoomMembershipNotice;
+/**
+ * 승인 요청이 생기거나 승인·반려로 처리된 때 대화 흐름에 남는 줄(이슈 #407). 입퇴장 줄과 같은 SYSTEM
+ * 메시지라 id·seq 체계가 같고, 이력과 실시간(approval.changed)이 같은 줄을 id로 알아본다.
+ *
+ * 요청한 메시지의 내용은 담지 않는다 — 누가 누구에게 무엇을 했는지만 남기고, 요청 내용은 요청자·지정된 사람이
+ * 읽는 REST 목록에 있다. 문구는 입퇴장 줄처럼 화면이 정한다.
+ */
+export interface RoomApprovalNotice {
+  id: string;
+  seq: number;
+  approvalId: string;
+  event: 'requested' | 'approved' | 'rejected';
+  requester: PresenceParticipant;
+  target: PresenceParticipant;
+}
 
-/** 시스템 라인인지. 판별 태그를 따로 두지 않고 event 유무로 가른다 — 메시지 쪽 모양을
- * 건드리지 않으려는 것이다. */
+export type RoomNotice = RoomMembershipNotice | RoomApprovalNotice;
+
+/** 대화 흐름에 놓이는 것. 사람·AI 메시지이거나, 입퇴장·승인 시스템 줄이다. */
+export type RoomEntry = RoomMessage | RoomNotice;
+
+/** 입퇴장 줄인지. 판별 태그를 따로 두지 않고 필드 유무로 가른다 — 메시지 쪽 모양을 건드리지 않으려는 것이다. */
 export function isMembershipNotice(
   entry: RoomEntry,
 ): entry is RoomMembershipNotice {
-  return 'event' in entry;
+  return 'participant' in entry;
+}
+
+export function isApprovalNotice(
+  entry: RoomEntry,
+): entry is RoomApprovalNotice {
+  return 'approvalId' in entry;
+}
+
+/** 메시지가 아닌 시스템 줄인지(입퇴장·승인). 메시지만 다루는 곳이 이것으로 걸러낸다. */
+export function isNotice(entry: RoomEntry): entry is RoomNotice {
+  return isMembershipNotice(entry) || isApprovalNotice(entry);
 }
 
 /**
@@ -246,7 +275,7 @@ function appendMessage(
 /** 같은 msgId가 이미 흐름에 있는지. 이력과 실시간이 겹칠 때 한 번만 남기는 근거다(#190). */
 function messageIndexById(state: RoomState, id: string): number | null {
   const index = state.messages.findIndex(
-    (entry) => !isMembershipNotice(entry) && entry.id === id,
+    (entry) => !isNotice(entry) && entry.id === id,
   );
   return index === -1 ? null : index;
 }
@@ -314,7 +343,7 @@ export function applyHistory(
   const known = new Set(state.messages.map((entry) => entry.id));
   const restored: RoomEntry[] = items
     .filter((item) => !known.has(item.id))
-    .filter((item) => item.athKind !== 'SYSTEM' || item.membership != null)
+    .filter((item) => item.athKind !== 'SYSTEM' || isKnownSystemLine(item))
     // 빈 본문은 아직 채워지지 않은 예약 행(PENDING)이라 그리지 않는다. 다만 중지·거부로 끝난
     // 답변은 비는 것이 정상이고 그 사실 자체가 보여야 할 내용이라 예외로 남긴다 — 여기서
     // 걸러 버리면 방을 다시 열었을 때 "중지됨"이 조용히 사라진다.
@@ -322,7 +351,7 @@ export function applyHistory(
     .filter(
       (item) =>
         item.content !== '' ||
-        item.membership != null ||
+        isKnownSystemLine(item) ||
         terminalStatusOf(item.status) !== null ||
         item.attachments.length > 0,
     )
@@ -343,8 +372,46 @@ export function applyHistory(
   };
 }
 
-/** 입퇴장 줄이면 그 줄로, 아니면 메시지로 옮긴다. */
+/** 승인 사건 이름을 줄의 event로. 모르는 값이면 null이다 — 서버가 사건을 더해도 화면이 깨지지 않게 한다. */
+function approvalEventOf(event: string): RoomApprovalNotice['event'] | null {
+  switch (event) {
+    case 'REQUESTED':
+      return 'requested';
+    case 'APPROVED':
+      return 'approved';
+    case 'REJECTED':
+      return 'rejected';
+    default:
+      return null;
+  }
+}
+
+/** 화면이 그릴 줄을 아는 SYSTEM 메시지인지. 모르는 승인 사건은 그리지 않고 건너뛴다. */
+function isKnownSystemLine(item: ThreadMessageItem): boolean {
+  if (item.membership != null) return true;
+  return item.approval != null && approvalEventOf(item.approval.event) !== null;
+}
+
+/** 입퇴장·승인 줄이면 그 줄로, 아니면 메시지로 옮긴다. */
 function toRoomEntry(item: ThreadMessageItem): RoomEntry {
+  const approvalEvent =
+    item.approval == null ? null : approvalEventOf(item.approval.event);
+  if (item.approval != null && approvalEvent !== null) {
+    return {
+      id: item.id,
+      seq: item.seq,
+      approvalId: item.approval.approvalId,
+      event: approvalEvent,
+      requester: {
+        subject: item.approval.requesterSubject,
+        displayName: item.approval.requesterDisplayName,
+      },
+      target: {
+        subject: item.approval.targetSubject,
+        displayName: item.approval.targetDisplayName,
+      },
+    };
+  }
   if (item.membership == null) return toRoomMessage(item);
   return {
     id: item.id,
@@ -416,16 +483,13 @@ function distinctBySubject(
 }
 
 /**
- * participant.changed에 실려 온 입퇴장 줄을 seq 자리에 넣는다. 이미 이력으로 받은 줄이면 건너뛴다.
+ * participant.changed·approval.changed에 실려 온 입퇴장·승인 줄을 seq 자리에 넣는다. 이미 이력으로 받은 줄이면 건너뛴다.
  *
  * 커서(lastSeq)는 밀지 않는다. 이 줄의 seq는 방송 워커 밖에서 정해져, 그보다 작은 seq의 대화가
  * 아직 오는 중일 수 있다 — 여기서 커서를 밀면 그때 끊겼을 때 따라잡기가 그 대화를 건너뛴다.
  * 커서를 밀지 않아 다음 따라잡기가 이 줄을 다시 받아도 id로 걸러진다.
  */
-function insertMembershipNotice(
-  state: RoomState,
-  notice: RoomMembershipNotice,
-): RoomState {
+function insertNotice(state: RoomState, notice: RoomNotice): RoomState {
   if (state.messages.some((entry) => entry.id === notice.id)) return state;
   return {
     ...state,
@@ -457,7 +521,7 @@ function mergeCitations(current: Citation[], incoming: Citation[]): Citation[] {
 function streamingAnswerIndex(state: RoomState): number | null {
   for (let index = state.messages.length - 1; index >= 0; index -= 1) {
     const message = state.messages[index];
-    if (isMembershipNotice(message)) continue;
+    if (isNotice(message)) continue;
     if (message.from === null && message.streaming) return index;
   }
   return null;
@@ -538,7 +602,7 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       if (frame.msgId === null || frame.seq === null) return state;
       if (frame.action !== 'INVITED' && frame.action !== 'REMOVED')
         return state;
-      return insertMembershipNotice(state, {
+      return insertNotice(state, {
         id: frame.msgId,
         seq: frame.seq,
         event: frame.action === 'INVITED' ? 'join' : 'leave',
@@ -566,9 +630,27 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
     case 'chat.typing':
       return state;
 
-    // 승인 요청·처리(#407)는 아직 화면이 다루지 않아 방 상태를 바꾸지 않는다.
-    case 'approval.changed':
-      return state;
+    // 승인 요청·처리(#407). 서버가 남긴 승인 줄이 함께 실려 와 흐름에 넣는다. 줄을 남기지 못했거나 모르는
+    // 사건이면 흐름은 그대로이고, 토스트·모달은 use-room이 따로 다룬다.
+    case 'approval.changed': {
+      const event = approvalEventOf(frame.event);
+      if (frame.msgId === null || frame.seq === null || event === null)
+        return state;
+      return insertNotice(state, {
+        id: frame.msgId,
+        seq: frame.seq,
+        approvalId: frame.approvalId,
+        event,
+        requester: {
+          subject: frame.requesterSubject,
+          displayName: frame.requesterDisplayName,
+        },
+        target: {
+          subject: frame.targetSubject,
+          displayName: frame.targetDisplayName,
+        },
+      });
+    }
 
     case 'chat.message':
       // 같은 메시지가 이력으로도 실시간으로도 올 수 있다 — msgId로 한 번만 남긴다(이슈 #190).
