@@ -32,6 +32,8 @@ import reactor.core.publisher.Sinks;
 import reactor.test.scheduler.VirtualTimeScheduler;
 import tools.jackson.databind.ObjectMapper;
 
+import static com.onggijonggi.api.chat.Eventually.awaitIdle;
+import static com.onggijonggi.api.chat.Eventually.eventually;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.tuple;
@@ -354,13 +356,14 @@ class ThreadMessageDispatcherTest {
 
 		awaitTrue(cancelled);
 		assertThat(cancelled).isTrue();
-		assertThat(room.frames).anySatisfy(frame -> {
+		eventually(() -> assertThat(room.frames).anySatisfy(frame -> {
 			assertThat(frame).isInstanceOf(ErrorFrame.class);
 			assertThat(((ErrorFrame) frame).code()).isEqualTo("AI_TURN_TIMEOUT");
-		});
-		assertThat(room.frames).usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").contains(
-				answer(room, "next", ChatAnswerStatus.STREAMING),
-				answer(room, "", ChatAnswerStatus.DONE));
+		}));
+		eventually(() -> assertThat(room.frames)
+				.usingRecursiveFieldByFieldElementComparatorIgnoringFields("msgId", "seq").contains(
+						answer(room, "next", ChatAnswerStatus.STREAMING),
+						answer(room, "", ChatAnswerStatus.DONE)));
 		verify(llm, times(2)).streamChat(any());
 	}
 
@@ -720,9 +723,9 @@ class ThreadMessageDispatcherTest {
 		assertThat(request.getValue().messages()).containsExactly(
 				new ChatMessage("user", MsgFileService.withFiles("이 표 봐줘", List.of(earlierFile))),
 				new ChatMessage("user", MsgFileService.withFiles("요약해줘", List.of(currentFile))));
-		assertThat(room.frames).filteredOn(ChatMessageFrame.class::isInstance)
+		eventually(() -> assertThat(room.frames).filteredOn(ChatMessageFrame.class::isInstance)
 				.extracting(frame -> ((ChatMessageFrame) frame).attachments())
-				.containsExactly(List.of(new MsgFileView(currentFile.getId(), "규정.pdf")));
+				.containsExactly(List.of(new MsgFileView(currentFile.getId(), "규정.pdf"))));
 	}
 
 	/** 1:1은 이번 메시지가 이미 저장돼 문맥에 들어 있다 — 그쪽에서 첨부가 붙으므로 두 번 싣지 않는다. */
@@ -1243,9 +1246,29 @@ class ThreadMessageDispatcherTest {
 
 		awaitTrue(upstreamCancelled);
 		assertThat(upstreamCancelled).isTrue();
-		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
+		eventually(() -> assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
 				.extracting(frame -> ((ChatAnswerFrame) frame).status())
-				.contains(ChatAnswerStatus.DONE);
+				.contains(ChatAnswerStatus.DONE));
+	}
+
+	/**
+	* 방 프레임이 registry 대기열에서 나가다 sink에서 실패하면(여기서는 듣는 사람 없이 warm-up 버퍼 한 칸을 넘김) registry가
+	* 그 세대를 알려 오고, 그 세대의 AI 작업이 닫힌다(이슈 #405). 실패를 그 방의 다음 방송에 떠넘기지 않는다.
+	*/
+	@Test
+	void aFrameThatFailsInTheRoomQueueClosesItsOwnGeneration() {
+		TestRoom room = new TestRoom();
+		room.subscription.dispose();
+		AtomicBoolean upstreamCancelled = new AtomicBoolean();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("a", "b").concatWith(Flux.<String>never())
+				.doOnCancel(() -> upstreamCancelled.set(true)));
+		ThreadMessageDispatcher dispatcher = dispatcher(room.registry, llm);
+
+		dispatcher.dispatch(command(room, "@AI fail", UUID.randomUUID()), room.membership.generation());
+
+		awaitTrue(upstreamCancelled);
+		assertThat(upstreamCancelled).isTrue();
 	}
 
 	@Test
@@ -1271,6 +1294,7 @@ class ThreadMessageDispatcherTest {
 
 		awaitTrue(triggered);
 		assertThat(triggered).isTrue();
+		awaitIdle(registry, room.threadId);
 		assertThat(room.frames).filteredOn(ChatAnswerFrame.class::isInstance)
 				.extracting(frame -> ((ChatAnswerFrame) frame).status())
 				.containsExactly(ChatAnswerStatus.STREAMING, ChatAnswerStatus.DONE);
@@ -1378,7 +1402,8 @@ class ThreadMessageDispatcherTest {
 
 		dispatcher.cancelCollabTurnsFrom(room.participant.subject());
 
-		assertThat(room.frames).contains(new ChatQueuedFrame(room.threadId, queuedTurnId, ChatQueuedStatus.CANCELLED));
+		eventually(() -> assertThat(room.frames)
+				.contains(new ChatQueuedFrame(room.threadId, queuedTurnId, ChatQueuedStatus.CANCELLED)));
 		verify(llm, times(1)).streamChat(any());
 	}
 
@@ -1561,10 +1586,10 @@ class ThreadMessageDispatcherTest {
 		awaitTrue(upstreamCancelled);
 		assertThat(upstreamCancelled).isTrue();
 		verify(msgPersistenceService, timeout(1000)).cancelBlocking(eq(reserved.agentMsgId()), any());
-		assertThat(room.frames).filteredOn(frame -> frame instanceof ChatAnswerFrame answerFrame
+		eventually(() -> assertThat(room.frames).filteredOn(frame -> frame instanceof ChatAnswerFrame answerFrame
 						&& answerFrame.msgId().equals(reserved.agentMsgId()))
 				.extracting(frame -> ((ChatAnswerFrame) frame).status())
-				.contains(ChatAnswerStatus.CANCELLED);
+				.contains(ChatAnswerStatus.CANCELLED));
 	}
 
 	/** 대기 중(pending)인 DIRECT 턴을 취소하면 COLLAB처럼 chat.queued(cancelled)가 아니라
@@ -1589,10 +1614,11 @@ class ThreadMessageDispatcherTest {
 		dispatcher.cancel(room.threadId, room.membership.generation(), secondTurnId, room.connectionId);
 
 		verify(msgPersistenceService, timeout(1000)).cancelBlocking(second.agentMsgId(), "");
-		assertThat(room.frames).filteredOn(frame -> frame instanceof ChatAnswerFrame answerFrame
+		eventually(() -> assertThat(room.frames).filteredOn(frame -> frame instanceof ChatAnswerFrame answerFrame
 						&& answerFrame.msgId().equals(second.agentMsgId()))
 				.extracting(frame -> ((ChatAnswerFrame) frame).status())
-				.containsExactly(ChatAnswerStatus.CANCELLED);
+				.containsExactly(ChatAnswerStatus.CANCELLED));
+		awaitIdle(room.registry, room.threadId);
 		assertThat(room.frames).filteredOn(ChatQueuedFrame.class::isInstance)
 				.noneMatch(frame -> ((ChatQueuedFrame) frame).status() == ChatQueuedStatus.CANCELLED);
 	}

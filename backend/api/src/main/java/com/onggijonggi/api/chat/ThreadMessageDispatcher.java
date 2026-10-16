@@ -168,6 +168,9 @@ public class ThreadMessageDispatcher {
 		this.webEnabled = webEnabled;
 		this.deadlineScheduler = deadlineScheduler;
 		this.documentRevision = documentRevision;
+		// 방 프레임은 registry의 대기열에서 비동기로 나가 실패를 방송한 자리로 돌려받을 수 없다(이슈 #405) — 실패한
+		// 프레임의 세대를 registry가 알려 주면 그 세대를 닫는다(예전에 방송이 예외를 던질 때 하던 처리와 같다).
+		roomSessionRegistry.onBroadcastFailure(this::closeGenerationAfterBroadcastFailure);
 	}
 
 	/**
@@ -270,9 +273,10 @@ public class ThreadMessageDispatcher {
 	/**
 	* 워커가 큐에서 하나씩 꺼내 실행한다 — 방 단위로 직렬이므로 방송 순서가 여기서 확정된다.
 	*
-	* 방송이 실패하면(sink 고장) generation을 닫고 끝낸다. 이전에는 MESSAGE_DELIVERY_FAILED를
-	* 호출자에게 동기로 돌려줬는데, 워커에는 그 사람의 연결로 가는 통로가 없다 — 방 sink는 방금
-	* 고장난 그 sink다. closeGeneration(.., true)이 남은 대기 턴 취소를 한 번 알리는 것으로 갈음한다.
+	* 방송이 예외를 던지면(방 대기열이 꽉 참) generation을 닫고 끝낸다. 이전에는 MESSAGE_DELIVERY_FAILED를
+	* 호출자에게 동기로 돌려줬는데, 워커에는 그 사람의 연결로 가는 통로가 없다 — 방송 통로가 막힌 상태다.
+	* closeGeneration(.., true)이 남은 대기 턴 취소를 한 번 알리는 것으로 갈음한다. 대기열에 넣은 뒤 sink에서 난
+	* 실패는 여기가 아니라 closeGenerationAfterBroadcastFailure로 온다(이슈 #405).
 	*/
 	private void process(RoomKey key, RoomAiState state, QueuedMessage queued) {
 		ChatMessageCommand command = queued.command();
@@ -463,6 +467,18 @@ public class ThreadMessageDispatcher {
 	/** replay 응답 구성용(이슈 #233) — modelIdFor(PendingTurn)와 같은 기본값 규칙을 외부에 노출한다. */
 	String resolveModelId(String requestedModel) {
 		return requestedModel == null || requestedModel.isBlank() ? modelId : requestedModel;
+	}
+
+	/**
+	* 그 세대의 방 프레임 하나가 sink에 들어가지 못했다(registry의 비우기 스레드가 알린다, 이슈 #405). 방송이 실패해
+	* 예외를 받았을 때와 같이 세대를 닫고, 남은 대기 턴 취소를 한 번 알린다.
+	*/
+	void closeGenerationAfterBroadcastFailure(UUID threadId, UUID roomGeneration) {
+		RoomKey key = new RoomKey(threadId, roomGeneration);
+		RoomAiState state = states.get(key);
+		if (state != null) {
+			closeGeneration(key, state, true);
+		}
 	}
 
 	/** 마지막 연결이 퇴장한 generation의 활성·대기 AI 작업을 즉시 취소한다. */
@@ -930,7 +946,7 @@ public class ThreadMessageDispatcher {
 	}
 
 	/**
-	* DONE 프레임 방송이 실패해도 응답 생성 자체는 이미 끝난 뒤라, closeGeneration()의 CANCELLED
+	* DONE 프레임 방송이 실패해도(대기열이 꽉 차 예외를 받거나, 넣은 뒤 sink에서 실패해 세대가 닫히거나) 응답 생성 자체는 이미 끝난 뒤라, closeGeneration()의 CANCELLED
 	* 처리보다 먼저 COMPLETE로 저장한다 — 그러지 않으면 스트리밍으로 이미 전달된 답변이 DB에는
 	* 빈 CANCELLED로 남아 새로고침 후 사라져 보인다. persistAgentCompletion()의 CAS 가드가 이후
 	* closeGeneration()의 CANCELLED 시도를 무시하게 만든다.

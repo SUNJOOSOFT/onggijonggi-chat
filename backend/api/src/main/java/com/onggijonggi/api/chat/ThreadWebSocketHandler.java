@@ -690,8 +690,9 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 	* 않는다 — 붙이면 클라이언트가 참가자 0명짜리 presence 상태를 만들어야 하는 의미 없는 부담이 된다.
 	* 대신 구독 완료만 알리는 {@link RoomSubscribedFrame}을 붙인다(이슈 #382).
 	*
-	* 강제 해지(evict)와 버퍼 넘침 신호는 방송·evict를 부른 스레드가 방 상태 잠금을 쥔 채 낸다. 그
-	* 자리에서 곧장 leave를 부르면 순회 중인 연결 목록을 고치게 되므로 스레드를 옮겨 처리한다.
+	* 강제 해지(kicked)는 registry의 방 대기열을 비우는 스레드에서, 버퍼 넘침은 그 스레드가 방 프레임을
+	* 내보내는 중에 온다(이슈 #405 — registry는 잠금을 쥔 채 내보내지 않는다). 그 스레드가 이 방의 남은
+	* 대기열을 계속 비우도록 해지 처리는 스레드를 옮겨서 한다.
 	*/
 	private void subscribe(Connection connection, UUID threadId, boolean presenceEnabled) {
 		RoomSessionRegistry.RoomMembership membership =
@@ -718,7 +719,7 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.doOnSuccess(ignored -> {
 					log.debug("Unsubscribing evicted connection threadId={} connectionId={}", threadId,
 							connection.id());
-					endSubscription(connection, threadId, new ErrorFrame(threadId, "FORBIDDEN",
+					endSubscription(connection, threadId, membership.left(), new ErrorFrame(threadId, "FORBIDDEN",
 							"참여자 명단에서 제외되어 이 방 구독이 해지됐습니다.", newTraceId()));
 				})
 				.subscribe();
@@ -727,15 +728,21 @@ public class ThreadWebSocketHandler implements WebSocketHandler {
 				.doOnSuccess(ignored -> {
 					log.warn("Unsubscribing slow room consumer threadId={} connectionId={}", threadId,
 							connection.id());
-					endSubscription(connection, threadId, notSubscribed(threadId, newTraceId()));
+					endSubscription(connection, threadId, membership.left(), notSubscribed(threadId, newTraceId()));
 				})
 				.subscribe();
 	}
 
-	/** 서버가 이 방 구독만 푼다(참여자 제거·버퍼 넘침). 방에서 뺀 뒤 사유를 그 방 threadId로 알린다. */
-	private void endSubscription(Connection connection, UUID threadId, ErrorFrame reason) {
+	/**
+	 * 서버가 이 방 구독만 푼다(참여자 제거·버퍼 넘침). 방에서 빼고, 그 연결의 left 신호가 실제로 온 뒤에
+	 * 사유를 그 방 threadId로 알린다. 버퍼 넘침이면 이 연결의 방 버퍼(bufferForRoom)에 아직 나가지 않은 프레임이
+	 * 남아 있고, 방 프레임은 left가 와야 끊긴다 — left는 방 대기열로 나가므로(이슈 #405) 사유를 먼저 보내면 끊기기
+	 * 전 방 프레임이 사유 뒤에 도착할 수 있다. 강퇴는 kicked가 이미 프레임을 끊어 순서 차이가 없지만 같은 길로
+	 * 보낸다. 순서는 "남은 방 프레임 → 해지(프레임 끊김) → 사유"다.
+	 */
+	private void endSubscription(Connection connection, UUID threadId, Mono<Void> left, ErrorFrame reason) {
+		left.subscribe(null, null, () -> connection.send(reason));
 		leaveRoom(connection, threadId);
-		connection.send(reason);
 	}
 
 	private Mono<WsFrame> handleUnsubscribe(UUID threadId, Connection connection, String traceId) {

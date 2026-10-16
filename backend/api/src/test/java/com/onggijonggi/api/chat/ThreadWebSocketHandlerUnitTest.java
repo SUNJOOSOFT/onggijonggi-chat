@@ -482,7 +482,8 @@ class ThreadWebSocketHandlerUnitTest {
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("direct-user")).thenReturn(Mono.just(userId));
 		stubTextMessages(session);
-		when(session.receive()).thenReturn(Flux.just(inboundText(WsTestExchange.subscribeFrame(threadId)),
+		when(session.receive()).thenReturn(sendThenCloseAfterSeeing(sent, "\"type\":\"chat.answer\"",
+				inboundText(WsTestExchange.subscribeFrame(threadId)),
 				inboundText(WsTestExchange.chatMessageFrame(threadId, "안녕"))));
 		when(session.send(any())).thenAnswer(invocation -> Flux.from(
 				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
@@ -538,7 +539,8 @@ class ThreadWebSocketHandlerUnitTest {
 		when(session.getHandshakeInfo()).thenReturn(handshakeInfo);
 		when(provisioning.resolveOrProvision("direct-user")).thenReturn(Mono.just(userId));
 		stubTextMessages(session);
-		when(session.receive()).thenReturn(Flux.just(inboundText(WsTestExchange.subscribeFrame(threadId)),
+		when(session.receive()).thenReturn(sendThenCloseAfterSeeing(sent, "\"code\":\"INTERNAL_ERROR\"",
+				inboundText(WsTestExchange.subscribeFrame(threadId)),
 				inboundText(WsTestExchange.chatMessageFrame(threadId, "안녕"))));
 		when(session.send(any())).thenAnswer(invocation -> Flux.from(
 				invocation.<org.reactivestreams.Publisher<WebSocketMessage>>getArgument(0))
@@ -922,6 +924,21 @@ class ThreadWebSocketHandlerUnitTest {
 		return new WebSocketMessage(WebSocketMessage.Type.TEXT,
 				DefaultDataBufferFactory.sharedInstance.wrap(
 						json.getBytes(java.nio.charset.StandardCharsets.UTF_8)));
+	}
+
+	/**
+	* 프레임들을 올려보낸 뒤, 나간 프레임에 marker가 보일 때까지(최대 3초) 닫지 않는 클라이언트.
+	* 방 프레임은 registry의 비우기 스레드에서 오므로(#405), 올려보내자마자 닫으면 종료 사유가
+	* 같은 outbound에서 아직 전달 중인 답을 끊을 수 있다. 실제 클라이언트도 닫은 뒤에는 답을 못 받는다.
+	*/
+	private static Flux<WebSocketMessage> sendThenCloseAfterSeeing(List<String> sent, String marker,
+			WebSocketMessage... frames) {
+		Mono<WebSocketMessage> untilSeen = Flux.interval(Duration.ofMillis(5))
+				.filter(ignored -> sent.stream().anyMatch(frame -> frame.contains(marker)))
+				.next()
+				.timeout(Duration.ofSeconds(3), Mono.just(0L))
+				.then(Mono.empty());
+		return Flux.just(frames).concatWith(untilSeen);
 	}
 
 	/** 나가는 프레임을 실제 메시지로 만들게 한다 — mock의 기본값(null)이면 직렬화 단계에서 NPE가 난다. */

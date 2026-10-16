@@ -1,6 +1,7 @@
 package com.onggijonggi.api.chat;
 
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -13,13 +14,17 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 import org.reactivestreams.Subscription;
 import reactor.core.Disposable;
 import reactor.core.publisher.BaseSubscriber;
 import reactor.core.publisher.Sinks;
 
+import static com.onggijonggi.api.chat.Eventually.awaitIdle;
+import static com.onggijonggi.api.chat.Eventually.eventually;
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * Class Name : RoomSessionRegistryTest.java
@@ -34,7 +39,8 @@ import static org.assertj.core.api.Assertions.assertThat;
  *               evict가 같은 연결의 leave와 동시에 실행돼도 방 상태가 깨지지 않는지도
  *               확인한다(이슈 #135). 퇴장 통보가 유예 시간만큼 미뤄지고, 그 안에 재연결하면
  *               퇴장·입장이 둘 다 무산되는지도 확인한다(이슈 #198) — 실제 운영 유예(수 초)를
- *               기다리지 않도록 테스트는 짧은 유예로 생성한 registry를 쓴다.
+ *               기다리지 않도록 테스트는 짧은 유예로 생성한 registry를 쓴다. 내보내기는 방별 대기열을
+ *               비우는 스레드가 하므로(이슈 #405) 도착은 기다려서(Eventually) 본다.
  */
 class RoomSessionRegistryTest {
 
@@ -72,9 +78,13 @@ class RoomSessionRegistryTest {
 
 		ChatMessageFrame expected = new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, sender.subject(), sender.displayName(), "hello", List.of());
 		assertThat(registry.broadcastIfCurrent(roomId, firstMembership.generation(), expected)).isTrue();
-		// 먼저 들어와 있던 first만 두 번째 입장을 통보받는다 — second는 자기 입장을 받지 않는다.
-		assertThat(first).containsExactly(new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName()), expected);
-		assertThat(second).containsExactly(expected);
+		// 먼저 들어와 있던 first는 두 번째 입장을 통보받는다. second는 그 통보가 대기열에 든 뒤 구독했으므로
+		// 받을 수도 있다(이슈 #405, 내보내기가 비동기) — 스냅샷이 먼저 가고 이미 아는 사람의 join은 화면이
+		// 무시하므로 해가 없다. second에게 중요한 것은 방송을 받는 것이다.
+		eventually(() -> assertThat(first).containsExactly(
+				new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName()), expected));
+		eventually(() -> assertThat(second.stream().filter(ChatMessageFrame.class::isInstance)).containsExactly(expected));
+		awaitIdle(registry, roomId, otherRoomId);
 		assertThat(other).isEmpty();
 
 		firstSubscription.dispose();
@@ -93,7 +103,7 @@ class RoomSessionRegistryTest {
 		SystemNoticeFrame notice = new SystemNoticeFrame(roomId, "warning", "RISKY_CONTENT", "위험 감지", "trace-1");
 		registry.notifyIfListening(roomId, notice);
 
-		assertThat(received).containsExactly(notice);
+		eventually(() -> assertThat(received).containsExactly(notice));
 		subscription.dispose();
 	}
 
@@ -118,7 +128,8 @@ class RoomSessionRegistryTest {
 		assertThat(registry.notifyTyping(directTypistId, new ChatTypingFrame(directId, "owner", "owner", true)))
 				.isFalse();
 
-		assertThat(collab).containsExactly(typing);
+		eventually(() -> assertThat(collab).containsExactly(typing));
+		awaitIdle(registry, directId);
 		assertThat(direct).isEmpty();
 		collabSubscription.dispose();
 		directSubscription.dispose();
@@ -151,10 +162,13 @@ class RoomSessionRegistryTest {
 			left.get(5, TimeUnit.SECONDS);
 			right.get(5, TimeUnit.SECONDS);
 
-			// first는 second의 입장 통보를 하나 더 갖고 있다 — 순서 비교 대상은 메시지뿐이다.
+			// first는 second의 입장 통보를 하나 더 갖고 있고, second도 자기 입장 통보를 받을 수 있다(이슈 #405, 내보내기가
+			// 비동기) — 순서 비교 대상은 메시지뿐이다.
+			eventually(() -> assertThat(first.stream().filter(ChatMessageFrame.class::isInstance)).hasSize(200));
+			eventually(() -> assertThat(second.stream().filter(ChatMessageFrame.class::isInstance)).hasSize(200));
 			List<WsFrame> firstMessages = first.stream().filter(ChatMessageFrame.class::isInstance).toList();
-			assertThat(firstMessages).hasSize(200);
-			assertThat(second).containsExactlyElementsOf(firstMessages);
+			assertThat(second.stream().filter(ChatMessageFrame.class::isInstance).toList())
+					.containsExactlyElementsOf(firstMessages);
 		} finally {
 			executor.shutdownNow();
 			firstSubscription.dispose();
@@ -197,9 +211,10 @@ class RoomSessionRegistryTest {
 					new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "message-" + i, List.of()));
 		}
 
-		assertThat(slowOverflowed).isTrue();
+		eventually(() -> assertThat(slowOverflowed).isTrue());
+		// fast는 먼저 구독한 쪽이 있으면 자기 입장 통보도 받을 수 있다(이슈 #405, 내보내기가 비동기) — 세는 것은 방송뿐이다.
+		eventually(() -> assertThat(fastFrames.stream().filter(ChatMessageFrame.class::isInstance)).hasSize(257));
 		assertThat(fastOverflowed).isFalse();
-		assertThat(fastFrames).hasSize(257);
 
 		slowSubscriber.cancel();
 		fastSubscription.dispose();
@@ -224,7 +239,7 @@ class RoomSessionRegistryTest {
 		assertThat(registry.broadcastIfCurrent(roomId, newMembership.generation(),
 				new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", "new room", List.of()))).isTrue();
 
-		assertThat(received).hasSize(1);
+		eventually(() -> assertThat(received).hasSize(1));
 
 		newSubscription.dispose();
 		registry.leave(roomId, newConnectionId, anyone());
@@ -247,8 +262,13 @@ class RoomSessionRegistryTest {
 		Disposable secondSubscription = registry.join(roomId, secondConnectionId, secondUser)
 				.frames().subscribe(second::add);
 
-		assertThat(first).containsExactly(new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName()));
-		assertThat(second).isEmpty();
+		eventually(() -> assertThat(first).containsExactly(
+				new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName())));
+		awaitIdle(registry, roomId);
+		// second는 자기 입장 통보가 대기열에 든 뒤 구독했으므로 그것을 받을 수는 있다(이슈 #405, 내보내기가 비동기) — 스냅샷이
+		// 먼저 가고 화면은 이미 아는 사람의 join을 무시한다. 그 밖의 것(다른 사람의 입장 등)은 받지 않는다.
+		assertThat(second).allMatch(frame -> frame.equals(
+				new PresenceJoinFrame(roomId, secondUser.subject(), secondUser.displayName())));
 
 		firstSubscription.dispose();
 		secondSubscription.dispose();
@@ -271,6 +291,7 @@ class RoomSessionRegistryTest {
 		Disposable secondSubscription = registry.join(roomId, secondConnectionId, secondUser, false)
 				.frames().subscribe(second::add);
 
+		awaitIdle(registry, roomId);
 		assertThat(first).noneMatch(PresenceJoinFrame.class::isInstance);
 		assertThat(second).noneMatch(PresenceJoinFrame.class::isInstance);
 
@@ -317,6 +338,7 @@ class RoomSessionRegistryTest {
 					}
 				});
 		registry.join(roomId, leavingConnectionId, leavingUser).frames().subscribe();
+		eventually(() -> assertThat(staying).hasSize(1)); // 입장 통보가 도착한 뒤에 비운다
 		staying.clear();
 
 		registry.leave(roomId, leavingConnectionId, leavingUser);
@@ -342,6 +364,7 @@ class RoomSessionRegistryTest {
 		Disposable watcherSubscription = registry.join(roomId, UUID.randomUUID(), anyone())
 				.frames().subscribe(watcher::add);
 		registry.join(roomId, oldConnectionId, flappingUser).frames().subscribe();
+		eventually(() -> assertThat(watcher).hasSize(1)); // 입장 통보가 도착한 뒤에 비운다
 		watcher.clear();
 
 		registry.leave(roomId, oldConnectionId, flappingUser);
@@ -392,6 +415,7 @@ class RoomSessionRegistryTest {
 					}
 				});
 		registry.join(roomId, connectionId, leavingUser).frames().subscribe();
+		eventually(() -> assertThat(watcher).hasSize(1)); // 입장 통보가 도착한 뒤에 비운다
 		watcher.clear();
 
 		registry.leave(roomId, connectionId, leavingUser);
@@ -403,7 +427,7 @@ class RoomSessionRegistryTest {
 	}
 
 	@Test
-	void doesNotAnnounceLeaveWhenTheLastMemberLeaves() {
+	void doesNotAnnounceLeaveWhenTheLastMemberLeaves() throws Exception {
 		UUID roomId = UUID.randomUUID();
 		UUID onlyConnectionId = UUID.randomUUID();
 		PresenceParticipant onlyUser = participant("only");
@@ -415,6 +439,7 @@ class RoomSessionRegistryTest {
 		// 마지막 퇴장이면 방이 사라진다. 사라진 방에 방송하면 예외이므로 아무것도 내지 않아야 한다.
 		registry.leave(roomId, onlyConnectionId, onlyUser);
 
+		Thread.sleep(TEST_LEAVE_DEBOUNCE.toMillis() * 4);
 		assertThat(received).isEmpty();
 		subscription.dispose();
 	}
@@ -429,11 +454,13 @@ class RoomSessionRegistryTest {
 		Disposable watcherSubscription = registry.join(roomId, UUID.randomUUID(), anyone())
 				.frames().subscribe(watcher::add);
 		Disposable firstTab = registry.join(roomId, firstTabId, twoTabUser).frames().subscribe();
+		eventually(() -> assertThat(watcher).hasSize(1)); // 입장 통보가 도착한 뒤에 비운다
 		watcher.clear();
 
 		Disposable secondTab = registry.join(roomId, UUID.randomUUID(), twoTabUser).frames().subscribe();
 
 		// 이미 방에 있는 사람이 탭을 하나 더 연 것은 입장이 아니다.
+		awaitIdle(registry, roomId);
 		assertThat(watcher).isEmpty();
 
 		watcherSubscription.dispose();
@@ -459,6 +486,7 @@ class RoomSessionRegistryTest {
 				});
 		Disposable firstTab = registry.join(roomId, firstTabId, twoTabUser).frames().subscribe();
 		Disposable secondTab = registry.join(roomId, secondTabId, twoTabUser).frames().subscribe();
+		eventually(() -> assertThat(watcher).hasSize(1)); // 첫 탭의 입장 통보가 도착한 뒤에 비운다
 		watcher.clear();
 
 		registry.leave(roomId, secondTabId, twoTabUser);
@@ -466,6 +494,7 @@ class RoomSessionRegistryTest {
 		// 탭 하나가 닫혀도 다른 탭이 남아 있으면 그 사람은 아직 방에 있다. 재연결도 같은 모양이다 —
 		// 새 연결이 먼저 등록되고 죽은 옛 연결의 doFinally가 뒤늦게 도는 순서라, 여기서 통보가
 		// 나가면 남은 사람 목록에서 그 사람이 사라진 채로 남는다.
+		Thread.sleep(TEST_LEAVE_DEBOUNCE.toMillis() * 4);
 		assertThat(watcher).isEmpty();
 
 		registry.leave(roomId, firstTabId, twoTabUser);
@@ -621,7 +650,8 @@ class RoomSessionRegistryTest {
 
 		assertThat(registry.evict(roomId, removedUser.subject())).isTrue();
 
-		assertThat(removedKicked).isTrue();
+		eventually(() -> assertThat(removedKicked).isTrue());
+		awaitIdle(registry, roomId);
 		assertThat(stayingKicked).isFalse();
 	}
 
@@ -640,8 +670,8 @@ class RoomSessionRegistryTest {
 
 		assertThat(registry.evict(roomId, twoTabUser.subject())).isTrue();
 
-		assertThat(firstTabKicked).isTrue();
-		assertThat(secondTabKicked).isTrue();
+		eventually(() -> assertThat(firstTabKicked).isTrue());
+		eventually(() -> assertThat(secondTabKicked).isTrue());
 	}
 
 	/** 방이 없거나(접속한 적 없음) 그 subject의 연결이 없으면 조용히 false만 돌려준다 — 예외를 던지지 않는다. */
@@ -658,8 +688,9 @@ class RoomSessionRegistryTest {
 	@Test
 	void evictCollabSubscriptionsLeavesDirectSubscriptionsUntouched() {
 		String subject = "same-subject";
+		UUID directRoomId = UUID.randomUUID();
 		RoomSessionRegistry.RoomMembership collab = registry.join(UUID.randomUUID(), UUID.randomUUID(), participant(subject));
-		RoomSessionRegistry.RoomMembership direct = registry.join(UUID.randomUUID(), UUID.randomUUID(), participant(subject), false);
+		RoomSessionRegistry.RoomMembership direct = registry.join(directRoomId, UUID.randomUUID(), participant(subject), false);
 		AtomicBoolean collabKicked = new AtomicBoolean();
 		AtomicBoolean directKicked = new AtomicBoolean();
 		collab.kicked().doOnSuccess(ignored -> collabKicked.set(true)).subscribe();
@@ -667,7 +698,8 @@ class RoomSessionRegistryTest {
 
 		assertThat(registry.evictCollabSubscriptions(subject)).isTrue();
 
-		assertThat(collabKicked).isTrue();
+		eventually(() -> assertThat(collabKicked).isTrue());
+		awaitIdle(registry, directRoomId);
 		assertThat(directKicked).isFalse();
 	}
 
@@ -774,8 +806,177 @@ class RoomSessionRegistryTest {
 
 		registry.leave(roomId, leavingConnectionId, leavingUser);
 
-		assertThat(leavingLeft).isTrue();
+		eventually(() -> assertThat(leavingLeft).isTrue());
+		awaitIdle(registry, roomId);
 		assertThat(stayingLeft).isFalse();
+	}
+
+	/**
+	* 방 대기열(이슈 #405)은 넣은 순서대로 나간다 — 한 차례에 다 못 비워 다음 차례로 넘어가도(DRAIN_BATCH)
+	* 순서가 지켜지고, left는 그보다 먼저 넣은 방송 뒤에, 방 완료는 맨 마지막에 온다.
+	*/
+	@Test
+	void outboxDeliversFramesThenLeftThenCompletionInOrder() {
+		UUID roomId = UUID.randomUUID();
+		UUID connectionId = UUID.randomUUID();
+		PresenceParticipant user = anyone();
+		RoomSessionRegistry.RoomMembership membership = registry.join(roomId, connectionId, user);
+		List<String> events = new CopyOnWriteArrayList<>();
+		membership.frames().subscribe(frame -> events.add(((ChatMessageFrame) frame).content()), null,
+				() -> events.add("complete"));
+		membership.left().subscribe(null, null, () -> events.add("left"));
+		List<String> expected = new ArrayList<>();
+		int count = RoomSessionRegistry.DRAIN_BATCH * 3 + 1;
+
+		for (int i = 0; i < count; i++) {
+			assertThat(registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "m" + i))).isTrue();
+			expected.add("m" + i);
+		}
+		registry.leave(roomId, connectionId, user);
+		expected.add("left");
+		expected.add("complete");
+
+		eventually(() -> assertThat(events).containsExactlyElementsOf(expected));
+		assertThat(registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "late"))).isFalse();
+	}
+
+	/**
+	* 내보내기가 실패하면(여기서는 듣는 사람 없이 warm-up 버퍼 한 칸을 넘김) registry가 그 방·세대를 실패 알림으로 보낸다 —
+	* dispatcher가 그 세대 AI 작업을 닫는 신호다(이슈 #405). 실패를 그 방의 다음 방송에 예외로 떠넘기지 않으므로 다음 방송은
+	* 그대로 들어간다. 실패한 뒤에도 left는 나간다.
+	*/
+	@Test
+	void aFailedEmissionIsReportedForItsRoomAndGenerationWithoutFailingTheNextBroadcast() {
+		UUID roomId = UUID.randomUUID();
+		UUID connectionId = UUID.randomUUID();
+		PresenceParticipant user = anyone();
+		List<List<UUID>> failures = new CopyOnWriteArrayList<>();
+		registry.onBroadcastFailure((threadId, generation) -> failures.add(List.of(threadId, generation)));
+		RoomSessionRegistry.RoomMembership membership = registry.join(roomId, connectionId, user);
+		AtomicBoolean left = new AtomicBoolean();
+		membership.left().subscribe(null, null, () -> left.set(true));
+
+		assertThat(registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "buffered"))).isTrue();
+		assertThat(registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "overflow"))).isTrue();
+
+		eventually(() -> assertThat(failures).containsExactly(List.of(roomId, membership.generation())));
+		assertThat(registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "next"))).isTrue();
+		registry.leave(roomId, connectionId, user);
+		eventually(() -> assertThat(left).isTrue());
+	}
+
+	/**
+	* 대기열 상한: 구독자가 멈춰 비우기가 밀리면 방송은 MAX_PENDING개까지만 들어가고 그 다음 방송은 예외를 받는다. 입력 중
+	* 같은 통보는 따로 세어(MAX_PENDING_NOTICES) 넘친 것만 조용히 버려지고 방송 자리를 먹지 않는다. notifyIfListening
+	* 통보(참여자 변경 등)는 상한으로 버리지 않는다. left는 상한과 상관없이 들어가 풀린 뒤 전달되고, 대기열이 빠지면 방송이
+	* 다시 된다.
+	*/
+	@Test
+	void aFullOutboxRejectsBroadcastsUntilItDrainsWhileNoticesHaveTheirOwnLimit() throws Exception {
+		UUID roomId = UUID.randomUUID();
+		PresenceParticipant leavingUser = participant("leaving");
+		UUID leavingConnectionId = UUID.randomUUID();
+		RoomSessionRegistry.RoomMembership watching = registry.join(roomId, UUID.randomUUID(), participant("watching"));
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		List<String> received = new CopyOnWriteArrayList<>();
+		AtomicInteger typings = new AtomicInteger();
+		Disposable subscription = watching.frames().subscribe(frame -> {
+			if (frame instanceof ChatTypingFrame) {
+				typings.incrementAndGet();
+			}
+			if (frame instanceof ChatMessageFrame chat) {
+				received.add(chat.content());
+				if (entered.getCount() > 0) {
+					entered.countDown();
+					await(release);
+				}
+			}
+		});
+		RoomSessionRegistry.RoomMembership leaving = registry.join(roomId, leavingConnectionId, leavingUser);
+		AtomicBoolean left = new AtomicBoolean();
+		leaving.left().subscribe(null, null, () -> left.set(true));
+
+		try {
+			registry.broadcastIfCurrent(roomId, watching.generation(), message(roomId, "hold"));
+			assertThat(entered.await(3, TimeUnit.SECONDS)).isTrue();
+			for (int i = 0; i < RoomSessionRegistry.MAX_PENDING_NOTICES + 10; i++) {
+				assertThat(registry.notifyTyping(leavingConnectionId,
+						new ChatTypingFrame(roomId, leavingUser.subject(), leavingUser.displayName(), true))).isTrue();
+			}
+			registry.notifyIfListening(roomId, message(roomId, "listening"));
+			for (int i = 0; i < RoomSessionRegistry.MAX_PENDING; i++) {
+				assertThat(registry.broadcastIfCurrent(roomId, watching.generation(), message(roomId, "q" + i))).isTrue();
+			}
+			assertThatThrownBy(() -> registry.broadcastIfCurrent(roomId, watching.generation(), message(roomId, "over")))
+					.isInstanceOf(IllegalStateException.class)
+					.hasMessageContaining("queue full");
+
+			registry.leave(roomId, leavingConnectionId, leavingUser);
+		} finally {
+			release.countDown();
+		}
+		eventually(() -> assertThat(left).isTrue());
+		awaitIdle(registry, roomId);
+		assertThat(typings).hasValue(RoomSessionRegistry.MAX_PENDING_NOTICES);
+		assertThat(received).contains("listening", "q0", "q" + (RoomSessionRegistry.MAX_PENDING - 1));
+		assertThat(registry.broadcastIfCurrent(roomId, watching.generation(), message(roomId, "after drain"))).isTrue();
+		eventually(() -> assertThat(received).contains("after drain"));
+		subscription.dispose();
+	}
+
+	/**
+	* 부가 통보를 보낼지는 내보내는 순간에 정한다(이슈 #102·#405) — 넣을 때는 듣는 사람이 있었어도 내보내기 전에
+	* 다 빠졌으면 버린다. 버리지 않으면 warm-up 버퍼에 남아, 다음에 붙은 사람이 그 통보를 첫 프레임으로 받는다.
+	*/
+	@Test
+	void aNoticeIsDroppedWhenTheLastListenerLeftBeforeItWasSent() throws Exception {
+		UUID roomId = UUID.randomUUID();
+		RoomSessionRegistry.RoomMembership membership = registry.join(roomId, UUID.randomUUID(), anyone());
+		CountDownLatch entered = new CountDownLatch(1);
+		CountDownLatch release = new CountDownLatch(1);
+		Disposable listening = membership.frames().subscribe(frame -> {
+			entered.countDown();
+			await(release);
+		});
+		registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "hold"));
+		assertThat(entered.await(3, TimeUnit.SECONDS)).isTrue();
+
+		registry.notifyIfListening(roomId, message(roomId, "notice"));
+		listening.dispose();
+		release.countDown();
+		awaitIdle(registry, roomId);
+
+		List<WsFrame> received = new CopyOnWriteArrayList<>();
+		Disposable next = membership.frames().subscribe(received::add);
+		ChatMessageFrame first = message(roomId, "first");
+		assertThat(registry.broadcastIfCurrent(roomId, membership.generation(), first)).isTrue();
+		eventually(() -> assertThat(received).containsExactly(first));
+		next.dispose();
+	}
+
+	/** 구독자가 받은 자리에서 같은 방에 다시 방송해도 된다 — 다음 차례에 나간다. 예전에는 sink에 겹쳐 내보내 실패했다. */
+	@Test
+	void aSubscriberCanBroadcastToTheSameRoomFromItsCallback() {
+		UUID roomId = UUID.randomUUID();
+		RoomSessionRegistry.RoomMembership membership = registry.join(roomId, UUID.randomUUID(), anyone());
+		List<String> received = new CopyOnWriteArrayList<>();
+		Disposable subscription = membership.frames().subscribe(frame -> {
+			String content = ((ChatMessageFrame) frame).content();
+			received.add(content);
+			if ("ping".equals(content)) {
+				registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "pong"));
+			}
+		});
+
+		registry.broadcastIfCurrent(roomId, membership.generation(), message(roomId, "ping"));
+
+		eventually(() -> assertThat(received).containsExactly("ping", "pong"));
+		subscription.dispose();
+	}
+
+	private static ChatMessageFrame message(UUID roomId, String content) {
+		return new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", content, List.of());
 	}
 
 	private void broadcastRange(UUID roomId, UUID roomGeneration, String prefix, CountDownLatch start) {

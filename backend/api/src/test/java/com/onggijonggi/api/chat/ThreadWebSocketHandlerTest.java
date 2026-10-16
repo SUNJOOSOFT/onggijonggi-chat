@@ -544,6 +544,58 @@ class ThreadWebSocketHandlerTest {
 	}
 
 	/**
+	* 강퇴 사유(FORBIDDEN)는 그 방에 먼저 방송된 프레임 뒤에 온다(이슈 #405). kicked·left가 방 대기열을 거쳐
+	* 나가므로 핸들러는 left가 온 뒤에 사유를 보낸다 — 먼저 보내면 사유가 남은 방 프레임을 앞지른다. 강퇴 뒤
+	* 방송은 받지 않는다.
+	*/
+	@Test
+	void sendsTheEvictionReasonAfterTheRoomFramesBroadcastBeforeIt() throws Exception {
+		UUID threadId = rooms.openRoom("evicted-order-user");
+		int before = 20;
+		Sinks.Many<String> outbound = Sinks.many().unicast().onBackpressureBuffer();
+		List<String> received = new CopyOnWriteArrayList<>();
+		CountDownLatch subscribed = new CountDownLatch(1);
+		CountDownLatch arrived = new CountDownLatch(before + 1);
+		CountDownLatch completed = new CountDownLatch(1);
+		AtomicReference<Throwable> failure = new AtomicReference<>();
+
+		// 기다리는 수를 하나 더 잡아 둔다 — 강퇴 뒤 방송이 새어 들어오면 받을 수 있게 연결을 열어 둔다.
+		Disposable client = openClient("evicted-order-user", threadId, outbound, received, subscribed, arrived,
+				completed, failure, before + 2, frameTypes("error", "chat.message"));
+		try {
+			assertThat(subscribed.await(5, TimeUnit.SECONDS)).isTrue();
+			RoomSessionRegistry.RoomMembership observer = roomSessionRegistry.join(threadId, UUID.randomUUID(),
+					new PresenceParticipant("observer", "Observer"));
+			for (int i = 0; i < before; i++) {
+				roomSessionRegistry.broadcastIfCurrent(threadId, observer.generation(), new ChatMessageFrame(threadId,
+						UUID.randomUUID(), null, null, 0L, "observer", "Observer", "before-" + i, List.of()));
+			}
+			roomSessionRegistry.evict(threadId, "evicted-order-user");
+			roomSessionRegistry.broadcastIfCurrent(threadId, observer.generation(), new ChatMessageFrame(threadId,
+					UUID.randomUUID(), null, null, 0L, "observer", "Observer", "after eviction", List.of()));
+
+			assertThat(arrived.await(5, TimeUnit.SECONDS)).isTrue();
+			assertThat(failure.get()).isNull();
+
+			List<WsFrame> frames = received.stream().map(this::readFrame).toList();
+			assertThat(frames.subList(0, before)).extracting(frame -> ((ChatMessageFrame) frame).content())
+					.containsExactlyElementsOf(java.util.stream.IntStream.range(0, before)
+							.mapToObj(i -> "before-" + i).toList());
+			assertThat(frames.get(before)).isInstanceOfSatisfying(ErrorFrame.class, error -> {
+				assertThat(error.threadId()).isEqualTo(threadId);
+				assertThat(error.code()).isEqualTo("FORBIDDEN");
+			});
+			// 강퇴 뒤 방송은 오지 않는다 — 방 대기열이 다 빠진 뒤에도 받은 것은 그대로다.
+			Eventually.awaitIdle(roomSessionRegistry, threadId);
+			Thread.sleep(300);
+			assertThat(received).hasSize(before + 1);
+		} finally {
+			outbound.tryEmitComplete();
+			client.dispose();
+		}
+	}
+
+	/**
 	* 위 테스트가 ThreadWebSocketHandler 쪽 처리만 좁혀 봤다면, 이 테스트는 참가자 제거 REST
 	* 엔드포인트(ThreadParticipantService.remove)가 evict까지 실제로 부르는 배선(이슈 #135)이
 	* 이어져 있는지를 REST 호출 하나로 확인한다. 제거 뒤에도 커넥션이 살아 ping에 답한다(이슈 #161).
