@@ -9,6 +9,7 @@
 
 import type {
   ApprovalChangedFrame,
+  ChatActivityFrame,
   ChatAnswerFrame,
   ChatMessageFrame,
   ChatQueuedFrame,
@@ -38,6 +39,7 @@ export interface FrameHandlers {
   onChatTyping?: (frame: ChatTypingFrame) => void;
   onRoomSubscribed?: (frame: RoomSubscribedFrame) => void;
   onApprovalChanged?: (frame: ApprovalChangedFrame) => void;
+  onChatActivity?: (frame: ChatActivityFrame) => void;
 }
 
 export function routeFrame(frame: WsFrame, handlers: FrameHandlers): void {
@@ -80,6 +82,9 @@ export function routeFrame(frame: WsFrame, handlers: FrameHandlers): void {
       return;
     case 'approval.changed':
       handlers.onApprovalChanged?.(frame);
+      return;
+    case 'chat.activity':
+      handlers.onChatActivity?.(frame);
       return;
     default: {
       // frames.ts에 새 서브타입을 추가하고 여기 case를 안 채우면, frame이 never로 좁혀지지

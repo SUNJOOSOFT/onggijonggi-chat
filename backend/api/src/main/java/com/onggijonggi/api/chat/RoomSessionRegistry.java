@@ -225,6 +225,18 @@ public class RoomSessionRegistry {
 	}
 
 	/**
+	 * 그 세대의 화면 힌트(도구 진행 표시 등, 이슈 #397)를 보낸다. 방송처럼 현재 세대에만 넣지만 입퇴장·입력 중 통보와
+	 * 같은 부가 통보로 다룬다 — 듣는 사람이 없거나 통보 상한을 넘으면 버리고, 전송이 실패해도 그 세대를 닫지 않는다.
+	 * 힌트 하나 때문에 답변이 끊기거나 방송 자리를 먹지 않게 하려는 것이다. 같은 대기열이라 방송과의 순서는 지켜진다.
+	 */
+	public void notifyIfCurrent(UUID threadId, UUID roomGeneration, WsFrame frame) {
+		RoomState room = rooms.get(threadId);
+		if (room != null && room.generation().equals(roomGeneration)) {
+			room.offerActiveNotice(frame);
+		}
+	}
+
+	/**
 	 * 입력 중 알림을 방에 낸다. 그 커넥션이 이 방을 구독 중이고 협업방(presence가 켜진 방)일 때만
 	 * 보낸다 — 1:1 방에는 알릴 사람이 없다. presence처럼 부가 정보라 듣는 사람이 없으면 버리고
 	 * 실패해도 던지지 않는다. 입력한 본인에게 돌아가지 않게 거르는 것은 구독 쪽(ThreadWebSocketHandler) 몫이다.
@@ -543,6 +555,13 @@ public class RoomSessionRegistry {
 		synchronized void offerNotice(WsFrame frame) {
 			if (!offer(new Notice(frame, true))) {
 				log.debug("방 통보 대기열이 차서 버린다 threadId={} type={}", threadId, frame.getClass().getSimpleName());
+			}
+		}
+
+		/** 방이 활성일 때만 부가 통보를 넣는다 — 방 완료 신호 뒤에 들어가지 않게, 활성 판정과 넣기를 같은 잠금 안에서 한다. */
+		synchronized void offerActiveNotice(WsFrame frame) {
+			if (active) {
+				offerNotice(frame);
 			}
 		}
 

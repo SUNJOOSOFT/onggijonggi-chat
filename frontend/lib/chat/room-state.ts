@@ -192,6 +192,21 @@ export interface RoomState {
    * 큰 것"을 요구하는 값으로만 쓴다.
    */
   lastSeq: number | null;
+  /**
+   * 지금 AI 턴이 실행 중인 도구(이슈 #397). 방마다 AI 턴은 한 번에 하나라 한 칸이고, 다음 도구가 시작하면
+   * 덮어쓴다. 도구 끝 알림, 그 턴 답변의 종료, 종결 오류, 연결 끊김(clearActivity)에서 지운다 — 서버가
+   * 저장하지 않으므로 재접속한 화면은 다음 알림부터 본다.
+   */
+  activity: RoomActivity | null;
+}
+
+/** 실행 중인 도구 하나. 문구는 화면이 kind로 고른다(lib/chat/activity.ts). */
+export interface RoomActivity {
+  /** 그 턴의 AI 답변 msgId — 답변 말풍선이 이미 있으면 그 아래에 붙인다. */
+  msgId: string;
+  kind: string;
+  target: string | null;
+  agent: ChatAnswerFrame['agent'];
 }
 
 export const initialRoomState: RoomState = {
@@ -200,7 +215,26 @@ export const initialRoomState: RoomState = {
   notices: [],
   error: null,
   lastSeq: null,
+  activity: null,
 };
+
+/** 연결이 끊기면 진행 중 표시를 지운다 — 끊긴 동안 끝 알림을 놓칠 수 있다(이슈 #397). */
+export function clearActivity(state: RoomState): RoomState {
+  return state.activity === null ? state : { ...state, activity: null };
+}
+
+/** 그 msgId의 답변이 이미 있고 더 흐르지 않는지. 말풍선이 아직 없으면(도구가 첫 글자보다 먼저 돎) false다. */
+function isFinishedAnswer(state: RoomState, msgId: string): boolean {
+  const index = messageIndexById(state, msgId);
+  if (index === null) return false;
+  const entry = state.messages[index];
+  return !isMembershipNotice(entry) && !entry.streaming;
+}
+
+/** 그 턴의 진행 중 표시만 지운다. 다른 턴의 표시는 그대로 둔다. */
+function clearActivityOf(state: RoomState, msgId: string): RoomState {
+  return state.activity?.msgId === msgId ? { ...state, activity: null } : state;
+}
 
 /** error.code가 방 접근 거부인지. 화면은 이 경우에만 방 대신 안내를 그린다. */
 export function isForbidden(error: RoomError | null): boolean {
@@ -562,7 +596,7 @@ function extendAnswer(
 
 /**
  * 프레임 하나를 상태에 접는다. 알 수 없는 프레임은 parse-frame.ts가 이미 걸러내므로
- * 여기 도착하는 것은 계약 안의 열 가지뿐이고, switch는 그 열을 모두 다룬다.
+ * 여기 도착하는 것은 계약 안의 프레임뿐이고, switch는 그 전부를 다룬다.
  */
 export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
   switch (frame.type) {
@@ -652,6 +686,23 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       });
     }
 
+    // 도구 실행 중 표시(이슈 #397). 지금 도는 것 하나만 둔다 — 시작이면 덮어쓰고, 끝이면 그 턴의 것만 지운다.
+    // 이미 끝난 답변의 늦은 시작은 받지 않는다 — 서버가 경합 때 끝을 바로 잇지만, 그 끝을 못 받으면 완료된 말풍선
+    // 아래에 진행 표시가 남는다.
+    case 'chat.activity':
+      if (frame.active && isFinishedAnswer(state, frame.msgId)) return state;
+      return frame.active
+        ? {
+            ...state,
+            activity: {
+              msgId: frame.msgId,
+              kind: frame.kind,
+              target: frame.target,
+              agent: frame.agent,
+            },
+          }
+        : clearActivityOf(state, frame.msgId);
+
     case 'chat.message':
       // 같은 메시지가 이력으로도 실시간으로도 올 수 있다 — msgId로 한 번만 남긴다(이슈 #190).
       if (messageIndexById(state, frame.msgId) !== null) return state;
@@ -667,12 +718,17 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       );
 
     case 'chat.answer': {
+      // 답변이 끝나면(완료·중지·거부) 그 턴의 도구 진행 표시도 함께 지운다(이슈 #397).
+      const answered =
+        frame.status === 'streaming'
+          ? state
+          : clearActivityOf(state, frame.msgId);
       // 이전에는 "흐르는 중인 답변"을 뒤에서 찾았다. 이제 프레임이 자기 msgId를 들고 오므로
       // 그 값으로 직접 찾는다(이슈 #190) — 턴이 겹쳐도 어느 답변의 delta인지 분명하다.
-      const index = messageIndexById(state, frame.msgId);
+      const index = messageIndexById(answered, frame.msgId);
       if (index !== null) {
         return extendAnswer(
-          state,
+          answered,
           index,
           frame.delta,
           frame.status,
@@ -699,10 +755,10 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
         frame.groundingNotice === null &&
         frame.agent === null
       ) {
-        return state;
+        return answered;
       }
       const appended = appendMessage(
-        state,
+        answered,
         frame.msgId,
         frame.seq,
         null,
@@ -731,10 +787,13 @@ export function applyFrame(state: RoomState, frame: WsFrame): RoomState {
       const index = streamingAnswerIndex(state);
       // 종결 오류는 흐름만 끊는다 — 중지·거부와 달리 사용자가 고른 결말이 아니라
       // terminalStatus를 남기지 않는다. 사유는 방 위 배너(error)가 따로 알린다.
-      const nextState =
-        index !== null && TERMINAL_AI_ERROR_CODES.has(frame.code)
+      const terminal = TERMINAL_AI_ERROR_CODES.has(frame.code);
+      const ended =
+        index !== null && terminal
           ? extendAnswer(state, index, '', 'done', [], false)
           : state;
+      // 종결 오류는 턴을 끝내므로 도구 진행 표시도 지운다(이슈 #397). 답변 말풍선이 생기기 전에 끝났을 수도 있다.
+      const nextState = terminal ? clearActivity(ended) : ended;
       return {
         ...nextState,
         error: {

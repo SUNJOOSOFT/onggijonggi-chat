@@ -12,6 +12,7 @@ import {
   type RoomState,
   applyFrame,
   applyHistory,
+  clearActivity,
   clearRoomError,
   dismissNotice,
   initialRoomState,
@@ -1011,5 +1012,153 @@ describe('재접속 따라잡기 커서(#190)', () => {
     const caughtUp = applyHistory(entered, [item('b', 97, '둘')]);
     expect(chats(caughtUp).map((m) => m.seq)).toEqual([0, 97]);
     expect(caughtUp.lastSeq).toBe(97);
+  });
+});
+
+describe('applyFrame - chat.activity(이슈 #397)', () => {
+  function activity(
+    active: boolean,
+    kind = 'WEB_SEARCH',
+    target: string | null = '서울 날씨',
+    msgId = 'agent-msg-1',
+    agent: 'sol' | 'fin' | 'law' | null = null,
+  ): WsFrame {
+    return {
+      type: 'chat.activity',
+      threadId: THREAD,
+      msgId,
+      turnId: null,
+      kind,
+      target,
+      active,
+      agent,
+    };
+  }
+
+  it('역할 에이전트를 함께 들어, 협업방 AI 자리에 그 이름을 쓸 수 있다', () => {
+    const state = fold([
+      activity(true, 'WEB_SEARCH', '환율', 'agent-msg-1', 'fin'),
+    ]);
+    expect(state.activity?.agent).toBe('fin');
+  });
+
+  it('같은 턴의 다음 도구 시작은 흐르는 답변이 있어도 표시를 바꾼다', () => {
+    const state = fold([
+      answer('먼저 찾아볼게요', 'streaming'),
+      activity(true, 'WEB_FETCH', 'https://example.org'),
+    ]);
+    expect(state.activity?.kind).toBe('WEB_FETCH');
+  });
+
+  it('시작하면 들고, 끝나면 지운다', () => {
+    const started = fold([activity(true)]);
+    expect(started.activity).toEqual({
+      msgId: 'agent-msg-1',
+      kind: 'WEB_SEARCH',
+      target: '서울 날씨',
+      agent: null,
+    });
+    expect(fold([activity(false)], started).activity).toBeNull();
+  });
+
+  it('다음 도구가 시작하면 그 도구로 바뀐다 — 지금 도는 것만 둔다', () => {
+    const state = fold([
+      activity(true, 'DOCUMENT_SEARCH', '연장근로'),
+      activity(false, 'DOCUMENT_SEARCH', '연장근로'),
+      activity(true, 'DOCUMENT_REVISE', '규정.docx'),
+    ]);
+    expect(state.activity?.kind).toBe('DOCUMENT_REVISE');
+    expect(state.activity?.target).toBe('규정.docx');
+  });
+
+  it('다른 턴의 끝 알림은 무시한다', () => {
+    const state = fold([
+      activity(true),
+      activity(false, 'WEB_SEARCH', null, 'agent-msg-2'),
+    ]);
+    expect(state.activity?.msgId).toBe('agent-msg-1');
+  });
+
+  it('그 턴의 답변이 끝나면(완료·중지) 함께 지운다', () => {
+    expect(
+      fold([activity(true), answer('답', 'streaming')]).activity,
+    ).not.toBeNull();
+    expect(fold([activity(true), answer('', 'done')]).activity).toBeNull();
+    expect(fold([activity(true), answer('', 'cancelled')]).activity).toBeNull();
+  });
+
+  it('종결 오류는 답변 말풍선이 없어도 지운다', () => {
+    const state = fold([
+      activity(true),
+      {
+        type: 'error',
+        threadId: THREAD,
+        code: 'MODEL_UNAVAILABLE',
+        message: 'm',
+        traceId: 't',
+      },
+    ]);
+    expect(state.activity).toBeNull();
+  });
+
+  it('다른 턴의 답변 종료는 지금 표시를 지우지 않는다', () => {
+    expect(
+      fold([activity(true), answer('', 'done', { msgId: 'agent-msg-2' })])
+        .activity?.msgId,
+    ).toBe('agent-msg-1');
+    expect(
+      fold([activity(true), answer('', 'cancelled', { msgId: 'agent-msg-2' })])
+        .activity?.msgId,
+    ).toBe('agent-msg-1');
+  });
+
+  it('거부로 끝나도 지운다', () => {
+    expect(fold([activity(true), answer('', 'denied')]).activity).toBeNull();
+  });
+
+  it('종결이 아닌 오류는 표시를 그대로 둔다', () => {
+    const state = fold([
+      activity(true),
+      {
+        type: 'error',
+        threadId: THREAD,
+        code: 'RATE_LIMITED',
+        message: 'm',
+        traceId: 't',
+      },
+    ]);
+    expect(state.activity?.msgId).toBe('agent-msg-1');
+  });
+
+  it('이미 끝난 답변의 늦은 시작은 받지 않는다', () => {
+    const state = fold([
+      answer('답', 'streaming'),
+      answer('', 'done'),
+      activity(true),
+    ]);
+    expect(state.activity).toBeNull();
+  });
+
+  it('말풍선 없이 시작한 표시는 첫 조각에도 남고, 그 턴이 끝나면 지워진다', () => {
+    const streaming = fold([activity(true), answer('첫 조각', 'streaming')]);
+    expect(streaming.activity?.msgId).toBe('agent-msg-1');
+    expect(fold([answer('', 'done')], streaming).activity).toBeNull();
+  });
+
+  it('입장·명단 프레임은 표시를 건드리지 않는다', () => {
+    const state = fold([
+      activity(true),
+      {
+        type: 'presence.snapshot',
+        threadId: THREAD,
+        participants: [],
+      },
+    ]);
+    expect(state.activity?.msgId).toBe('agent-msg-1');
+  });
+
+  it('연결이 끊기면 clearActivity로 지운다', () => {
+    expect(clearActivity(fold([activity(true)])).activity).toBeNull();
+    expect(clearActivity(initialRoomState)).toBe(initialRoomState);
   });
 });

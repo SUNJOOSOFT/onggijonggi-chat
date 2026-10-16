@@ -1304,10 +1304,47 @@ public class ThreadMessageDispatcher {
 			return terminalClaimed.compareAndSet(false, true);
 		}
 
+		/**
+		* 이 턴의 도구 실행 시작·끝을 방에 활동 프레임으로 알린다(이슈 #397). 이미 끝난 턴(완료·중지·오류)의 늦은
+		* 알림은 보내지 않는다 — 끝난 턴에서도 이미 요청된 도구는 끝까지 돌기 때문이다(#390). 진행 표시는 화면 힌트라
+		* 방송이 아니라 부가 통보로 보낸다(notifyIfCurrent) — 넘치거나 전송이 실패하면 버려질 뿐 답변 세대를 닫지 않고,
+		* 방송 대기열 자리도 먹지 않는다. 버려진 "끝"은 화면이 답변 종료·종결 오류·연결 끊김에서 지운다.
+		*/
+		private final class ActivityBroadcaster implements ToolExecutionListener {
+
+			@Override
+			public void started(String toolName, String input) {
+				ToolActivity.of(toolName, input, json).ifPresent(activity -> broadcast(activity, true));
+			}
+
+			@Override
+			public void finished(ToolExecution execution) {
+				ToolActivity.of(execution.toolName(), execution.input(), json)
+						.ifPresent(activity -> broadcast(activity, false));
+			}
+
+			private void broadcast(ToolActivity activity, boolean active) {
+				if (terminalClaimed.get()) return;
+				send(activity, active);
+				// 위 확인과 넣기 사이에 턴이 끝났으면 "시작"이 종료 프레임 뒤에 들어갔을 수 있다 — 그러면 화면은 지울
+				// 계기를 다시 못 받아(그 뒤 "끝"은 위에서 막힌다) 표시가 남는다. 다시 보고 끝났으면 "끝"을 바로 잇는다.
+				if (active && terminalClaimed.get()) {
+					send(activity, false);
+				}
+			}
+
+			private void send(ToolActivity activity, boolean active) {
+				roomSessionRegistry.notifyIfCurrent(turn.threadId(), turn.roomGeneration(),
+						new ChatActivityFrame(turn.threadId(), msgId, turn.turnId(), activity.kind(), activity.target(),
+								active, turn.agent()));
+			}
+		}
+
 		ActiveTurn(PendingTurn turn, SeqBlock seqBlock) {
 			this.turn = turn;
 			this.terminalPersisted = turn.terminalPersisted();
-			this.toolExecutions = new TurnToolExecutions(turn.threadId(), turn.traceId(), List.of());
+			this.toolExecutions = new TurnToolExecutions(turn.threadId(), turn.traceId(),
+					List.of(new ActivityBroadcaster()));
 			if (turn.reservedTurn() != null) {
 				// DIRECT — PENDING AGENT는 DirectChatTurnService가 이미 만들어뒀다(이슈 #162).
 				// 새로 만들지 않고 그 msgId·seq를 그대로 쓴다.

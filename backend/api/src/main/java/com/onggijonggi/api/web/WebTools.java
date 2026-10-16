@@ -27,6 +27,11 @@ public class WebTools {
 
 	private static final Logger log = LoggerFactory.getLogger(WebTools.class);
 
+	/** 모델이 부르는 도구 이름. 방 진행 표시(ToolActivity, 이슈 #397)가 이 이름으로 종류를 고른다. */
+	public static final String SEARCH_NAME = "webSearch";
+
+	public static final String FETCH_NAME = "webFetch";
+
 	static final String ALLOWED_URLS = "webAllowedUrls";
 	private static final Pattern URL = Pattern.compile("https?://[^\\s<>\"'`(){}\\[\\]]+");
 	/** 문장 끝 구두점은 주소에서 뺀다("https://a.com/x." → "https://a.com/x"). */
@@ -62,7 +67,7 @@ public class WebTools {
 		return Map.of(ALLOWED_URLS, allowed);
 	}
 
-	@Tool(description = "웹을 검색해 제목·주소·요약 목록을 돌려준다. 최신 정보나 대화·문서에 없는 사실이 필요할 때 쓴다. "
+	@Tool(name = SEARCH_NAME, description = "웹을 검색해 제목·주소·요약 목록을 돌려준다. 최신 정보나 대화·문서에 없는 사실이 필요할 때 쓴다. "
 			+ "사용자가 웹 검색을 요청하면 반드시 이 도구를 호출하고, 호출하지 않았다면 웹에서 찾았다고 말하지 않는다. "
 			+ "검색어에 사내 문서 내용이나 개인정보를 넣지 않는다.")
 	public String webSearch(@ToolParam(description = "검색어") String query, ToolContext toolContext) {
@@ -88,7 +93,7 @@ public class WebTools {
 		return out.toString().stripTrailing();
 	}
 
-	@Tool(description = "웹 페이지의 본문 글자를 읽는다. 이번 대화의 웹 검색 결과에 나온 주소나 사용자가 보낸 주소만 읽을 수 있다.")
+	@Tool(name = FETCH_NAME, description = "웹 페이지의 본문 글자를 읽는다. 이번 대화의 웹 검색 결과에 나온 주소나 사용자가 보낸 주소만 읽을 수 있다.")
 	public String webFetch(@ToolParam(description = "읽을 페이지 주소(http·https)") String url, ToolContext toolContext) {
 		String key = url == null ? null : key(url.strip());
 		if (key == null) return "올바른 주소가 아니다.";

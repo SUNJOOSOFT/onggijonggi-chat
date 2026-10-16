@@ -975,6 +975,32 @@ class RoomSessionRegistryTest {
 		subscription.dispose();
 	}
 
+	/**
+	* 화면 힌트(notifyIfCurrent, 이슈 #397)는 그 세대에만 가고, 전송이 실패해도 방송 실패로 알리지 않는다 — 힌트 하나 때문에
+	* 답변 세대가 닫히지 않게. 옛 세대로는 들어가지 않는다.
+	*/
+	@Test
+	void currentGenerationHintsReachListenersButNeverReportABroadcastFailure() {
+		UUID roomId = UUID.randomUUID();
+		List<List<UUID>> failures = new CopyOnWriteArrayList<>();
+		registry.onBroadcastFailure((threadId, generation) -> failures.add(List.of(threadId, generation)));
+		RoomSessionRegistry.RoomMembership membership = registry.join(roomId, UUID.randomUUID(), anyone());
+		List<WsFrame> received = new CopyOnWriteArrayList<>();
+		Disposable subscription = membership.frames().subscribe(received::add);
+
+		ChatMessageFrame hint = message(roomId, "hint");
+		registry.notifyIfCurrent(roomId, membership.generation(), hint);
+		registry.notifyIfCurrent(roomId, UUID.randomUUID(), message(roomId, "stale"));
+		eventually(() -> assertThat(received).containsExactly(hint));
+
+		// 듣는 사람 없이 warm-up 버퍼를 넘겨도(방송이면 실패 알림이 갈 상황) 힌트는 조용히 버려진다.
+		subscription.dispose();
+		registry.notifyIfCurrent(roomId, membership.generation(), message(roomId, "a"));
+		registry.notifyIfCurrent(roomId, membership.generation(), message(roomId, "b"));
+		awaitIdle(registry, roomId);
+		assertThat(failures).isEmpty();
+	}
+
 	private static ChatMessageFrame message(UUID roomId, String content) {
 		return new ChatMessageFrame(roomId, UUID.randomUUID(), null, null, 0L, "someone", "누군가", content, List.of());
 	}

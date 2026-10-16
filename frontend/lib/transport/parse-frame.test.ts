@@ -91,12 +91,12 @@ describe('parseFrame', () => {
       status: 'streaming',
       agent: null,
     };
-    expect(
-      parseFrame({ ...base, groundingNotice: 'no_evidence' })?.type,
-    ).toBe('chat.answer');
-    expect(
-      parseFrame({ ...base, groundingNotice: 'unavailable' })?.type,
-    ).toBe('chat.answer');
+    expect(parseFrame({ ...base, groundingNotice: 'no_evidence' })?.type).toBe(
+      'chat.answer',
+    );
+    expect(parseFrame({ ...base, groundingNotice: 'unavailable' })?.type).toBe(
+      'chat.answer',
+    );
   });
 
   it('groundingNotice가 빠지거나 모르는 값이면 null(필수 필드)', () => {
@@ -114,7 +114,9 @@ describe('parseFrame', () => {
       agent: null,
     };
     expect(parseFrame(base)).toBeNull();
-    expect(parseFrame({ ...base, groundingNotice: 'something_else' })).toBeNull();
+    expect(
+      parseFrame({ ...base, groundingNotice: 'something_else' }),
+    ).toBeNull();
   });
 
   it('chat.answer의 status:"done"을 파싱한다', () => {
@@ -566,4 +568,25 @@ describe('parseFrame — system.notice(#29)', () => {
     });
   });
 
+  it('chat.activity를 파싱하고, 모르는 kind도 받는다(이슈 #397)', () => {
+    const frame = {
+      type: 'chat.activity',
+      threadId: 't',
+      msgId: 'm',
+      turnId: null,
+      kind: 'SOMETHING_NEW',
+      target: null,
+      active: true,
+      agent: 'fin',
+    };
+    expect(parseFrame(frame)).toEqual(frame);
+    const { active: _active, ...withoutActive } = frame;
+    expect(parseFrame(withoutActive)).toBeNull();
+    expect(parseFrame({ ...frame, target: '서울 날씨' })).toEqual({
+      ...frame,
+      target: '서울 날씨',
+    });
+    expect(parseFrame({ ...frame, active: 'true' })).toBeNull();
+    expect(parseFrame({ ...frame, agent: 'xyz' })).toBeNull();
+  });
 });

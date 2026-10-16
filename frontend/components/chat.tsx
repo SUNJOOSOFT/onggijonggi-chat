@@ -34,6 +34,8 @@ import {
   type ThreadMessageItem,
   fetchThreadMessages,
 } from '@/lib/api/thread-history';
+import { activityLabel } from '@/lib/chat/activity';
+import { useLingeringActivity } from '@/lib/chat/use-lingering-activity';
 import type { RenderedMessage } from '@/lib/chat/rendered-message';
 import { type RoomMessage, isNotice } from '@/lib/chat/room-state';
 import { useRoom } from '@/lib/chat/use-room';
@@ -170,6 +172,8 @@ function ChatSession({
     onHistoryError: handleHistoryError,
   });
   const { send, cancel, cancellableTurnId, dismissError, dismissNotice } = room;
+  // 도구가 연달아 돌 때 그 사이 빈틈에 표시가 깜박이지 않게 지울 때만 잠깐 남긴다(이슈 #397).
+  const activity = useLingeringActivity(room.state.activity);
 
   // 입퇴장 줄은 1:1에 오지 않지만 타입상 섞여 있어 한 번 걸러 둔다.
   const roomMessages = useMemo(
@@ -525,6 +529,9 @@ function ChatSession({
               failedMessageIds={failedMessageIds}
               onResendFailedMessage={handleResendFailedMessage}
               onAppendTurn={sendTurn}
+              activityLabel={
+                activity ? activityLabel(activity.kind, activity.target) : null
+              }
             />
 
             {isInaccessible && (

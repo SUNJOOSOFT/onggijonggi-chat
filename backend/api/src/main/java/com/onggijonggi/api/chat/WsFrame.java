@@ -28,10 +28,11 @@ import com.fasterxml.jackson.annotation.JsonTypeInfo;
 		@JsonSubTypes.Type(value = PongFrame.class, name = "pong"),
 		@JsonSubTypes.Type(value = ChatTypingFrame.class, name = "chat.typing"),
 		@JsonSubTypes.Type(value = RoomSubscribedFrame.class, name = "room.subscribed"),
-		@JsonSubTypes.Type(value = ApprovalChangedFrame.class, name = "approval.changed")
+		@JsonSubTypes.Type(value = ApprovalChangedFrame.class, name = "approval.changed"),
+		@JsonSubTypes.Type(value = ChatActivityFrame.class, name = "chat.activity")
 })
 public sealed interface WsFrame
 		permits ChatAnswerFrame, PresenceJoinFrame, PresenceLeaveFrame, PresenceSnapshotFrame,
 		ChatMessageFrame, SystemNoticeFrame, ErrorFrame, ParticipantChangedFrame, ChatQueuedFrame, PongFrame,
-		ChatTypingFrame, RoomSubscribedFrame, ApprovalChangedFrame {
+		ChatTypingFrame, RoomSubscribedFrame, ApprovalChangedFrame, ChatActivityFrame {
 }

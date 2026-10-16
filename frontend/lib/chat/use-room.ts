@@ -34,6 +34,7 @@ import {
   advanceCursor,
   applyFrame,
   applyHistory,
+  clearActivity,
   clearRoomError,
   dismissNotice as dismissNoticeIn,
   initialRoomState,
@@ -332,6 +333,8 @@ export function useRoom(threadId: string, options: UseRoomOptions): Room {
         setConnection(open ? 'open' : 'reconnecting');
         if (!open) {
           reconnected = true;
+          // 끊긴 동안 도구 끝 알림을 놓칠 수 있어 진행 중 표시를 지운다 — 다시 붙으면 다음 알림부터 본다(이슈 #397).
+          setState(clearActivity);
           return;
         }
         // 최초 연결 따라잡기(#208) — 이 open이 이 마운트에서 처음이면 wsOpenedOnce를 세우고

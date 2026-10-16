@@ -35,12 +35,14 @@ import { useEffect, useMemo, useState } from 'react';
 import { MessageAttachments } from '@/components/attachments';
 import { CitationsPanel } from '@/components/citations-panel';
 import { Markdown } from '@/components/markdown';
+import { ActivityLine } from '@/components/message';
 import { NoticeBanner } from '@/components/notice-banner';
 import { SidebarToggle } from '@/components/sidebar-toggle';
 import { useScrollToBottom } from '@/components/use-scroll-to-bottom';
 import { Button } from '@/components/ui/button';
 import { fetchCollabThreads } from '@/lib/api/collab';
 import type { ThreadApproval } from '@/lib/api/thread-approvals';
+import { activityLabel } from '@/lib/chat/activity';
 import type {
   RoomApprovalNotice,
   RoomMembershipNotice,
@@ -52,6 +54,7 @@ import {
   isMembershipNotice,
   isNotice,
 } from '@/lib/chat/room-state';
+import { useLingeringActivity } from '@/lib/chat/use-lingering-activity';
 import { typingLabel } from '@/lib/chat/typing';
 import { useThreadApprovals } from '@/lib/collab/use-thread-approvals';
 import {
@@ -117,9 +120,12 @@ function agentLabel(agent: RoomMessage['agent']): string {
 function MessageRow({
   message,
   onRequestApproval,
+  activity = null,
 }: {
   message: RoomMessage;
   onRequestApproval: (messageId: string) => void;
+  /** 이 답변의 턴이 지금 실행 중인 도구의 문구(이슈 #397). */
+  activity?: string | null;
 }) {
   const isAi = message.from === null;
   // 쓰는 중인 답변은 서버가 승인 대상에서 제외하고, 본문 없는 메시지는 보여 줄 내용이 없어 요청하지 않는다.
@@ -151,6 +157,7 @@ function MessageRow({
               }}
             />
           )}
+          {activity && <ActivityLine label={activity} className="" />}
         </>
       ) : (
         <>
@@ -232,6 +239,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
     onOpenRequest: setReviewing,
   });
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
+  // 도구가 연달아 돌 때 그 사이 빈틈에 표시가 깜박이지 않게 지울 때만 잠깐 남긴다(이슈 #397).
+  const activity = useLingeringActivity(state.activity);
   const title = useThreadTitle(threadId);
   // 방 문서 패널의 첨부에 보낸 사람 이름을 붙인다. 첨부는 메시지에 실려 오므로 작성자에서 찾는다.
   const senderNames = useMemo(() => {
@@ -357,9 +366,29 @@ export function CollabRoom({ threadId }: { threadId: string }) {
                     key={entry.id}
                     message={entry}
                     onRequestApproval={setRequestingMessageId}
+                    activity={
+                      activity?.msgId === entry.id
+                        ? activityLabel(activity.kind, activity.target)
+                        : null
+                    }
                   />
                 ),
               )}
+              {/* 답변 말풍선이 생기기 전에 도구가 돌면 AI 자리를 만들어 문구를 보인다(이슈 #397). */}
+              {activity &&
+                !state.messages.some(
+                  (entry) => entry.id === activity.msgId,
+                ) && (
+                  <div className="flex flex-col gap-1 rounded-lg bg-muted/60 px-3 py-2">
+                    <span className="text-xs font-medium text-muted-foreground">
+                      {agentLabel(activity.agent)}
+                    </span>
+                    <ActivityLine
+                      className=""
+                      label={activityLabel(activity.kind, activity.target)}
+                    />
+                  </div>
+                )}
               <div ref={endRef} className="min-h-6 shrink-0" />
             </div>
 

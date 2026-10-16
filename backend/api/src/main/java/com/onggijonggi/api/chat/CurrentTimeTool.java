@@ -23,6 +23,9 @@ import org.springframework.stereotype.Component;
 @Component
 public class CurrentTimeTool {
 
+	/** 모델이 부르는 도구 이름. 방 진행 표시(ToolActivity, 이슈 #397)는 이 도구를 알리지 않는다. */
+	static final String NAME = "currentDateTime";
+
 	static final String TIME_ZONE = "timeZone";
 	/** IANA 시간대 이름의 길이 상한. 클라이언트가 보내는 값이라 해석 전에 자른다. */
 	private static final int MAX_ZONE_LENGTH = 64;
@@ -45,7 +48,7 @@ public class CurrentTimeTool {
 		return Map.of(TIME_ZONE, zoneOf(requested));
 	}
 
-	@Tool(description = "사용자 시간대 기준의 현재 날짜·시각·요일을 돌려준다. 오늘, 지금, 요일, 며칠 뒤처럼 현재 시점이 필요한 질문에 쓴다.")
+	@Tool(name = NAME, description = "사용자 시간대 기준의 현재 날짜·시각·요일을 돌려준다. 오늘, 지금, 요일, 며칠 뒤처럼 현재 시점이 필요한 질문에 쓴다.")
 	public String currentDateTime(ToolContext toolContext) {
 		Object zone = toolContext.getContext().get(TIME_ZONE);
 		ZonedDateTime now = ZonedDateTime.now(clock.withZone(zone instanceof ZoneId id ? id : defaultZone))

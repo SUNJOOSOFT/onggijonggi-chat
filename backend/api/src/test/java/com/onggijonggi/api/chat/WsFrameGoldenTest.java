@@ -87,6 +87,8 @@ class WsFrameGoldenTest {
 		samples.put("approval.changed", new ApprovalChangedFrame(THREAD_ID, APPROVAL_ID,
 				ApprovalNotice.Event.REQUESTED, participant.subject(), participant.displayName(), "kc-2", "이한결",
 				MSG_ID, 44L));
+		samples.put("chat.activity", new ChatActivityFrame(THREAD_ID, MSG_ID, TURN_ID, "WEB_SEARCH", "서울 날씨", true,
+				Agent.FIN));
 		return samples;
 	}
 
