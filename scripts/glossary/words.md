@@ -43,6 +43,7 @@
 | `agent` | 에이전트 |
 | `answer` | 답변 |
 | `app` | 애플리케이션 |
+| `approval` | 승인 |
 | `author` | 작성자 |
 | `archived` | 보관됨 |
 | `at` | 시점 |
@@ -126,6 +127,7 @@
 | 영문 | 축약 | 사유 |
 |---|---|---|
 | `authz` | `authz` | `author`의 `ath`와 충돌 |
+| `approval` | `apv` | 알고리즘 결과 `app`이 `app`(애플리케이션)과 충돌 |
 | `event` | `evt` | 기존 이벤트 식별자 관용 |
 | `identifier` | `id` | 관용어(팀 합의) |
 | `password` | `pw` | 관용어(팀 합의) |

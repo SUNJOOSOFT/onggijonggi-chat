@@ -13,6 +13,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `agn` | `agent` | 에이전트 | 알고리즘 | - |
 | `ans` | `answer` | 답변 | 알고리즘 | - |
 | `app` | `app` | 애플리케이션 | 알고리즘 | - |
+| `apv` | `approval` | 승인 | 예외 | 알고리즘 결과 `app`이 `app`(애플리케이션)과 충돌 |
 | `archived` | `archived` | 보관됨 | 예외 | 관용 유지 — `archived_at` 대칭, 기존 `created`/`updated`/`deleted`와 동일 패턴 |
 | `at` | `at` | 시점 | 알고리즘 | - |
 | `att` | `attempt` | 시도 | 알고리즘 | - |
