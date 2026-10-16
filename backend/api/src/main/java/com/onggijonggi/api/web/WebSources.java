@@ -6,6 +6,7 @@ import java.util.ArrayList;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.regex.Pattern;
 
 /**
  * Class Name : WebSources.java
@@ -26,6 +27,8 @@ public class WebSources {
 	static final int MAX_TITLE = 200;
 	/** 이보다 긴 주소는 출처로 남기지 않는다 — 잘라 쓰면 다른 주소가 된다. */
 	static final int MAX_URL = 2000;
+	/** 제어 문자(C0·C1)와 줄·문단 구분 문자 — 한 줄로 보여야 하는 제목·요약·검색어에서 공백으로 바꾼다. */
+	private static final Pattern CONTROL = Pattern.compile("[\\p{Cc}\\u2028\\u2029]+");
 
 	/**
 	 * 웹 출처 하나.
@@ -70,6 +73,11 @@ public class WebSources {
 				earlier.snippet(), earlier.query(), true));
 	}
 
+	/** 모은 출처 수 — 상한으로 덜어 내기 전. 운영 로그가 남긴 수와 나란히 찍어 상한에 걸렸는지 본다. */
+	public synchronized int collected() {
+		return sources.size();
+	}
+
 	/** 남길 출처를 넣은 순서대로 돌려준다. 상한을 넘으면 읽은 페이지를 먼저 고르고 남는 자리를 검색 결과로 채운다. */
 	public synchronized List<Source> sources() {
 		List<Source> all = new ArrayList<>(sources.values());
@@ -110,10 +118,10 @@ public class WebSources {
 		return shown.length() <= MAX_URL && WebTools.key(shown) != null ? shown : null;
 	}
 
-	/** 제어 문자(줄바꿈 포함)를 공백으로 바꾸고, 글자(코드 포인트) 단위로 자른다 — UTF-16 단위로 자르면 이모지가 갈린다. */
+	/** 제어 문자(줄바꿈 포함)·줄 구분 문자를 공백으로 바꾸고, 글자(코드 포인트) 단위로 자른다 — UTF-16 단위로 자르면 이모지가 갈린다. */
 	private static String clean(String text, int max) {
 		if (text == null) return "";
-		String flat = text.replaceAll("\\p{Cntrl}+", " ").strip();
+		String flat = CONTROL.matcher(text).replaceAll(" ").strip();
 		if (flat.codePointCount(0, flat.length()) <= max) return flat;
 		return flat.substring(0, flat.offsetByCodePoints(0, max)) + "…";
 	}

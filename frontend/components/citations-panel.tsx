@@ -124,7 +124,8 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
               onToggle={() => setDocumentsExpanded((prev) => !prev)}
               controls={documentsListId}
             >
-              📚 근거 검색됨 ({documents.length}건)
+              <span aria-hidden="true">📚</span> 근거 검색됨 ({documents.length}
+              건)
             </PanelToggle>
           )}
           {web.length > 0 && (
@@ -133,7 +134,7 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
               onToggle={() => setWebExpanded((prev) => !prev)}
               controls={webListId}
             >
-              🌐 웹 출처 ({web.length}건)
+              <span aria-hidden="true">🌐</span> 웹 출처 ({web.length}건)
             </PanelToggle>
           )}
         </div>
@@ -185,7 +186,7 @@ export function CitationsPanel({ state }: { state: CitationsState }) {
           >
             {queries.length > 0 && (
               <div className="text-muted-foreground [overflow-wrap:anywhere]">
-                검색어: {queries.join(' · ')}
+                검색어: {queries.map((query) => `“${query}”`).join(', ')}
               </div>
             )}
             <ul className="flex min-w-0 flex-col gap-2">
@@ -234,7 +235,8 @@ function PanelToggle({
       type="button"
       onClick={onToggle}
       aria-expanded={expanded}
-      aria-controls={controls}
+      // 접힌 동안엔 목록이 화면에 없다 — 없는 id를 가리키지 않게 펼쳤을 때만 잇는다.
+      aria-controls={expanded ? controls : undefined}
       className="flex items-center gap-1 text-muted-foreground hover:text-foreground px-2 py-1"
     >
       {children}
@@ -248,7 +250,8 @@ function PanelToggle({
 /**
  * 웹 출처 한 건 — 제목(http·https면 새 탭 링크)·도메인·읽음 표시·요약. 제목·요약은 웹 페이지가 정한 글자라
  * 방향 바꾸기 문자를 빼고, 공백 없는 긴 주소도 줄을 바꾼다. 도메인은 퓨니코드(xn--) 그대로 둔다 — 비슷하게 생긴
- * 다른 글자로 꾸민 도메인이 진짜처럼 보이지 않게. 링크에 마우스를 올리면 실제 주소가 보인다.
+ * 다른 글자로 꾸민 도메인이 진짜처럼 보이지 않게. 링크에 마우스를 올리면 실제 주소가 보인다. 제목이 없어 도메인을
+ * 제목으로 쓴 경우엔 도메인을 한 번만 보인다. 링크는 터치 화면에서도 알아보게 늘 옅은 밑줄을 긋는다.
  */
 function WebSourceItem({ citation }: { citation: Citation }) {
   const href = safeWebUrl(citation.url);
@@ -265,7 +268,7 @@ function WebSourceItem({ citation }: { citation: Citation }) {
             title={href}
             target="_blank"
             rel="noopener noreferrer"
-            className="underline-offset-2 hover:underline"
+            className="underline decoration-muted-foreground/40 underline-offset-2 hover:decoration-foreground"
           >
             {title}
             <span className="sr-only"> (새 탭에서 열림)</span>
@@ -273,14 +276,29 @@ function WebSourceItem({ citation }: { citation: Citation }) {
         ) : (
           title
         )}
-        {host && <span className="text-muted-foreground"> · {host}</span>}
+        {host && !sameHost(title, host) && (
+          <span className="text-muted-foreground"> · {host}</span>
+        )}
         {citation.read && (
-          <span className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground">
+          <span
+            title="AI가 이 페이지 본문을 읽었습니다"
+            className="ml-1.5 rounded border px-1 text-[10px] text-muted-foreground"
+          >
             읽음
           </span>
         )}
       </div>
       {citation.snippet && <div>{withoutDisguising(citation.snippet)}</div>}
     </li>
+  );
+}
+
+/** 제목이 곧 도메인인지(www. 제외, 대소문자 무시) — 같으면 " · 도메인"을 덧붙이지 않는다. */
+function sameHost(title: string, host: string): boolean {
+  return (
+    title
+      .trim()
+      .toLowerCase()
+      .replace(/^www\./, '') === host.toLowerCase()
   );
 }
