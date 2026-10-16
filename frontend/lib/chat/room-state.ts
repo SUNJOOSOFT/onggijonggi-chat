@@ -228,7 +228,7 @@ function isFinishedAnswer(state: RoomState, msgId: string): boolean {
   const index = messageIndexById(state, msgId);
   if (index === null) return false;
   const entry = state.messages[index];
-  return !isMembershipNotice(entry) && !entry.streaming;
+  return !isNotice(entry) && !entry.streaming;
 }
 
 /** 그 턴의 진행 중 표시만 지운다. 다른 턴의 표시는 그대로 둔다. */
