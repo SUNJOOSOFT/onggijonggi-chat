@@ -115,7 +115,7 @@ public class ThreadApprovalService {
 			Row row = find(approvalId);
 			if (inserted == 0 && !sameRequest(row, threadId, messageId, actor.userId(), target.getId())) throw conflict();
 			ApprovalNotice notice = inserted == 1 ? new ApprovalNotice(ApprovalNotice.Event.REQUESTED, approvalId,
-					row.requesterSubject(), row.targetSubject()) : null;
+					row.requesterSubject(), row.targetSubject(), row.message(), null) : null;
 			return new Outcome(view(row, actor, access), notice);
 		}));
 	}
@@ -140,7 +140,7 @@ public class ThreadApprovalService {
 			if (current.status().equals("PENDING")) {
 				jdbc.update("update thr_apv set status = ?, rsn = ?, completed_at = now() where id = ?", wanted, note, approvalId);
 				notice = new ApprovalNotice(ApprovalNotice.Event.valueOf(wanted), approvalId, current.requesterSubject(),
-						current.targetSubject());
+						current.targetSubject(), current.message(), note);
 			} else if (!current.status().equals(wanted)) {
 				throw conflict();
 			}

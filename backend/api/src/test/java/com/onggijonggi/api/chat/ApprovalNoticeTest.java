@@ -15,13 +15,25 @@ class ApprovalNoticeTest {
 
 	private final ObjectMapper objectMapper = new JsonMapper();
 	private final ApprovalNotice notice = new ApprovalNotice(ApprovalNotice.Event.REJECTED, UUID.randomUUID(),
-			"kc-1", "kc-2");
+			"kc-1", "kc-2", UUID.randomUUID(), "근거 자료가 없습니다");
 
 	@Test
 	void roundTripsThroughPylJson() {
 		String json = notice.toPylJson(objectMapper);
 		assertThat(json).contains("\"approval\"");
 		assertThat(ApprovalNotice.fromPylJson(objectMapper, json)).isEqualTo(notice);
+	}
+
+	@Test
+	void linesSavedBeforeTheOriginAndReasonFieldsExistStillRead() {
+		UUID approvalId = UUID.randomUUID();
+		String legacy = "{\"approval\":{\"event\":\"REQUESTED\",\"approvalId\":\"" + approvalId
+				+ "\",\"requesterSubject\":\"kc-1\",\"targetSubject\":\"kc-2\"}}";
+		ApprovalNotice read = ApprovalNotice.fromPylJson(objectMapper, legacy);
+		assertThat(read).isNotNull();
+		assertThat(read.approvalId()).isEqualTo(approvalId);
+		assertThat(read.originMsgId()).isNull();
+		assertThat(read.reason()).isNull();
 	}
 
 	@Test

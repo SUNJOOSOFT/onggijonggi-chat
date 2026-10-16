@@ -229,6 +229,10 @@ export interface ApprovalChangedFrame {
   msgId: string | null;
   /** 그 줄의 seq. msgId와 함께 채워진다. */
   seq: number | null;
+  /** 승인을 요청한 원글의 id(이슈 #416). 이 필드가 없던 서버가 보낸 줄이면 null이다. */
+  originMsgId: string | null;
+  /** 반려 사유(이슈 #416). 반려가 아니거나 사유를 적지 않았으면 null이다. */
+  reason: string | null;
 }
 
 /**

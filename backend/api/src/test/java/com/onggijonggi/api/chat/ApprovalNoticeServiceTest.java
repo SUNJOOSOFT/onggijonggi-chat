@@ -35,8 +35,10 @@ class ApprovalNoticeServiceTest {
 	private final ThreadMessageDispatcher dispatcher = mock(ThreadMessageDispatcher.class);
 	private final RoomSessionRegistry registry = mock(RoomSessionRegistry.class);
 	private final RankedDisplayNames names = mock(RankedDisplayNames.class);
+	private static final UUID ORIGIN = UUID.randomUUID();
+
 	private final ApprovalNotice notice = new ApprovalNotice(ApprovalNotice.Event.REQUESTED, UUID.randomUUID(),
-			"kc-1", "kc-2");
+			"kc-1", "kc-2", ORIGIN, null);
 	private ApprovalNoticeService service;
 
 	@BeforeEach
@@ -61,7 +63,7 @@ class ApprovalNoticeServiceTest {
 		ArgumentCaptor<WsFrame> sent = ArgumentCaptor.forClass(WsFrame.class);
 		verify(registry).notifyIfListening(eq(THREAD), sent.capture());
 		assertThat(sent.getValue()).isEqualTo(new ApprovalChangedFrame(THREAD, notice.approvalId(),
-				ApprovalNotice.Event.REQUESTED, "kc-1", "주성민", "kc-2", "이한결", line.getId(), 7L));
+				ApprovalNotice.Event.REQUESTED, "kc-1", "주성민", "kc-2", "이한결", line.getId(), 7L, ORIGIN, null));
 	}
 
 	@Test

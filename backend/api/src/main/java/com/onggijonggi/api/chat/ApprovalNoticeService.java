@@ -43,7 +43,8 @@ public class ApprovalNoticeService {
 			roomSessionRegistry.notifyIfListening(threadId, new ApprovalChangedFrame(threadId, notice.approvalId(),
 					notice.event(), notice.requesterSubject(), displayName(notice.requesterSubject()),
 					notice.targetSubject(), displayName(notice.targetSubject()),
-					line == null ? null : line.getId(), line == null ? null : line.getSeq()));
+					line == null ? null : line.getId(), line == null ? null : line.getSeq(),
+						notice.originMsgId(), notice.reason()));
 		} catch (RuntimeException failure) {
 			log.error("승인 알림 전송 실패 threadId={} approvalId={}", threadId, notice.approvalId(), failure);
 		}
