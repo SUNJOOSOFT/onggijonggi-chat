@@ -130,6 +130,33 @@ describe('오류', () => {
     );
   });
 
+  it('같은 글에 대기 중인 요청이 있다는 거절은 그 사유를 알린다', async () => {
+    fetcher.mockResolvedValue(
+      Response.json(
+        {
+          error: {
+            code: 'APPROVAL_ALREADY_PENDING',
+            message: 'internal detail',
+            traceId: 't',
+          },
+        },
+        { status: 409 },
+      ),
+    );
+
+    const error = await requestThreadApproval(THREAD, {
+      id: 'apv-2',
+      messageId: 'm1',
+      targetSubject: 'minho',
+    }).catch((cause: unknown) => cause);
+
+    expect(error).toBeInstanceOf(ThreadApprovalError);
+    expect((error as ThreadApprovalError).status).toBe(409);
+    expect((error as ThreadApprovalError).message).toBe(
+      '이 글에는 이미 승인 대기 중인 요청이 있어요. 처리가 끝난 뒤에 다시 요청해 주세요.',
+    );
+  });
+
   it('지정되지 않은 사람에게는 404 문구가 간다', async () => {
     fetcher.mockResolvedValue(new Response(null, { status: 404 }));
 

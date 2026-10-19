@@ -93,6 +93,7 @@ public class ThreadApprovalService {
 	/**
 	 * 같은 approvalId로 다시 보내면 새 요청을 만들지 않고 처음 만든 건을 돌려준다. 같은 id가 다른 내용으로 오면 충돌이다.
 	 * 승인은 방 안의 사람·AI 메시지에 대해서만 요청할 수 있고, 시스템 줄과 아직 쓰는 중인 답변은 대상이 아니다.
+	 * 같은 원글에 처리 전인 요청이 있으면 새 요청은 거절한다(#423). 승인이나 반려로 끝난 원글은 다시 요청할 수 있다.
 	 */
 	public ThreadApprovalView request(UUID threadId, UUID approvalId, UUID messageId, String targetSubject,
 			CurrentActor actor) {
@@ -107,6 +108,13 @@ public class ThreadApprovalService {
 					(rs, row) -> new String[] {rs.getString(1), rs.getString(2)}, messageId, threadId);
 			if (message.isEmpty()) throw notFound();
 			if (message.get(0)[0].equals("SYSTEM") || !message.get(0)[1].equals("COMPLETE")) throw badMessage();
+			// 같은 원글의 요청을 이 잠금으로 한 줄로 세운다. 먼저 들어온 요청이 커밋되면 뒤의 요청은 잠금을 얻은 뒤 그 건을 보고
+			// 거절된다. KEY SHARE와 겹치지 않는 NO KEY UPDATE라 thr_apv 삽입의 외래키 확인이나 다른 표의 같은 행 참조를 막지 않는다.
+			jdbc.queryForList("select id from msg where id = ? and thr_id = ? for no key update", messageId, threadId);
+			// 같은 id의 재전송은 아래 삽입이 기존 건을 돌려주므로 대기 요청 확인에서 뺀다.
+			if (Boolean.TRUE.equals(jdbc.queryForObject(
+					"select exists(select 1 from thr_apv where msg_id = ? and status = 'PENDING' and id <> ?)", Boolean.class,
+					messageId, approvalId))) throw ThreadApprovalException.alreadyPending();
 			// 중복 id는 예외 대신 무시한다 — 유니크 위반은 PostgreSQL에서 트랜잭션을 중단시켜 바로 뒤의 조회까지 막는다.
 			int inserted = jdbc.update("""
 					insert into thr_apv(id, tnn_id, thr_id, msg_id, req_user_id, trg_user_id) values (?, ?, ?, ?, ?, ?)

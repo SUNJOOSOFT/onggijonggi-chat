@@ -112,6 +112,66 @@ class ThreadApprovalPostgresTest {
 		status(() -> service.request(room, id, message, target.subject(), bystander), HttpStatus.CONFLICT);
 	}
 
+	@Test void aMessageWithAPendingRequestRefusesAnotherAndTheSameIdIsStillAResend() {
+		UUID first = UUID.randomUUID();
+		var created = service.request(room, first, message, target.subject(), requester);
+		// 다른 요청자·다른 대상이어도 같은 원글에 처리 전 요청이 있으면 거절한다.
+		assertThatThrownBy(() -> service.request(room, UUID.randomUUID(), message, target.subject(), requester))
+				.isInstanceOfSatisfying(ThreadApprovalException.class, error -> {
+					assertThat(error.getStatusCode()).isEqualTo(HttpStatus.CONFLICT);
+					assertThat(error.getCode()).isEqualTo("APPROVAL_ALREADY_PENDING");
+				});
+		status(() -> service.request(room, UUID.randomUUID(), message, bystander.subject(), target), HttpStatus.CONFLICT);
+		// 같은 id의 재전송은 거절이 아니라 기존 요청을 돌려준다.
+		assertThat(service.request(room, first, message, target.subject(), requester)).isEqualTo(created);
+		assertThat(jdbc.queryForObject("select count(*) from thr_apv where msg_id=?", Integer.class, message)).isEqualTo(1);
+		assertThat(lineEvents()).containsExactly("REQUESTED");
+	}
+
+	@Test void aMessageWhoseRequestEndedCanBeRequestedAgainAndOtherMessagesAreNotAffected() {
+		UUID approved = UUID.randomUUID();
+		service.request(room, approved, message, target.subject(), requester);
+		service.decide(room, approved, true, null, target);
+		UUID again = UUID.randomUUID();
+		assertThat(service.request(room, again, message, target.subject(), requester).status()).isEqualTo("PENDING");
+		service.decide(room, again, false, "다시 확인", target);
+		assertThat(service.request(room, UUID.randomUUID(), message, bystander.subject(), requester).status()).isEqualTo("PENDING");
+		// 대기 요청이 있는 원글과 다른 원글은 막지 않는다.
+		UUID agent = messages.saveAndFlush(Msg.completedAgent(UUID.randomUUID(), room, nextSeq(), "AI 개정안")).getId();
+		assertThat(service.request(room, UUID.randomUUID(), agent, target.subject(), requester).messageId()).isEqualTo(agent);
+		assertThat(jdbc.queryForObject("select count(*) from thr_apv where status='PENDING'", Integer.class)).isEqualTo(2);
+	}
+
+	@Test void simultaneousRequestsForOneMessageLeaveExactlyOnePending() throws Exception {
+		int callers = 6;
+		var pool = java.util.concurrent.Executors.newFixedThreadPool(callers);
+		var start = new java.util.concurrent.CountDownLatch(1);
+		try {
+			java.util.List<java.util.concurrent.Future<Boolean>> results = new java.util.ArrayList<>();
+			for (int i = 0; i < callers; i++) {
+				UUID id = UUID.randomUUID();
+				results.add(pool.submit(() -> {
+					start.await();
+					try {
+						service.request(room, id, message, target.subject(), requester);
+						return true;
+					} catch (ThreadApprovalException refused) {
+						return false;
+					}
+				}));
+			}
+			start.countDown();
+			int accepted = 0;
+			for (var result : results) if (result.get(30, java.util.concurrent.TimeUnit.SECONDS)) accepted++;
+			assertThat(accepted).isEqualTo(1);
+		} finally {
+			pool.shutdownNow();
+		}
+		assertThat(jdbc.queryForObject("select count(*) from thr_apv where msg_id=? and status='PENDING'", Integer.class, message))
+				.isEqualTo(1);
+		assertThat(lineEvents()).containsExactly("REQUESTED");
+	}
+
 	@Test void onlyTheTargetCanDecideAndTheSameDecisionIsIdempotent() {
 		UUID id = UUID.randomUUID();
 		service.request(room, id, message, target.subject(), requester);

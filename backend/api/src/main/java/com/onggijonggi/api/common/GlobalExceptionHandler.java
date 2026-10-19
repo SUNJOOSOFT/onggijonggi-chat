@@ -5,6 +5,7 @@ import com.onggijonggi.api.authz.RbacStateConflictException;
 import com.onggijonggi.api.chat.IdempotencyKeyConflictException;
 import com.onggijonggi.api.chat.InviteeOutsideWorkspaceException;
 import com.onggijonggi.api.chat.MsgFileRejectedException;
+import com.onggijonggi.api.chat.ThreadApprovalException;
 import com.onggijonggi.api.chat.ThreadDocumentException;
 import com.onggijonggi.api.rag.ChunkRebuildInProgressException;
 import com.openai.errors.OpenAIServiceException;
@@ -107,6 +108,13 @@ public class GlobalExceptionHandler {
 	public ResponseEntity<ErrorResponse> handleMsgFileRejected(MsgFileRejectedException ex, ServerWebExchange exchange) {
 		return ResponseEntity.status(ex.getStatus())
 				.body(ErrorResponse.of(ex.getCode(), ex.getMessage(), traceId(exchange)));
+	}
+
+	/** 승인 요청이 승인 고유의 이유로 거절된 경우(#423). 같은 원글에 처리 전 요청이 있다는 것을 화면이 알려 줄 수 있게 코드를 붙인다. */
+	@ExceptionHandler(ThreadApprovalException.class)
+	public ResponseEntity<ErrorResponse> handleThreadApproval(ThreadApprovalException ex, ServerWebExchange exchange) {
+		return ResponseEntity.status(ex.getStatusCode())
+				.body(ErrorResponse.of(ex.getCode(), ex.getReason(), traceId(exchange)));
 	}
 
 	/** 방 문서(#338)가 문서 고유의 이유로 거부된 경우. 원본 저장소 장애(503)는 사용자에게 재시도만 안내하고 원인은

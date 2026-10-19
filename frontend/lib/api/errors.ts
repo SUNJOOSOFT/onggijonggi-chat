@@ -28,6 +28,7 @@ export type BffErrorCode =
   | 'UNREADABLE_FILE' // 422 CORE — 첨부가 손상됐거나 암호가 걸림
   | 'INVALID_ATTACHMENT' // 400·WS CORE — 발화에 실은 첨부가 없거나 이미 쓰였거나 개수 초과
   | 'DOCUMENT_STATE_CONFLICT' // 409 CORE — 방 문서가 잠긴 방·업로드 중·이미 그 상태라 지금은 바꿀 수 없음
+  | 'APPROVAL_ALREADY_PENDING' // 409 CORE — 같은 글에 처리 전인 승인 요청이 이미 있음(#423)
   | 'DOCUMENT_STORAGE_UNAVAILABLE' // 503 CORE — 방 문서 원본 저장소(문서 워커)에 저장·조회하지 못함
   | 'SERVICE_UNAVAILABLE' // 503 CORE·WS — 새 대화를 놓을 고객사(Tenant)를 정할 수 없음(서버 설정 문제)
   | 'REBUILD_IN_PROGRESS' // 409 CORE — 방 문서 일괄 재처리가 이미 진행 중(운영자 전용 API, 화면에서 부르지 않음)
@@ -67,6 +68,9 @@ const FRIENDLY_BY_CODE: Record<string, string> = {
   // 남이 먼저 바꿨거나 방이 잠겼다 — 다시 불러오면 지금 할 수 있는 작업이 보인다.
   DOCUMENT_STATE_CONFLICT:
     '방이나 문서 상태가 방금 바뀌었어요. 목록을 새로고침한 뒤 다시 시도해 주세요.',
+  // 같은 글에 대기 중인 요청이 있다 — 그 요청이 승인이나 반려로 끝나야 다시 요청할 수 있어 새로고침만으로는 풀리지 않는다.
+  APPROVAL_ALREADY_PENDING:
+    '이 글에는 이미 승인 대기 중인 요청이 있어요. 처리가 끝난 뒤에 다시 요청해 주세요.',
   // 서버 설정 문제(SERVICE_UNAVAILABLE)와 달리 저장소가 돌아오면 같은 요청이 성공한다.
   DOCUMENT_STORAGE_UNAVAILABLE:
     '문서 저장소에 연결하지 못했어요. 잠시 후 다시 시도해 주세요.',
