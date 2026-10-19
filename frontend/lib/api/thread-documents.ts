@@ -35,6 +35,18 @@ export interface ThreadAttachment {
   registered: boolean;
   createdAt: string;
 }
+/**
+ * AI가 만든 문서 한 건(백엔드 ThreadOutputView). 저장소 위치는 내려오지 않고, 내려받기는 서버가 방 접근을 확인한 뒤 대신 읽는다.
+ * 만든 사람은 Keycloak subject라 이름은 화면이 가진 참여자·메시지 작성자에서 찾는다.
+ */
+export interface ThreadOutput {
+  id: string;
+  fileName: string;
+  fileKind: 'DOCX' | 'PDF' | 'MD';
+  fileSize: number;
+  authorSubject: string;
+  createdAt: string;
+}
 export interface ThreadDocumentsListing {
   threadStatus: string;
   canUpload: boolean;
@@ -43,6 +55,8 @@ export interface ThreadDocumentsListing {
 }
 const path = (thread: string) =>
   `/api/threads/${encodeURIComponent(thread)}/documents`;
+const outputPath = (thread: string) =>
+  `/api/threads/${encodeURIComponent(thread)}/outputs`;
 const attachmentPath = (thread: string, file: string) =>
   `/api/threads/${encodeURIComponent(thread)}/attachments/${encodeURIComponent(file)}`;
 
@@ -190,4 +204,26 @@ export async function registerThreadAttachment(
     }),
   );
   return json<ThreadDocument>(response);
+}
+/** 방의 출력(AI가 만든 문서)을 최신순으로 읽는다. 방 문서 목록과 따로 조회한다. */
+export async function listThreadOutputs(
+  thread: string,
+  signal?: AbortSignal,
+): Promise<ThreadOutput[]> {
+  const response = await checked(
+    await fetchDocument(bffUrl(outputPath(thread)), {
+      signal,
+      cache: 'no-store',
+    }),
+  );
+  return json<ThreadOutput[]>(response);
+}
+export async function downloadThreadOutput(thread: string, id: string) {
+  const response = await checked(
+    await fetchDocument(
+      bffUrl(`${outputPath(thread)}/${encodeURIComponent(id)}/download`),
+      { cache: 'no-store' },
+    ),
+  );
+  return response.blob();
 }
