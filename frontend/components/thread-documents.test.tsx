@@ -22,6 +22,8 @@ vi.mock('@/lib/api/thread-documents', () => ({
   downloadThreadDocument: vi.fn(),
   downloadThreadAttachment: vi.fn(),
   registerThreadAttachment: vi.fn(),
+  listThreadOutputs: vi.fn(),
+  downloadThreadOutput: vi.fn(),
 }));
 const doc: api.ThreadDocument = {
   id: 'doc1',
@@ -89,6 +91,7 @@ function select(file: File) {
 beforeEach(() => {
   vi.resetAllMocks();
   vi.mocked(api.listThreadDocuments).mockResolvedValue(listing);
+  vi.mocked(api.listThreadOutputs).mockResolvedValue([]);
   vi.mocked(api.changeThreadDocument).mockResolvedValue();
 });
 afterEach(cleanup);
@@ -694,6 +697,78 @@ describe('채팅 첨부', () => {
     rerender(view(1));
     await waitFor(() =>
       expect(api.listThreadDocuments).toHaveBeenCalledTimes(2),
+    );
+  });
+});
+
+describe('출력(AI가 만든 문서)', () => {
+  const output: api.ThreadOutput = {
+    id: 'out1',
+    fileName: '주간 보고서.docx',
+    fileKind: 'DOCX',
+    fileSize: 2048,
+    authorSubject: 'sub-kim',
+    createdAt: '2026-10-19T01:00:00Z',
+  };
+  function roomWithNames() {
+    return (
+      <ThreadDocumentsProvider
+        threadId="room"
+        senderNames={new Map([['sub-kim', '김대리']])}
+      >
+        <ThreadDocumentsButton />
+      </ThreadDocumentsProvider>
+    );
+  }
+
+  it('출력이 없으면 빈 상태를 안내한다', async () => {
+    render(room('room'));
+    open();
+    expect(await screen.findByText('출력 0')).toBeTruthy();
+    expect(screen.getByText('AI가 만든 문서가 없습니다.')).toBeTruthy();
+  });
+
+  it('출력의 파일명·형식·크기·만든 사람을 보이고 눌러서 내려받는다', async () => {
+    vi.mocked(api.listThreadOutputs).mockResolvedValue([output]);
+    vi.mocked(api.downloadThreadOutput).mockResolvedValue(new Blob(['x']));
+    URL.createObjectURL = vi.fn(() => 'blob:x');
+    URL.revokeObjectURL = vi.fn();
+    render(roomWithNames());
+    open();
+    expect(await screen.findByText('주간 보고서.docx')).toBeTruthy();
+    expect(screen.getByText('출력 1')).toBeTruthy();
+    expect(screen.getByText(/DOCX · 2KB · 김대리/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: '출력 내려받기' }));
+    await waitFor(() =>
+      expect(api.downloadThreadOutput).toHaveBeenCalledWith('room', 'out1'),
+    );
+    expect(api.downloadThreadDocument).not.toHaveBeenCalled();
+  });
+
+  it('출력 조회가 실패해도 방 문서 목록은 그대로 보이고 오류를 알린다', async () => {
+    vi.mocked(api.listThreadOutputs).mockRejectedValue(
+      new Error('출력 서비스 오류'),
+    );
+    render(room('room'));
+    open();
+    expect(await screen.findByText('guide.txt')).toBeTruthy();
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      '출력 서비스 오류',
+    );
+    expect(screen.queryByText('출력 0')).toBeNull();
+  });
+
+  it('출력 내려받기가 실패하면 사용자 문구로 알린다', async () => {
+    vi.mocked(api.listThreadOutputs).mockResolvedValue([output]);
+    vi.mocked(api.downloadThreadOutput).mockRejectedValue(
+      new Error('방이나 문서에 접근할 수 없어요.'),
+    );
+    render(room('room'));
+    open();
+    await screen.findByText('주간 보고서.docx');
+    fireEvent.click(screen.getByRole('button', { name: '출력 내려받기' }));
+    expect((await screen.findByRole('alert')).textContent).toBe(
+      '방이나 문서에 접근할 수 없어요.',
     );
   });
 });

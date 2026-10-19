@@ -223,4 +223,21 @@ describe('문서 목업 계약', () => {
       ).status,
     ).toBe(409);
   });
+  it('출력은 목업에 생성기가 없어 빈 목록이고 접근 거부된 방은 404다', async () => {
+    const mock = new ThreadDocumentsMock();
+    const listed = await mock.handle(new Request('http://local'), [
+      NORMAL_THREAD_ID,
+      'outputs',
+    ]);
+    expect(listed.status).toBe(200);
+    expect(await listed.json()).toEqual([]);
+    expect(
+      (
+        await mock.handle(new Request('http://local'), [
+          FORBIDDEN_FRAME_THREAD_ID,
+          'outputs',
+        ])
+      ).status,
+    ).toBe(404);
+  });
 });

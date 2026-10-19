@@ -1,4 +1,5 @@
-/** 문서 목업은 상태·고정·삭제를 재현한다. ETL이 없는 상태에서 READY를 꾸며내지 않는다. */
+/** 문서 목업은 상태·고정·삭제를 재현한다. ETL이 없는 상태에서 READY를 꾸며내지 않는다.
+ * 문서 생성기도 없어 출력(outputs)은 늘 빈 목록이다. */
 import { roomAccess } from './rooms';
 import type { ThreadDocument } from '@/lib/api/thread-documents';
 
@@ -27,6 +28,12 @@ export class ThreadDocumentsMock {
     active = true,
   ) {
     const [thread, collection, id, operation] = segments;
+    // 목업에는 문서 생성기가 없어 출력은 늘 비어 있다. 방 접근만 실 서버와 같게 막는다.
+    if (collection === 'outputs' && /^[a-f0-9-]{36}$/i.test(thread ?? '')) {
+      if (roomAccess(thread) === 'deny' || request.method !== 'GET' || id)
+        return new Response(null, { status: 404 });
+      return Response.json([]);
+    }
     if (
       collection !== 'documents' ||
       !/^[a-f0-9-]{36}$/i.test(thread ?? '') ||
