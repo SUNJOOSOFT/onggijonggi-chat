@@ -4,6 +4,8 @@ import static org.assertj.core.api.Assertions.*;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.reset;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 import com.onggijonggi.api.auth.CurrentActor;
@@ -34,7 +36,7 @@ import org.testcontainers.junit.jupiter.Testcontainers;
 
 /**
  * Class Name : ThreadOutputPostgresTest.java
- * Description : 실제 최신 Flyway·PostgreSQL에서 방의 출력 등록(재전송 한 건)·목록(최신순, 방 격리)·접근 확인·삭제 연쇄를 검증한다(#414).
+ * Description : 실제 최신 Flyway·PostgreSQL에서 방의 출력 등록(재전송 한 건)·목록(최신순, 방 격리)·내려받기·접근 확인·삭제 연쇄를 검증한다(#414).
  */
 @SpringBootTest
 @ActiveProfiles("test")
@@ -60,6 +62,7 @@ class ThreadOutputPostgresTest {
 	@Autowired ThrMbrRepository members;
 	@Autowired RbacBootstrapService bootstrap;
 	@MockitoBean ThreadSourceStorage storage;
+	@MockitoBean ThreadOutputStorage outputStorage;
 	@MockitoBean WorkspaceAuthorizer authorizer;
 	CurrentActor owner;
 	CurrentActor member;
@@ -70,7 +73,7 @@ class ThreadOutputPostgresTest {
 	UUID node;
 
 	@BeforeEach void setup() {
-		reset(storage, authorizer);
+		reset(storage, outputStorage, authorizer);
 		when(authorizer.canViewBlocking(anyString(), any())).thenReturn(true);
 		bootstrap.runCurrentConfiguration();
 		jdbc.update("delete from thr");
@@ -143,6 +146,34 @@ class ThreadOutputPostgresTest {
 		jdbc.update("delete from thr where id=?", room);
 		assertThat(jdbc.queryForObject("select count(*) from thr_out where thr_id=?", Integer.class, room)).isZero();
 		assertThat(jdbc.queryForObject("select count(*) from thr_out where thr_id=?", Integer.class, otherRoom)).isEqualTo(1);
+	}
+
+	@Test void downloadReadsTheFileThroughTheWorkerForAMemberOfTheRoom() {
+		byte[] content = {1, 2, 3};
+		var out = service.register(room, UUID.randomUUID(), owner.userId(), "회의록.docx", "DOCX", 3, "documents/t/2026/10/19/A/회의록.docx");
+		when(outputStorage.read(tenant, "documents/t/2026/10/19/A/회의록.docx")).thenReturn(content);
+		var file = service.download(room, out.id(), member);
+		assertThat(file.fileName()).isEqualTo("회의록.docx");
+		assertThat(file.bytes()).isEqualTo(content);
+	}
+
+	@Test void downloadIsNotFoundForOutsidersAndForAnotherRoomsOutput() {
+		var out = service.register(room, UUID.randomUUID(), owner.userId(), "비공개.md", "MD", 5, "documents/t/2026/10/19/A/비공개.md");
+		var other = service.register(otherRoom, UUID.randomUUID(), owner.userId(), "다른.md", "MD", 5, "documents/t/2026/10/19/B/다른.md");
+		status(() -> service.download(room, out.id(), stranger), HttpStatus.NOT_FOUND);
+		// 방 주소와 출력 id의 방이 어긋나면 방 참여자(owner)여도 찾을 수 없다.
+		status(() -> service.download(otherRoom, out.id(), owner), HttpStatus.NOT_FOUND);
+		status(() -> service.download(room, other.id(), owner), HttpStatus.NOT_FOUND);
+		status(() -> service.download(room, UUID.randomUUID(), owner), HttpStatus.NOT_FOUND);
+		when(authorizer.canViewBlocking(anyString(), any())).thenReturn(false);
+		status(() -> service.download(room, out.id(), member), HttpStatus.NOT_FOUND);
+		verify(outputStorage, never()).read(any(), anyString());
+	}
+
+	@Test void aFileMissingInTheWorkerIsNotFound() {
+		var out = service.register(room, UUID.randomUUID(), owner.userId(), "유실.md", "MD", 5, "documents/t/2026/10/19/A/유실.md");
+		when(outputStorage.read(tenant, "documents/t/2026/10/19/A/유실.md")).thenThrow(new ResponseStatusException(HttpStatus.NOT_FOUND));
+		status(() -> service.download(room, out.id(), owner), HttpStatus.NOT_FOUND);
 	}
 
 	private UUID collabRoom(String title, CurrentActor creator, CurrentActor... others) {
