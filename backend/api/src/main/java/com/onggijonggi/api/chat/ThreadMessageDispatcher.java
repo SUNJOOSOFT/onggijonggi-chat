@@ -113,6 +113,9 @@ public class ThreadMessageDispatcher {
 	static final int SUMMARY_MAX_CHARS = 200;
 	/** 방 문서 검색 도구가 근거를 찾지 못했을 때 모델에 돌려주는 문장. 웹을 쓸지는 모델이 판단한다(이슈 #368). */
 	static final String NO_EVIDENCE_RESULT = "이 방에 고정된 문서에서 관련된 근거를 찾지 못했습니다. 문서에 있는 내용처럼 추측하지 마세요.";
+	/** 이 턴에서 이미 개정본을 등록한 뒤 다시 부르면 돌려주는 문장의 앞부분. 뒤에 앞서 등록한 결과 문장을 붙인다. */
+	static final String ALREADY_REVISED = "개정본은 한 답변에 하나만 등록합니다 — 이번 호출로는 아무 파일도 등록하지 않았습니다. "
+			+ "사용자에게는 앞서 등록한 개정본만 알리세요. 앞서 등록한 결과: ";
 
 	private final ConcurrentMap<RoomKey, RoomAiState> states = new ConcurrentHashMap<>();
 
@@ -796,12 +799,24 @@ public class ThreadMessageDispatcher {
 		}
 	}
 
-	/** 모델이 부른 개정본 만들기. 도구 실행 스레드(boundedElastic)에서 불린다. 결과는 모델에 돌려줄 문장이다. */
+	/**
+	* 모델이 부른 개정본 만들기. 도구 실행 스레드(boundedElastic)에서 불린다. 결과는 모델에 돌려줄 문장이다.
+	* 개정본은 한 답변에 하나만 등록한다 — 모델이 성공한 뒤 같은 도구를 다시 불러 _v1·_v2가 함께 생긴 일이 있었다.
+	* 실패(FAILED)는 등록이 아니므로 다시 부를 수 있다. 같은 턴의 호출은 revisionLock으로 한 줄로 세운다.
+	*/
 	private String reviseDocument(ActiveTurn activeTurn, String fileName, List<ThreadDocumentTool.Edit> edits) {
 		if (documentRevision == null) return ThreadDocumentRevision.FAILED + "이 배포에서는 개정본을 만들 수 없습니다.";
 		PendingTurn turn = activeTurn.turn;
-		log.info("개정본 만들기 threadId={} traceId={} edits={}", turn.threadId(), turn.traceId(), edits == null ? 0 : edits.size());
-		return documentRevision.revise(turn.threadId(), actorOf(turn), fileName, edits);
+		synchronized (activeTurn.revisionLock) {
+			if (activeTurn.revisionResult != null) {
+				log.info("이 턴에서 이미 개정본을 등록해 다시 만들지 않는다 threadId={} traceId={}", turn.threadId(), turn.traceId());
+				return ALREADY_REVISED + activeTurn.revisionResult;
+			}
+			log.info("개정본 만들기 threadId={} traceId={} edits={}", turn.threadId(), turn.traceId(), edits == null ? 0 : edits.size());
+			String result = documentRevision.revise(turn.threadId(), actorOf(turn), fileName, edits);
+			if (!result.startsWith(ThreadDocumentRevision.FAILED)) activeTurn.revisionResult = result;
+			return result;
+		}
 	}
 
 	private static CurrentActor actorOf(PendingTurn turn) {
@@ -1305,6 +1320,12 @@ public class ThreadMessageDispatcher {
 		/** 이 턴에서 방 문서 근거를 찾지 못했을 때 STREAMING·DONE 프레임에 함께 실을 안내(이슈 #353). 문서 목록 조회 실패면
 		 * LLM 호출 전에, 검색 도구가 근거를 못 찾으면 그 호출 뒤에 정해져 이후 프레임부터 실린다. citations와 같이 volatile이다. */
 		private volatile GroundingNotice groundingNotice;
+
+		/** 이 턴의 개정본 만들기를 한 줄로 세운다. revisionResult는 이 잠금 안에서만 읽고 쓴다. */
+		private final Object revisionLock = new Object();
+
+		/** 이 턴에서 등록에 성공한 개정본 만들기의 결과 문장. 없으면 아직 등록하지 않았다. */
+		private String revisionResult;
 
 		/**
 		* PENDING 행 생성 결과(성공 시 msgId, 실패 시 empty)를 캐시해 여러 번 구독해도 한 번만

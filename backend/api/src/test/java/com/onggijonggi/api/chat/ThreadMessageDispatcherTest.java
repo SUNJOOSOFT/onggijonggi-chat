@@ -1091,6 +1091,38 @@ class ThreadMessageDispatcherTest {
 		assertThat(actor.getValue().userId()).isEqualTo(room.userId);
 	}
 
+	/** 한 답변에서 개정본 등록은 한 번뿐이다. 실패한 호출은 등록이 아니라 다시 부를 수 있고, 성공한 뒤 부르면 새 파일 없이 앞선 결과를 돌려준다. */
+	@Test
+	void theRevisionToolRegistersAtMostOneFilePerTurn() {
+		TestRoom room = new TestRoom();
+		List<String> toolResults = new ArrayList<>();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		List<ThreadDocumentTool.Edit> edits = List.of(new ThreadDocumentTool.Edit("주 12시간", "주 18시간"));
+		when(llm.streamChat(any())).thenAnswer(invocation -> {
+			ChatStreamRequest sent = invocation.getArgument(0);
+			for (int i = 0; i < 3; i++) toolResults.add(sent.documentTool().reviseThreadDocument("규정.docx", edits));
+			return Flux.just("답");
+		});
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.just(List.of(SearchableDocument.untagged("규정.docx"))));
+		ThreadDocumentRevision revision = mock(ThreadDocumentRevision.class);
+		when(revision.revise(eq(room.threadId), any(), eq("규정.docx"), eq(edits)))
+				.thenReturn(ThreadDocumentRevision.FAILED + "원래 문장을 문서에서 찾지 못했습니다.", "'규정_v1.docx'을 방 문서에 등록했습니다.");
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create(), true, revision);
+
+		dispatcher.dispatch(command(room, "@AI 개정본 만들어줘"), room.membership.generation());
+
+		awaitDone(room);
+		verify(revision, times(2)).revise(eq(room.threadId), any(), eq("규정.docx"), eq(edits));
+		assertThat(toolResults).containsExactly(ThreadDocumentRevision.FAILED + "원래 문장을 문서에서 찾지 못했습니다.",
+				"'규정_v1.docx'을 방 문서에 등록했습니다.",
+				ThreadMessageDispatcher.ALREADY_REVISED + "'규정_v1.docx'을 방 문서에 등록했습니다.");
+	}
+
 	@Test
 	void answersWithoutTheToolWhenTheDocumentListFails() {
 		TestRoom room = new TestRoom();
