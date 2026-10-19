@@ -14,6 +14,7 @@
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { DOCUMENT_CITATION, WEB_CITATION } from '@/lib/chat/citations';
 import { aiTurnFrames, errorFrame, parseInboundMessage } from '@/mocks/rooms';
 import type { ClientFrame, WsFrameType } from './frames';
 import { parseFrame } from './parse-frame';
@@ -88,6 +89,15 @@ describe('서버 → 클라이언트 골든 파일', () => {
   it.each(files)('$type 프레임을 필드 하나 잃지 않고 파싱한다', ({ json }) => {
     // 서버가 필드를 더했는데 스키마가 모르면 zod가 떨궈서 같지 않고, 이름을 바꿨으면 null이다.
     expect(parseFrame(json)).toEqual(json);
+  });
+
+  it('chat.answer 근거 종류가 화면이 나누는 종류와 같다(이슈 #401)', () => {
+    // kind는 string으로 받아 파싱만으로는 이름이 바뀐 걸 모른다 — 모르는 종류는 화면에서 조용히 사라진다.
+    const answer = files.find((file) => file.type === 'chat.answer')?.json;
+    const kinds = (answer?.citations as { kind: string }[]).map(
+      (citation) => citation.kind,
+    );
+    expect(kinds).toEqual([DOCUMENT_CITATION, WEB_CITATION]);
   });
 });
 

@@ -8,8 +8,14 @@ import { readableUrl, withoutDisguising } from './visible-text';
 
 describe('withoutDisguising', () => {
   it('제어 문자와 방향 바꾸기 문자를 뺀다', () => {
-    expect(withoutDisguising('gpj.‮exe')).toBe('gpj.exe');
-    expect(withoutDisguising('a\u0007b⁦c‏d')).toBe('abcd');
+    // 보이지 않는 글자는 소스에 그대로 두면 리뷰에서 안 보이니 코드 값으로 만든다.
+    const [RLO, BEL, LRI, RLM, NEL, LS] = [
+      0x202e, 0x07, 0x2066, 0x200f, 0x85, 0x2028,
+    ].map((code) => String.fromCharCode(code));
+    expect(withoutDisguising(`gpj.${RLO}exe`)).toBe('gpj.exe');
+    expect(withoutDisguising(`a${BEL}b${LRI}c${RLM}d${NEL}e${LS}f`)).toBe(
+      'abcdef',
+    );
     expect(withoutDisguising('한글 😀 그대로')).toBe('한글 😀 그대로');
   });
 });

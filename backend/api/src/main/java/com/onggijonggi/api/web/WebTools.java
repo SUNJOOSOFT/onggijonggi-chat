@@ -56,11 +56,6 @@ public class WebTools {
 		return enabled;
 	}
 
-	/** 웹 출처를 모으지 않는 toolContext 값. */
-	public Map<String, Object> context(List<String> userTexts) {
-		return context(userTexts, new WebSources());
-	}
-
 	/**
 	 * toolContext에 실을 값. userTexts는 그 요청의 사용자 발화들이고, 거기 나온 주소가 처음 허락 목록이 된다.
 	 * sources는 이 턴의 웹 출처 모음이다 — 턴이 끝나면 부른 쪽이 꺼내 답변 근거로 쓴다.
@@ -90,7 +85,7 @@ public class WebTools {
 			return "웹 검색을 할 수 없다: " + failure.getMessage();
 		}
 		if (results.isEmpty()) return "검색 결과가 없다.";
-		sources(toolContext).addSearch(query.strip(), results);
+		record(() -> sources(toolContext).addSearch(query.strip(), results));
 		Set<String> allowed = allowed(toolContext);
 		StringBuilder out = new StringBuilder();
 		for (int i = 0; i < results.size(); i++) {
@@ -117,7 +112,7 @@ public class WebTools {
 			log.warn("웹 읽기 실패: {}", failure.getMessage(), failure.getCause());
 			return "페이지를 읽을 수 없다: " + failure.getMessage();
 		}
-		sources(toolContext).addPage(key, page.finalUrl().toString(), page.title());
+		record(() -> sources(toolContext).addPage(key, page.finalUrl().toString(), page.title()));
 		String text = page.text().strip();
 		int max = properties.fetch().maxChars();
 		boolean truncated = text.length() > max;
@@ -133,6 +128,18 @@ public class WebTools {
 		Object value = toolContext == null ? null : toolContext.getContext().get(ALLOWED_URLS);
 		// 문맥이 없으면 아무 주소도 허락하지 않는다. 검색 결과를 담을 곳은 이 호출 안에서만 쓴다.
 		return value instanceof Set<?> set ? (Set<String>) set : ConcurrentHashMap.newKeySet();
+	}
+
+	/**
+	 * 출처 기록은 덧붙이는 일이다 — 실패해도 이미 성공한 검색·읽기 결과는 모델에 돌려준다. 로그에는 예외 종류만 남긴다
+	 * (메시지에 주소가 실릴 수 있다).
+	 */
+	private static void record(Runnable addition) {
+		try {
+			addition.run();
+		} catch (RuntimeException failure) {
+			log.warn("웹 출처 기록 실패: {}", failure.getClass().getSimpleName());
+		}
 	}
 
 	private static WebSources sources(ToolContext toolContext) {

@@ -106,6 +106,7 @@ class WebSourcesTest {
 		List<WebSources.Source> kept = sources.sources();
 
 		assertThat(kept).hasSize(WebSources.MAX);
+		assertThat(sources.collected()).isEqualTo(WebSources.MAX + 6);
 		assertThat(kept).last().extracting(WebSources.Source::url).isEqualTo("https://b.com/late");
 		assertThat(kept.get(0).url()).isEqualTo("https://a.com/0");
 		assertThat(kept).extracting(WebSources.Source::url).doesNotContain("https://a.com/19");
@@ -136,12 +137,12 @@ class WebSourcesTest {
 		WebSources sources = new WebSources();
 		String emoji = "😀";
 
-		sources.addSearch("검색\n어", List.of(result("제\u0000목\r\n둘", "https://a.com/",
+		sources.addSearch("검색\n어", List.of(result("제\u0000목\r\n둘\u0085셋 넷", "https://a.com/",
 				"요".repeat(WebSources.MAX_SNIPPET - 1) + emoji + emoji)));
 
 		WebSources.Source source = sources.sources().get(0);
 		assertThat(source.query()).isEqualTo("검색 어");
-		assertThat(source.title()).isEqualTo("제 목 둘");
+		assertThat(source.title()).isEqualTo("제 목 둘 셋 넷");
 		assertThat(source.snippet()).isEqualTo("요".repeat(WebSources.MAX_SNIPPET - 1) + emoji + "…");
 	}
 

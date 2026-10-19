@@ -954,21 +954,22 @@ public class ThreadMessageDispatcher {
 	*/
 	private void handleTurnComplete(RoomKey key, RoomAiState state, ActiveTurn activeTurn, String content) {
 		if (!activeTurn.claimTerminal()) return;
+		List<Citation> citations = answerCitations(activeTurn);
 		try {
 			if (!roomSessionRegistry.broadcastIfCurrent(activeTurn.turn.threadId(), activeTurn.turn.roomGeneration(),
 					new ChatAnswerFrame(activeTurn.turn.threadId(), activeTurn.msgId, activeTurn.turn.turnId(),
-							modelIdFor(activeTurn.turn), activeTurn.seq, "", answerCitations(activeTurn), false,
+							modelIdFor(activeTurn.turn), activeTurn.seq, "", citations, false,
 							ChatAnswerStatus.DONE, activeTurn.groundingNotice, activeTurn.turn.agent()))) {
-				persistAgentCompletion(activeTurn, content);
+				persistAgentCompletion(activeTurn, content, citations);
 				closeGeneration(key, state);
 				return;
 			}
 		} catch (RuntimeException ignored) {
-			persistAgentCompletion(activeTurn, content);
+			persistAgentCompletion(activeTurn, content, citations);
 			closeGeneration(key, state, true);
 			return;
 		}
-		persistAgentCompletion(activeTurn, content);
+		persistAgentCompletion(activeTurn, content, citations);
 		advance(key, state, activeTurn);
 	}
 
@@ -1134,11 +1135,11 @@ public class ThreadMessageDispatcher {
 	* terminalPersisted CAS로 같은 턴에 대해 완료/실패 저장이 두 번 이상 시도되는 것을 막는다 —
 	* completed_at·status 전이는 한 번만 유효하고, DB 트리거도 두 번째 UPDATE를 거부한다.
 	*/
-	private void persistAgentCompletion(ActiveTurn activeTurn, String content) {
+	private void persistAgentCompletion(ActiveTurn activeTurn, String content, List<Citation> citations) {
 		if (!activeTurn.terminalPersisted.compareAndSet(false, true)) {
 			return;
 		}
-		String citationsJson = citationsJson(answerCitations(activeTurn));
+		String citationsJson = citationsJson(citations);
 		String agentJson = Agent.toPylJson(json, activeTurn.turn.agent());
 		activeTurn.pendingMsgId
 				.flatMap(msgId -> Mono
@@ -1151,11 +1152,17 @@ public class ThreadMessageDispatcher {
 
 	/**
 	* 답변에 남길 근거 — 방 문서 근거 뒤에 이 턴의 웹 출처(이슈 #401)를 붙인다. 완료 프레임과 저장이 같은 값을 쓴다.
-	* 웹 출처는 답변이 끝날 때 한 번에 싣는다 — 방 문서 근거처럼 STREAMING·취소 프레임에는 없다.
+	* 웹 출처는 답변이 끝날 때 한 번에 싣는다 — 방 문서 근거처럼 STREAMING·취소 프레임에는 없다. 턴이 끝날 때 한 번만 만들어
+	* 프레임과 저장에 같이 넘긴다 — 그 사이 늦게 끝난 도구가 출처를 더해도 둘이 어긋나지 않는다.
+	* 웹 출처가 있으면 개수만 로그에 남긴다(주소·검색어는 남기지 않는다) — "새로고침하니 출처가 없다"를 진단할 때
+	* 모은 수와 남긴 수(상한 20)를 본다.
 	*/
 	private static List<Citation> answerCitations(ActiveTurn activeTurn) {
 		List<WebSources.Source> web = activeTurn.webSources.sources();
 		if (web.isEmpty()) return activeTurn.citations;
+		log.info("웹 출처 threadId={} traceId={} collected={} kept={} read={}", activeTurn.turn.threadId(),
+				activeTurn.turn.traceId(), activeTurn.webSources.collected(), web.size(),
+				web.stream().filter(WebSources.Source::read).count());
 		List<Citation> citations = new ArrayList<>(activeTurn.citations);
 		for (WebSources.Source source : web) {
 			citations.add(Citation.web(source.url(), source.title(), source.snippet(), source.query(), source.read()));

@@ -177,7 +177,7 @@ describe('CitationsPanel', () => {
 
       fireEvent.click(buttons[1]);
 
-      expect(screen.getByText('검색어: 스프링 가이드')).toBeTruthy();
+      expect(screen.getByText('검색어: “스프링 가이드”')).toBeTruthy();
       const link = screen.getByRole('link', {
         name: /^Spring Guides\s*\(새 탭에서 열림\)$/,
       });
@@ -220,6 +220,9 @@ describe('CitationsPanel', () => {
     });
 
     it('strips direction overrides from page text and falls back to the host', () => {
+      // 방향 바꾸기 문자는 소스에 그대로 두면 보이지 않으니 코드 값으로 만든다.
+      const RLO = String.fromCharCode(0x202e);
+      const LRI = String.fromCharCode(0x2066);
       render(
         <CitationsPanel
           state={{
@@ -227,9 +230,9 @@ describe('CitationsPanel', () => {
             citations: [
               {
                 ...searched,
-                title: 'gpj.‮exe',
-                snippet: '요약‮끝',
-                query: '검색⁦어',
+                title: `gpj.${RLO}exe`,
+                snippet: `요약${RLO}끝`,
+                query: `검색${LRI}어`,
               },
               {
                 ...searched,
@@ -247,10 +250,46 @@ describe('CitationsPanel', () => {
 
       expect(screen.getByText('gpj.exe')).toBeTruthy();
       expect(screen.getByText('요약끝')).toBeTruthy();
-      expect(screen.getByText('검색어: 검색어')).toBeTruthy();
-      expect(
-        screen.getByRole('link', { name: /^b\.com\s*\(새 탭에서 열림\)$/ }),
-      ).toBeTruthy();
+      expect(screen.getByText('검색어: “검색어”')).toBeTruthy();
+      const hostLink = screen.getByRole('link', {
+        name: /^b\.com\s*\(새 탭에서 열림\)$/,
+      });
+      // 제목 자리에 도메인을 썼으면 " · 도메인"을 또 붙이지 않는다.
+      expect(hostLink.parentElement?.textContent).not.toContain('· b.com');
+    });
+
+    it('keeps the domain when the title only looks like it', () => {
+      render(
+        <CitationsPanel
+          state={{
+            status: 'success',
+            citations: [
+              { ...searched, title: 'WWW.b.com', url: 'https://b.com/' },
+              { ...searched, title: 'wwwxb.com', url: 'https://b.com/x' },
+            ],
+          }}
+        />,
+      );
+
+      fireEvent.click(screen.getByRole('button'));
+
+      // "www." 뒤가 같으면 같은 도메인이고, "www" 뒤에 점이 없으면 다른 이름이다.
+      expect(screen.getAllByText(/· b\.com$/)).toHaveLength(1);
+    });
+
+    it('points aria-controls at the list only while it is open', () => {
+      render(
+        <CitationsPanel state={{ status: 'success', citations: [searched] }} />,
+      );
+      const toggle = screen.getByRole('button');
+
+      expect(toggle.getAttribute('aria-controls')).toBeNull();
+      fireEvent.click(toggle);
+      const listId = toggle.getAttribute('aria-controls');
+      expect(listId && window.document.getElementById(listId)).toBeTruthy();
+      expect(screen.getByText('읽음').getAttribute('title')).toBe(
+        'AI가 이 페이지 본문을 읽었습니다',
+      );
     });
   });
 

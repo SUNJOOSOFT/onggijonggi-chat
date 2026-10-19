@@ -68,6 +68,17 @@ class LlmChatStreamServiceWebToolsTest {
 	}
 
 	@Test
+	void handsTheTurnsWebSourcesToTheWebTools() {
+		WebSources sources = new WebSources();
+
+		stream(ENABLED, List.of(new ChatMessage("user", "스프링 가이드 찾아줘")), sources);
+
+		// 웹 도구가 이 모음에 기록해야 dispatcher가 턴 끝에 꺼내 답변 근거로 쓴다(이슈 #401).
+		ToolCallingChatOptions options = (ToolCallingChatOptions) received.get().getOptions();
+		assertThat(options.getToolContext().get(WebTools.SOURCES)).isSameAs(sources);
+	}
+
+	@Test
 	void leavesWebToolsOutWhenDisabled() {
 		stream(new WebProperties(false, ENABLED.search(), ENABLED.searxng(), ENABLED.fetch()),
 				List.of(new ChatMessage("user", "https://spring.io/blog 요약해줘")));
@@ -79,10 +90,14 @@ class LlmChatStreamServiceWebToolsTest {
 	}
 
 	private void stream(WebProperties properties, List<ChatMessage> messages) {
+		stream(properties, messages, null);
+	}
+
+	private void stream(WebProperties properties, List<ChatMessage> messages, WebSources sources) {
 		WebTools webTools = new WebTools(properties, (query, limit) -> List.of(),
 				new WebFetcher(HttpClient.newHttpClient(), new PublicUrlGuard(), properties.fetch()));
 		new LlmChatStreamService(ChatClient.builder(model), new CurrentTimeTool("Asia/Seoul"), webTools)
-				.streamChat(new ChatStreamRequest(UUID.randomUUID(), "test-model", messages, null))
+				.streamChat(new ChatStreamRequest(UUID.randomUUID(), "test-model", messages, null, null, null, sources))
 				.blockLast();
 	}
 }
