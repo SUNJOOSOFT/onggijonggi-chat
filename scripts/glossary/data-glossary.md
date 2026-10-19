@@ -76,6 +76,7 @@ DB 테이블·컬럼과 ES 필드 이름은 **snake_case**로 쓰고, `_`로 분
 | `node` | `node` | 노드 | 알고리즘 | - |
 | `org` | `original` | 원본 | 알고리즘 | - |
 | `otc` | `outcome` | 결과 | 알고리즘 | - |
+| `out` | `output` | 출력 | 예외 | 알고리즘 결과 `otp`는 일회용 비밀번호(OTP)와 혼동 |
 | `own` | `owner` | 소유자 | 알고리즘 | - |
 | `prn` | `parent` | 부모 | 알고리즘 | - |
 | `pw` | `password` | - | 예외 | 관용어(팀 합의) |

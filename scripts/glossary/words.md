@@ -91,6 +91,7 @@
 | `next` | 다음 |
 | `original` | 원본 |
 | `outcome` | 결과 |
+| `output` | 출력 |
 | `owner` | 소유자 |
 | `path` | 경로 |
 | `payload` | 적재 데이터 |
@@ -161,6 +162,7 @@
 | `inactive` | `inactive` | 관용 유지 — 알고리즘 결과 `inc`는 increment·include와 혼동. `inactive_at` 대칭, 기존 `created`/`updated`/`deleted`/`locked`/`archived`와 동일 패턴 |
 | `ended` | `ended` | 알고리즘 결과가 `end`(원형)와 충돌. `ended_at` 대칭, 기존 `created`/`updated`/`deleted`/`locked`/`archived`와 동일 패턴 |
 | `completed` | `completed` | 알고리즘 결과 `cmp`는 compare·component와 혼동. `completed_at` 대칭, 기존 `created`/`updated`/`deleted`/`locked`/`archived`/`inactive`/`ended`와 동일 패턴 |
+| `output` | `out` | 알고리즘 결과 `otp`는 일회용 비밀번호(OTP)와 혼동 |
 
 ### 복수형 정책
 
