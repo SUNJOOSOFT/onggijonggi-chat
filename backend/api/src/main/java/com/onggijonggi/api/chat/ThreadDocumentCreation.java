@@ -72,48 +72,54 @@ public class ThreadDocumentCreation {
 	public Result create(UUID thread, CurrentActor actor, String turnKey, ThreadDocumentPlan plan, Set<UUID> turnKeys) {
 		String problem = plan == null ? "문서 계획을 넘기세요." : plan.problem();
 		if (problem != null) return Result.failed(problem);
+		UUID requestKey = requestKey(turnKey, plan);
+		// 개수 확인과 자리 선점을 한 번에 잠가, 다른 계획의 동시 호출이 둘 다 통과해 상한을 넘기지 않게 한다.
+		boolean reserved;
+		synchronized (turnKeys) {
+			reserved = turnKeys.add(requestKey);
+			if (reserved && turnKeys.size() > MAX_PER_TURN) {
+				turnKeys.remove(requestKey);
+				return Result.failed("한 번의 답변에서는 문서를 최대 " + MAX_PER_TURN
+						+ "개까지 만들 수 있습니다. 새 파일은 만들지 않았으니 이미 만든 문서만 알리세요.");
+			}
+		}
 		try {
 			UUID tenant = outputs.writableTenant(thread, actor);
-			UUID requestKey = requestKey(turnKey, plan);
-			synchronized (turnKeys) {
-				if (!turnKeys.contains(requestKey) && turnKeys.size() >= MAX_PER_TURN)
-					return Result.failed("한 번의 답변에서는 문서를 최대 " + MAX_PER_TURN
-							+ "개까지 만들 수 있습니다. 새 파일은 만들지 않았으니 이미 만든 문서만 알리세요.");
-			}
 			Optional<ThreadOutputView> existing = outputs.findByRequestKey(thread, requestKey);
-			if (existing.isPresent()) {
-				remember(turnKeys, requestKey);
+			if (existing.isPresent())
 				return new Result(true, "같은 내용의 '" + existing.get().fileName() + "'을 이미 방의 출력에 등록했습니다. "
 						+ "새 파일은 만들지 않았습니다. " + guide());
-			}
 			String fileName = fileName(plan);
 			byte[] request = json.writeValueAsBytes(request(plan, fileName));
-			if (request.length > MAX_REQUEST_BYTES)
+			if (request.length > MAX_REQUEST_BYTES) {
+				forget(turnKeys, requestKey, reserved);
 				return Result.failed("문서가 너무 큽니다. 내용을 줄여 다시 부르세요.");
+			}
 			JsonNode created = post(tenant, requestKey, request);
 			String objectKey = created.path("objectKey").asString("");
 			String createdName = created.path("fileName").asString(fileName);
 			long size = created.path("size").asLong(0);
 			ThreadOutputView view = register(thread, requestKey, actor, createdName, plan.normalizedFormat(), size, objectKey);
-			remember(turnKeys, requestKey);
 			return new Result(true, "'" + view.fileName() + "'을 방의 출력에 등록했습니다. " + guide());
 		} catch (Rejected rejected) {
+			forget(turnKeys, requestKey, reserved);
 			log.info("문서 생성 요청이 거절됐다 threadId={} reason={}", thread, rejected.getMessage());
 			return Result.failed(rejected.getMessage());
 		} catch (ResponseStatusException refused) {
+			forget(turnKeys, requestKey, reserved);
 			log.warn("문서를 만들 수 없는 방이다 threadId={} status={}", thread, refused.getStatusCode().value());
 			return Result.failed(refused.getStatusCode().value() == HttpStatus.CONFLICT.value()
 					? "이 방은 지금 문서를 만들 수 없습니다(잠기거나 보관된 방)." : "이 방에서는 문서를 만들 수 없습니다.");
 		} catch (RuntimeException error) {
+			forget(turnKeys, requestKey, reserved);
 			log.error("문서 만들기 실패 threadId={}", thread, error);
 			return Result.failed("문서 저장소 문제입니다. 잠시 뒤 다시 요청해 달라고 알리세요.");
 		}
 	}
 
-	private static void remember(Set<UUID> turnKeys, UUID requestKey) {
-		synchronized (turnKeys) {
-			turnKeys.add(requestKey);
-		}
+	/** 선점했지만 끝내 등록하지 못한 자리를 돌려줘, 실패한 시도가 한 턴의 개수 한도를 깎아 먹지 않게 한다. */
+	private static void forget(Set<UUID> turnKeys, UUID requestKey, boolean reserved) {
+		if (reserved) synchronized (turnKeys) { turnKeys.remove(requestKey); }
 	}
 
 	private static String guide() {
