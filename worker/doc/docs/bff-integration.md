@@ -2,12 +2,13 @@
 
 이 문서는 Spring AI BFF가 현재 `document-worker`를 내부 HTTP로 호출하는 방법을 정리한다. FrontEnd는 Worker나 SeaweedFS를 직접 호출하지 않고 BFF만 호출한다.
 
-현재 Worker는 다음 네 기능을 제공한다.
+현재 Worker는 다음 다섯 기능을 제공한다.
 
 1. 검증된 DOCX renderer DSL로 DOCX, PDF 또는 Markdown을 생성하고 SeaweedFS에 저장한다.
 2. 템플릿 원본 파일을 검증해 SeaweedFS에 저장한다.
 3. 대화방(Thread) 문서의 원본을 변환 없이 저장·조회·삭제한다(`/api/v1/thread-sources`). 경로·헤더 계약은 [worker README](../../README.md)「Thread 문서 원본」에 있다. 이 경로의 `X-Tenant-Id`는 UUID다.
 4. 원본 DOCX의 서식을 유지한 채 지정한 문장만 바꾸고 신구조문 대비표를 붙인 개정본을 돌려준다(`/api/v1/documents/revisions`). 저장하지 않는다.
+5. 생성해 저장한 문서를 `objectKey`로 읽어 돌려준다(`GET /api/v1/documents/files`).
 
 템플릿을 생성 문서에 적용하는 기능, `TemplateManifest`, 템플릿 선택은 아직 구현하지 않았다.
 
@@ -31,14 +32,7 @@ API key는 BFF와 Worker에 같은 secret으로 주입한다. 브라우저나 AP
 | `seaweedfs-volume` | `infra-seaweed-volume` |
 | `seaweedfs-filer` | `infra-seaweed-filer` |
 
-BFF가 생성 결과를 SeaweedFS Filer에서 직접 읽을 예정이면, 현재 `app-net`에 연결된 `bff` 서비스에 `document-worker-net`도 추가한다. Filer의 서비스 DNS는 `seaweedfs-filer:8888`이며, BFF는 tenant 권한을 확인한 뒤에만 내부 `objectKey`로 읽는다.
-
-```yaml
-  bff:
-    networks:
-      - app-net
-      - document-worker-net
-```
+BFF는 생성 결과를 SeaweedFS Filer에서 직접 읽지 않고, Worker의 읽기 API(아래「생성된 문서 읽기」)로 읽는다. 저장 위치 규칙은 Worker만 알고, BFF는 `bff` 서비스를 `document-worker-net`에 붙일 필요가 없다.
 
 ## 문서 생성
 
@@ -48,7 +42,7 @@ BFF가 생성 결과를 SeaweedFS Filer에서 직접 읽을 예정이면, 현재
 2. LLM 또는 업무 로직의 결과를 공통 `DocumentPlan`으로 검증한 뒤, 현재 DOCX renderer DSL로 컴파일한다.
 3. BFF가 확정한 `X-Tenant-Id`, 추적용 `X-Request-Id`, 내부 API key를 붙여 Worker에 요청한다.
 4. Worker 응답의 `fileId`, `objectKey` 등 메타데이터를 BFF 데이터 저장소에 보관한다.
-5. 다운로드는 이후 BFF의 별도 권한 확인 API가 처리한다. `objectKey`나 SeaweedFS URL을 브라우저에 직접 전달하지 않는다.
+5. 다운로드는 BFF의 별도 권한 확인 API가 처리한다. BFF가 방 접근을 확인한 뒤 Worker의 읽기 API로 파일을 읽어 내려준다. `objectKey`나 SeaweedFS URL을 브라우저에 직접 전달하지 않는다.
 
 ### 출력 파일 형식 결정
 
@@ -176,6 +170,22 @@ webClient.post()
 }
 ```
 
+## 생성된 문서 읽기
+
+BFF가 방 접근을 확인한 뒤, 생성 응답에 있던 `objectKey`로 저장된 문서를 읽는다. 내용만 돌려주고 열람 이름과 내려받는 형식은 BFF가 정한다.
+
+```http
+GET /api/v1/documents/files?objectKey=documents/tenant-a/2026/09/01/01M.../weekly-report.docx HTTP/1.1
+Host: document-worker:8100
+X-Internal-Api-Key: <worker-api-key>
+X-Tenant-Id: tenant-a
+X-Request-Id: 01J...
+```
+
+- 성공하면 `200`과 파일 본문을 `application/octet-stream`으로 돌려준다. `X-Content-Type-Options: nosniff`와 `Cache-Control: no-store`가 붙는다. 크기는 생성 상한(`MAX_OUTPUT_BYTES`)까지 읽는다.
+- `objectKey`는 생성이 만든 모양(`{rootPrefix}/{tenantId}/{YYYY}/{MM}/{DD}/{fileId}/{fileName}`)이면서 `X-Tenant-Id`와 같은 tenant의 것이어야 한다. 템플릿·방 문서 원본 같은 다른 저장 영역, 다른 tenant의 문서, `..`가 든 경로는 `400 VALIDATION_ERROR`로 거절한다.
+- 파일이 없으면 `404 FILE_NOT_FOUND`, 저장소 오류는 `503 STORAGE_UNAVAILABLE`이다.
+
 ## 템플릿 원본 저장
 
 템플릿 저장은 생성과 별도 endpoint다. BFF는 사용자가 업로드한 파일을 검증·인가한 뒤 파일 스트림을 이 endpoint로 전달한다.
@@ -249,4 +259,4 @@ Worker 오류 응답은 항상 다음 구조다.
 }
 ```
 
-주요 상태는 `400`(DSL·tenant·파일명 오류), `401`(내부 API key 오류), `413`(크기 초과), `415`(지원하지 않는 템플릿 형식), `422`(손상된 템플릿), `500`(렌더/변환 실패), `503`(SeaweedFS 오류), `504`(시간 초과)다. BFF는 `requestId`를 로그와 사용자 오류 추적에 사용하고, Worker 내부 URL이나 상세 예외는 외부 응답에 포함하지 않는다.
+주요 상태는 `400`(DSL·tenant·파일명 오류), `401`(내부 API key 오류), `404`(읽으려는 생성 문서가 없음), `413`(크기 초과), `415`(지원하지 않는 템플릿 형식), `422`(손상된 템플릿), `500`(렌더/변환 실패), `503`(SeaweedFS 오류), `504`(시간 초과)다. BFF는 `requestId`를 로그와 사용자 오류 추적에 사용하고, Worker 내부 URL이나 상세 예외는 외부 응답에 포함하지 않는다.

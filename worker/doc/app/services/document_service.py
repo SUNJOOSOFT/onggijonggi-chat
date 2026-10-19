@@ -1,3 +1,4 @@
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from secrets import token_bytes
@@ -22,6 +23,8 @@ from app.services.pdf_converter import PdfConverter
 from app.storage.seaweedfs import SeaweedFsStorage
 
 _ULID_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+# create()가 만드는 저장 위치에서 root/tenant 뒤의 꼬리. 날짜·파일 id·파일명 자리만 허용해 다른 경로를 읽지 못하게 한다.
+_OUTPUT_KEY_TAIL = re.compile(r"[0-9]{4}/[0-9]{2}/[0-9]{2}/[0-9A-HJKMNP-TV-Z]{26}/[^/]+")
 _OFFICE_TEMPLATE_PARTS = {
     ".docx": "word/document.xml",
     ".xlsx": "xl/workbook.xml",
@@ -109,6 +112,28 @@ class DocumentService:
             created_at=created_at,
             request_id=request_id,
         )
+
+    def read_output(self, object_key: str, tenant_id: str) -> bytes:
+        """create()가 저장한 문서를 돌려준다. 호출하는 BFF가 방 접근을 확인한 뒤에만 부른다.
+
+        object_key는 create()가 만드는 모양이면서 이 tenant의 것일 때만 읽는다. 템플릿·방 문서 원본 같은 다른
+        경로나 다른 tenant의 문서는 값이 있어도 거절한다.
+        """
+        prefix = f"{self._settings.seaweed_root_prefix}/{tenant_id}/"
+        tail = object_key[len(prefix) :] if object_key.startswith(prefix) else ""
+        match = _OUTPUT_KEY_TAIL.fullmatch(tail)
+        if match is None:
+            raise WorkerError(400, "VALIDATION_ERROR", "objectKey is invalid")
+        try:
+            validate_file_name(tail.rsplit("/", 1)[1])
+        except ValueError as error:
+            raise WorkerError(400, "VALIDATION_ERROR", "objectKey is invalid") from error
+        try:
+            return self._storage.read(object_key, self._settings.max_output_bytes)
+        except WorkerError as error:
+            if error.status_code == 404:
+                raise WorkerError(404, "FILE_NOT_FOUND", "Generated document is unavailable") from error
+            raise
 
     async def save_template(
         self,

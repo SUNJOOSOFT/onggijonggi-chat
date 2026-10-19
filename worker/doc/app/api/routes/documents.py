@@ -2,7 +2,7 @@ import hmac
 import re
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, File, Form, Header, Request, Response, UploadFile
+from fastapi import APIRouter, Depends, File, Form, Header, Query, Request, Response, UploadFile
 from pydantic import TypeAdapter, ValidationError
 
 from app.core.config import Settings
@@ -46,6 +46,23 @@ def create_document(
 ) -> DocumentResponse:
     authorize(settings, internal_api_key, tenant_id)
     return service.create(document_request, tenant_id, request_id(request))
+
+
+@router.get("/files")
+def read_generated_document(
+    settings: Annotated[Settings, Depends(get_settings)],
+    service: Annotated[DocumentService, Depends(get_document_service)],
+    internal_api_key: Annotated[str, Header(alias="X-Internal-Api-Key")],
+    tenant_id: Annotated[str, Header(alias="X-Tenant-Id")],
+    object_key: Annotated[str, Query(alias="objectKey", min_length=1, max_length=1024)],
+) -> Response:
+    """생성 응답의 objectKey로 저장된 문서를 돌려준다. 방 권한과 내려받는 이름은 BFF가 정한다 — 내부 API가 업로드 내용을 실행하게 하지 않는다."""
+    authorize(settings, internal_api_key, tenant_id)
+    return Response(
+        content=service.read_output(object_key, tenant_id),
+        media_type="application/octet-stream",
+        headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "no-store"},
+    )
 
 
 @router.post("/templates", status_code=201, response_model=TemplateResponse)
