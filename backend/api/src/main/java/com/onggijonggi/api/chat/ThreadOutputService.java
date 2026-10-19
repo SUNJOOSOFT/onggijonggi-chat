@@ -24,9 +24,9 @@ import org.springframework.web.server.ResponseStatusException;
 
 /**
  * Class Name : ThreadOutputService.java
- * Description : 방의 "출력"(문서 생성 워커가 만든 파일, thr_out)을 남기고 목록을 읽는다(#414). 파일 내용은 워커의 저장소에 있고
+ * Description : 방의 "출력"(문서 생성 워커가 만든 파일, thr_out)을 남기고 목록·파일을 읽는다(#414). 파일 내용은 워커의 저장소에 있고
  *               여기서는 위치와 메타데이터만 다룬다. register는 서버 안에서 부르는 진입점이라 호출하는 쪽(생성 도구)이 이미
- *               방 접근을 확인한 상태로 보고, list는 방 문서(ThreadDocumentService.access)와 같은 순서로 방 접근을 확인한다.
+ *               방 접근을 확인한 상태로 보고, list·download는 방 문서(ThreadDocumentService.access)와 같은 순서로 방 접근을 확인한다.
  *               호출부는 boundedElastic에서 실행한다.
  */
 @Service
@@ -44,19 +44,22 @@ public class ThreadOutputService {
 	private final ThrMbrRepository memberships;
 	private final AppUserRepository users;
 	private final WorkspaceAuthorizer authorizer;
+	private final ThreadOutputStorage storage;
 	@PersistenceContext private EntityManager entityManager;
 
 	public ThreadOutputService(JdbcTemplate jdbc, PlatformTransactionManager manager, ThrRepository threads,
-			ThrMbrRepository memberships, AppUserRepository users, WorkspaceAuthorizer authorizer) {
+			ThrMbrRepository memberships, AppUserRepository users, WorkspaceAuthorizer authorizer, ThreadOutputStorage storage) {
 		this.jdbc = jdbc;
 		this.transactions = new TransactionTemplate(manager);
 		this.threads = threads;
 		this.memberships = memberships;
 		this.users = users;
 		this.authorizer = authorizer;
+		this.storage = storage;
 	}
 
 	private record Row(ThreadOutputView view, String fileKey) { }
+	public record Download(String fileName, byte[] bytes) { }
 
 	/**
 	 * 생성 결과를 방의 출력으로 남긴다. 같은 requestKey로 다시 부르면 새 건을 만들지 않고 처음 남긴 건을 돌려준다 — 재시도나
@@ -92,6 +95,22 @@ public class ThreadOutputService {
 			return jdbc.query(VIEW_SELECT + " where o.thr_id = ? order by o.created_at desc, o.id desc",
 					(rs, index) -> view(rs), threadId);
 		});
+	}
+
+	/**
+	 * 출력 한 건의 파일을 내려준다. 방 접근을 확인한 뒤 그 방의 출력만 찾고, 파일은 트랜잭션 밖에서 워커를 거쳐 읽는다 — 느린
+	 * 저장소 호출 동안 방 잠금을 쥐지 않는다. 방에 들어올 수 없거나 그 방의 출력이 아니면 404로 답한다.
+	 */
+	public Download download(UUID threadId, UUID outputId, CurrentActor actor) {
+		record Target(UUID tenant, String fileName, String fileKey) { }
+		Target target = transactions.execute(tx -> {
+			Thr thread = access(threadId, actor);
+			Row row = jdbc.query(VIEW_SELECT + " where o.thr_id = ? and o.id = ?",
+					(rs, index) -> new Row(view(rs), rs.getString("file_key")), threadId, outputId).stream().findFirst()
+					.orElseThrow(ThreadOutputService::notFound);
+			return new Target(thread.getTenantId(), row.view().fileName(), row.fileKey());
+		});
+		return new Download(target.fileName(), storage.read(target.tenant(), target.fileKey()));
 	}
 
 	private static ThreadOutputView view(java.sql.ResultSet rs) throws java.sql.SQLException {
