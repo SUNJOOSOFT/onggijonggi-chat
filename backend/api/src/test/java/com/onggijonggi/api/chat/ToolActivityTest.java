@@ -27,6 +27,8 @@ class ToolActivityTest {
 				.contains(new ToolActivity("WEB_FETCH", "https://example.org/a"));
 		assertThat(ToolActivity.of(ThreadDocumentTool.NAME, "{\"query\":\"연차 신청\"}", json))
 				.contains(new ToolActivity("DOCUMENT_SEARCH", "연차 신청"));
+		assertThat(ToolActivity.of(ThreadDocumentCreateTool.NAME, "{\"title\":\"주간 보고\"}", json))
+				.contains(new ToolActivity("DOCUMENT_CREATE", "주간 보고"));
 		assertThat(ToolActivity.of("unknownTool", "{\"x\":1}", json)).contains(new ToolActivity("TOOL", null));
 	}
 
@@ -36,7 +38,7 @@ class ToolActivityTest {
 	*/
 	@Test
 	void everyToolGivenToTheModelHasAnActivityKind() {
-		for (Class<?> toolClass : List.of(CurrentTimeTool.class, WebTools.class, ThreadDocumentTool.class)) {
+		for (Class<?> toolClass : List.of(CurrentTimeTool.class, WebTools.class, ThreadDocumentTool.class, ThreadDocumentCreateTool.class)) {
 			for (Method method : toolClass.getDeclaredMethods()) {
 				Tool tool = method.getAnnotation(Tool.class);
 				if (tool == null) {

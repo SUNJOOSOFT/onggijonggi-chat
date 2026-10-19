@@ -47,6 +47,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.mock;
@@ -1121,6 +1122,61 @@ class ThreadMessageDispatcherTest {
 		assertThat(toolResults).containsExactly(ThreadDocumentRevision.FAILED + "원래 문장을 문서에서 찾지 못했습니다.",
 				"'규정_v1.docx'을 방 문서에 등록했습니다.",
 				ThreadMessageDispatcher.ALREADY_REVISED + "'규정_v1.docx'을 방 문서에 등록했습니다.");
+	}
+
+	/** 새 문서 만들기 도구는 고정 문서가 없는 방에서도 붙고, 이 턴의 방·요청자·턴 id로 ThreadDocumentCreation에 넘긴다(#415). */
+	@Test
+	void theCreateToolIsGivenEvenWhenNoDocumentIsPinned() {
+		TestRoom room = new TestRoom();
+		AtomicReference<String> toolResult = new AtomicReference<>();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		ThreadDocumentPlan plan = new ThreadDocumentPlan("주간 보고", "DOCX",
+				List.of(new ThreadDocumentPlan.Block("paragraph", null, "내용", null, null, null)));
+		when(llm.streamChat(any())).thenAnswer(invocation -> {
+			ChatStreamRequest sent = invocation.getArgument(0);
+			assertThat(sent.documentTool()).isNull();
+			toolResult.set(sent.createTool().createThreadDocument(plan.title(), plan.format(), plan.blocks()));
+			return Flux.just("답");
+		});
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.just(List.of()));
+		ThreadDocumentCreation creation = mock(ThreadDocumentCreation.class);
+		when(creation.create(eq(room.threadId), any(), anyString(), eq(plan), any()))
+				.thenReturn(new ThreadDocumentCreation.Result(true, "등록했습니다"));
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create(), true, null, creation);
+
+		dispatcher.dispatch(command(room, "@AI 보고서 만들어줘"), room.membership.generation());
+
+		awaitDone(room);
+		assertThat(toolResult).hasValue("등록했습니다");
+		ArgumentCaptor<CurrentActor> actor = ArgumentCaptor.forClass(CurrentActor.class);
+		verify(creation).create(eq(room.threadId), actor.capture(), anyString(), eq(plan), any());
+		assertThat(actor.getValue().userId()).isEqualTo(room.userId);
+	}
+
+	/** 문서 만들기를 쓰지 않는 배포(ThreadDocumentCreation 없음)에서는 도구를 붙이지 않는다. */
+	@Test
+	void theCreateToolIsLeftOutWhenTheDeploymentHasNoCreation() {
+		TestRoom room = new TestRoom();
+		LlmChatStreamService llm = mock(LlmChatStreamService.class);
+		when(llm.streamChat(any())).thenReturn(Flux.just("답"));
+		MsgPersistenceService msgPersistenceService = mock(MsgPersistenceService.class);
+		when(msgPersistenceService.createPendingAgentMessageBlocking(any(), anyLong(), eq(room.threadId)))
+				.thenReturn(Msg.pendingAgent(UUID.randomUUID(), room.threadId, 1));
+		ThreadDocumentSearch documents = mock(ThreadDocumentSearch.class);
+		when(documents.searchableDocuments(eq(room.threadId), any())).thenReturn(Mono.just(List.of()));
+		ThreadMessageDispatcher dispatcher = new ThreadMessageDispatcher(room.registry, llm, msgPersistenceService, documents,
+				new ObjectMapper(), "test-model", Duration.ofSeconds(120), 20, 20, VirtualTimeScheduler.create());
+
+		dispatcher.dispatch(command(room, "@AI first"), room.membership.generation());
+
+		ArgumentCaptor<ChatStreamRequest> request = ArgumentCaptor.forClass(ChatStreamRequest.class);
+		verify(llm, timeout(1000)).streamChat(request.capture());
+		assertThat(request.getValue().createTool()).isNull();
 	}
 
 	@Test

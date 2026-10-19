@@ -61,6 +61,9 @@ public class LlmChatStreamService {
 		if (request.documentTool() != null) {
 			tools.add(request.documentTool());
 		}
+		if (request.createTool() != null) {
+			tools.add(request.createTool());
+		}
 
 		// 모든 도구 호출이 이 턴의 공통 지점을 지나게 감싼다(이슈 #390). 감싸도 모델이 보는 도구 정의는 그대로고,
 		// 도구 루프(ToolCallingAdvisor)·스트림은 손대지 않는다.

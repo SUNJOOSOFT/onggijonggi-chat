@@ -176,6 +176,28 @@ class ThreadOutputPostgresTest {
 		status(() -> service.download(room, out.id(), owner), HttpStatus.NOT_FOUND);
 	}
 
+	@Test void onlyAMemberOfAnActiveRoomMayMakeOutputs() {
+		assertThat(service.writableTenant(room, member)).isEqualTo(tenant);
+		status(() -> service.writableTenant(room, stranger), HttpStatus.NOT_FOUND);
+		for (String state : new String[] {"LOCKED", "ARCHIVED"}) {
+			jdbc.update("update thr set status=?,locked_at=now(),archived_at=case when ?='ARCHIVED' then now() else null end where id=?",
+					state, state, room);
+			status(() -> service.writableTenant(room, owner), HttpStatus.CONFLICT);
+		}
+		// 잠긴 방도 읽기는 된다 — 만들기만 막는다.
+		assertThat(service.list(room, owner)).isEmpty();
+		when(authorizer.canViewBlocking(anyString(), any())).thenReturn(false);
+		status(() -> service.writableTenant(otherRoom, owner), HttpStatus.NOT_FOUND);
+	}
+
+	@Test void anOutputIsFoundByItsRequestKeyOnlyInItsRoom() {
+		UUID key = UUID.randomUUID();
+		var out = service.register(room, key, owner.userId(), "찾을.md", "MD", 5, "documents/t/2026/10/19/A/찾을.md");
+		assertThat(service.findByRequestKey(room, key)).hasValueSatisfying(found -> assertThat(found.id()).isEqualTo(out.id()));
+		assertThat(service.findByRequestKey(otherRoom, key)).isEmpty();
+		assertThat(service.findByRequestKey(room, UUID.randomUUID())).isEmpty();
+	}
+
 	private UUID collabRoom(String title, CurrentActor creator, CurrentActor... others) {
 		Thr value = Thr.collab(creator.userId(), title);
 		value.placeIn(tenant, node);

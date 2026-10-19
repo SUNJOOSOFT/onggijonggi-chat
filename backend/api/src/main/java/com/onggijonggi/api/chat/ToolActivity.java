@@ -31,6 +31,8 @@ record ToolActivity(String kind, String target) {
 				Optional.of(new ToolActivity("DOCUMENT_SEARCH", shorten(argument(input, "query", json))));
 			case ThreadDocumentTool.REVISE_NAME ->
 				Optional.of(new ToolActivity("DOCUMENT_REVISE", shorten(argument(input, "fileName", json))));
+			case ThreadDocumentCreateTool.NAME ->
+				Optional.of(new ToolActivity("DOCUMENT_CREATE", shorten(argument(input, "title", json))));
 			default -> Optional.of(new ToolActivity("TOOL", null));
 		};
 	}

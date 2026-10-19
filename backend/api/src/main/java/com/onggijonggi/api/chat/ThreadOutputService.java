@@ -6,6 +6,7 @@ import com.onggijonggi.common.chat.domain.Thr;
 import com.onggijonggi.common.chat.domain.ThrKind;
 import com.onggijonggi.common.chat.domain.ThrMbrRole;
 import com.onggijonggi.common.chat.domain.ThrMbrStatus;
+import com.onggijonggi.common.chat.domain.ThrStatus;
 import com.onggijonggi.common.chat.persistence.ThrMbrRepository;
 import com.onggijonggi.common.chat.persistence.ThrRepository;
 import com.onggijonggi.common.user.AppUserRepository;
@@ -13,6 +14,7 @@ import com.onggijonggi.common.user.AppUserStatus;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.UUID;
 import org.springframework.http.HttpStatus;
@@ -86,6 +88,24 @@ public class ThreadOutputService {
 				throw new IllegalStateException("같은 요청 키로 다른 파일이 이미 등록되어 있다");
 			return row.view();
 		});
+	}
+
+	/**
+	 * 출력을 만들 수 있는지 확인하고 방의 tenant를 돌려준다. 읽기 접근(access)에 더해 방이 ACTIVE여야 한다 — 방 문서 등록과
+	 * 같은 조건이다. 잠기거나 보관된 방은 409, 방에 들어올 수 없는 사람은 404다.
+	 */
+	public UUID writableTenant(UUID threadId, CurrentActor actor) {
+		return transactions.execute(tx -> {
+			Thr thread = access(threadId, actor);
+			if (thread.getStatus() != ThrStatus.ACTIVE) throw new ResponseStatusException(HttpStatus.CONFLICT);
+			return thread.getTenantId();
+		});
+	}
+
+	/** 요청 키로 이미 남긴 출력을 찾는다. register를 부르기 전에 확인해, 재시도에서 파일을 또 만들지 않게 한다. */
+	public Optional<ThreadOutputView> findByRequestKey(UUID threadId, UUID requestKey) {
+		return jdbc.query(VIEW_SELECT + " where o.thr_id = ? and o.req_key = ?", (rs, index) -> view(rs), threadId, requestKey)
+				.stream().findFirst();
 	}
 
 	/** 방의 출력을 최신순으로 돌려준다. 방에 들어올 수 없는 사람에게는 방도 출력도 없는 것처럼 404로 답한다. */

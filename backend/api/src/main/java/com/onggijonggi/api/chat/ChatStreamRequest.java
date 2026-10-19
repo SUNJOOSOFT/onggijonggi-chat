@@ -18,9 +18,17 @@ import java.util.UUID;
  * @param documentTool 이 턴의 방 문서 검색 도구. 검색할 고정 문서가 없는 방이면 null이고 도구를 붙이지 않는다
  * @param toolExecutions 이 턴의 도구 실행 공통 지점(이슈 #390). null이면 LlmChatStreamService가 리스너 없는 것을 만든다
  * @param webSources 이 턴의 웹 출처 모음(이슈 #401). 웹 도구가 성공한 검색·읽기를 여기 남긴다. null이면 모으지 않는다
+ * @param createTool 이 턴의 새 문서 만들기 도구(이슈 #415). 고정 문서가 없는 방에도 붙는다. null이면 도구를 붙이지 않는다
  */
 public record ChatStreamRequest(UUID sessionId, String modelId, List<ChatMessage> messages, String timeZone,
-		ThreadDocumentTool documentTool, TurnToolExecutions toolExecutions, WebSources webSources) {
+		ThreadDocumentTool documentTool, TurnToolExecutions toolExecutions, WebSources webSources,
+		ThreadDocumentCreateTool createTool) {
+
+	/** 새 문서 만들기 도구는 붙이지 않는다. */
+	public ChatStreamRequest(UUID sessionId, String modelId, List<ChatMessage> messages, String timeZone,
+			ThreadDocumentTool documentTool, TurnToolExecutions toolExecutions, WebSources webSources) {
+		this(sessionId, modelId, messages, timeZone, documentTool, toolExecutions, webSources, null);
+	}
 
 	/** 방 문서 검색 도구 없이 만든다. */
 	public ChatStreamRequest(UUID sessionId, String modelId, List<ChatMessage> messages, String timeZone) {

@@ -60,6 +60,7 @@ public class ThreadMessageDispatcher {
 	private final ThreadDocumentSearch threadDocumentSearch;
 	/** 개정본 만들기 도구의 실행. 개정을 다루지 않는 테스트용 생성자는 null을 넣고, 그때 도구는 만들지 못했다고 답한다. */
 	private final ThreadDocumentRevision documentRevision;
+	private final ThreadDocumentCreation documentCreation;
 
 	private final ObjectMapper json;
 
@@ -125,6 +126,7 @@ public class ThreadMessageDispatcher {
 			MsgPersistenceService msgPersistenceService,
 			ThreadDocumentSearch threadDocumentSearch,
 			ThreadDocumentRevision documentRevision,
+			ThreadDocumentCreation documentCreation,
 			WebTools webTools,
 			ObjectMapper json,
 			@Value("${app.thread.ai.model:${spring.ai.openai.chat.options.model}}") String modelId,
@@ -132,7 +134,8 @@ public class ThreadMessageDispatcher {
 			@Value("${app.thread.ai.max-pending-per-room:20}") int maxPendingPerRoom,
 			@Value("${app.thread.ai.max-context-messages:20}") int maxContextMessages) {
 		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, threadDocumentSearch, json, modelId,
-				turnTimeout, maxPendingPerRoom, maxContextMessages, Schedulers.parallel(), webTools.enabled(), documentRevision);
+				turnTimeout, maxPendingPerRoom, maxContextMessages, Schedulers.parallel(), webTools.enabled(), documentRevision,
+				documentCreation);
 	}
 
 	/** 웹 도구가 켜진 배포(기본값)로 만든다. */
@@ -148,6 +151,15 @@ public class ThreadMessageDispatcher {
 			MsgPersistenceService msgPersistenceService, ThreadDocumentSearch threadDocumentSearch, ObjectMapper json,
 			String modelId, Duration turnTimeout, int maxPendingPerRoom, int maxContextMessages,
 			Scheduler deadlineScheduler, boolean webEnabled, ThreadDocumentRevision documentRevision) {
+		this(roomSessionRegistry, llmChatStreamService, msgPersistenceService, threadDocumentSearch, json, modelId,
+				turnTimeout, maxPendingPerRoom, maxContextMessages, deadlineScheduler, webEnabled, documentRevision, null);
+	}
+
+	ThreadMessageDispatcher(RoomSessionRegistry roomSessionRegistry, LlmChatStreamService llmChatStreamService,
+			MsgPersistenceService msgPersistenceService, ThreadDocumentSearch threadDocumentSearch, ObjectMapper json,
+			String modelId, Duration turnTimeout, int maxPendingPerRoom, int maxContextMessages,
+			Scheduler deadlineScheduler, boolean webEnabled, ThreadDocumentRevision documentRevision,
+			ThreadDocumentCreation documentCreation) {
 		if (modelId == null || modelId.isBlank()) {
 			throw new IllegalArgumentException("app.thread.ai.model must not be blank");
 		}
@@ -172,6 +184,7 @@ public class ThreadMessageDispatcher {
 		this.webEnabled = webEnabled;
 		this.deadlineScheduler = deadlineScheduler;
 		this.documentRevision = documentRevision;
+		this.documentCreation = documentCreation;
 		// 방 프레임은 registry의 대기열에서 비동기로 나가 실패를 방송한 자리로 돌려받을 수 없다(이슈 #405) — 실패한
 		// 프레임의 세대를 registry가 알려 주면 그 세대를 닫는다(예전에 방송이 예외를 던질 때 하던 처리와 같다).
 		roomSessionRegistry.onBroadcastFailure(this::closeGenerationAfterBroadcastFailure);
@@ -669,7 +682,7 @@ public class ThreadMessageDispatcher {
 					return withTotalDeadline(Flux.defer(() -> llmChatStreamService.streamChat(
 							new ChatStreamRequest(activeTurn.turn.threadId(), modelIdFor(activeTurn.turn),
 									prompt.messages(), activeTurn.turn.timeZone(), prompt.documentTool(),
-									activeTurn.toolExecutions, activeTurn.webSources))));
+									activeTurn.toolExecutions, activeTurn.webSources, createTool(activeTurn)))));
 				})
 				.filter(delta -> !delta.isEmpty())
 				.doOnNext(delta -> {
@@ -817,6 +830,17 @@ public class ThreadMessageDispatcher {
 			if (!result.startsWith(ThreadDocumentRevision.FAILED)) activeTurn.revisionResult = result;
 			return result;
 		}
+	}
+
+	/**
+	* 이 턴의 새 문서 만들기 도구(#415). 고정 문서가 없는 방에도 붙고, 문서 만들기를 쓰지 않는 배포(documentCreation 없음)에서만 뺀다.
+	* 같은 턴의 재호출을 알아보는 키는 턴 id이고, 없으면 추적 id, 그마저 없으면 사람 메시지 id다.
+	*/
+	private ThreadDocumentCreateTool createTool(ActiveTurn activeTurn) {
+		if (documentCreation == null) return null;
+		PendingTurn turn = activeTurn.turn;
+		Object key = turn.turnId() != null ? turn.turnId() : turn.traceId() != null ? turn.traceId() : turn.humanMsgId();
+		return new ThreadDocumentCreateTool(documentCreation, turn.threadId(), actorOf(turn), String.valueOf(key));
 	}
 
 	private static CurrentActor actorOf(PendingTurn turn) {
