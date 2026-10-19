@@ -31,6 +31,7 @@ export function ApprovalDialog({
   approval,
   messageContent,
   requesterName,
+  initialRejecting = false,
   onDecided,
   onClose,
 }: {
@@ -40,10 +41,12 @@ export function ApprovalDialog({
   /** 요청된 메시지의 본문. 화면이 아직 갖고 있지 않으면 null이다. */
   messageContent: string | null;
   requesterName: string;
+  /** 승인 카드의 "반려"에서 열면 반려 사유 입력부터 보인다(이슈 #416). */
+  initialRejecting?: boolean;
   onDecided: () => void;
   onClose: () => void;
 }) {
-  const [rejecting, setRejecting] = useState(false);
+  const [rejecting, setRejecting] = useState(initialRejecting);
   const [reason, setReason] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -52,7 +55,7 @@ export function ApprovalDialog({
   // 다른 요청을 열면 이전 요청의 입력과 오류를 남기지 않는다.
   // biome-ignore lint/correctness/useExhaustiveDependencies: 요청이 바뀔 때만 비운다
   useEffect(() => {
-    setRejecting(false);
+    setRejecting(initialRejecting);
     setReason('');
     setBusy(false);
     setError(null);

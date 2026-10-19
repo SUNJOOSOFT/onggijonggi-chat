@@ -2,8 +2,8 @@
 /********************************************************
  파일명 : collab-room-approval.test.tsx (components/collab)
  설 명 : 협업방 화면에서 승인 요청이 시작되고 알려지는 길을 본다(이슈 #407) — 메시지의 "승인 요청" 버튼, 헤더의
- "승인 대기" 버튼, approval.changed 뒤의 토스트, 모달에 뜨는 요청된 메시지. 방 훅과 REST는 목으로 대체하고
- 화면 연결만 본다.
+ "승인 대기" 버튼, approval.changed 뒤의 토스트, 모달에 뜨는 요청된 메시지. 대화 흐름의 승인 카드와 원글 아래 상태
+ 표시, 카드의 버튼으로 모달을 여는 길도 함께 본다(이슈 #416). 방 훅과 REST는 목으로 대체하고 화면 연결만 본다.
  *********************************************************/
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -15,7 +15,10 @@ import {
   type ThreadApproval,
   listThreadApprovals,
 } from '@/lib/api/thread-approvals';
-import { initialRoomState } from '@/lib/chat/room-state';
+import {
+  type RoomApprovalNotice,
+  initialRoomState,
+} from '@/lib/chat/room-state';
 import { useCollabRoom } from '@/lib/collab/use-collab-room';
 import { CollabRoom } from './collab-room';
 
@@ -146,6 +149,102 @@ describe('CollabRoom 승인 요청', () => {
     render(<CollabRoom threadId="room-1" />);
 
     expect(screen.queryByRole('button', { name: '승인 요청' })).toBeNull();
+  });
+});
+
+describe('CollabRoom 승인 카드', () => {
+  const requestLine: RoomApprovalNotice = {
+    id: 'line-1',
+    seq: 2,
+    approvalId: 'apv-1',
+    event: 'requested',
+    requester: { subject: 'sujin', displayName: '배수진' },
+    target: { subject: 'minho', displayName: '김민호' },
+    originMsgId: 'm1',
+    reason: null,
+  };
+
+  function roomWith(...lines: RoomApprovalNotice[]) {
+    return {
+      ...room(),
+      state: { ...initialRoomState, messages: [message, ...lines] },
+    };
+  }
+
+  it('승인 줄을 원글 앞부분이 붙은 카드로 보이고 원글 아래에 상태를 붙인다', () => {
+    useRoom.mockReturnValue(roomWith(requestLine));
+    render(<CollabRoom threadId="room-1" />);
+
+    // 원글은 대화에 한 번, 카드의 인용에 한 번 보인다.
+    expect(screen.getAllByText('제12조 개정안입니다')).toHaveLength(2);
+    expect(
+      screen.getByText('배수진님이 김민호님에게 승인을 요청했습니다'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '승인 대기 · 김민호' }),
+    ).toBeTruthy();
+    // 대기 중인 원글에는 또 요청하지 않는다.
+    expect(screen.queryByRole('button', { name: '승인 요청' })).toBeNull();
+  });
+
+  it('반려된 원글은 상태와 사유가 보이고 다시 요청할 수 있다', () => {
+    useRoom.mockReturnValue(
+      roomWith(requestLine, {
+        ...requestLine,
+        id: 'line-2',
+        seq: 3,
+        event: 'rejected',
+        reason: '근거를 보강해 주세요',
+      }),
+    );
+    render(<CollabRoom threadId="room-1" />);
+
+    expect(screen.getByText('근거를 보강해 주세요')).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: '반려됨 · 김민호' }),
+    ).toBeTruthy();
+    expect(screen.getByRole('button', { name: '다시 요청' })).toBeTruthy();
+  });
+
+  it('승인된 원글에는 다시 요청 버튼이 없다', () => {
+    useRoom.mockReturnValue(
+      roomWith(requestLine, {
+        ...requestLine,
+        id: 'line-2',
+        seq: 3,
+        event: 'approved',
+      }),
+    );
+    render(<CollabRoom threadId="room-1" />);
+
+    expect(
+      screen.getByRole('button', { name: '승인됨 · 김민호' }),
+    ).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '다시 요청' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '승인 요청' })).toBeNull();
+  });
+
+  it('내게 지정된 대기 요청의 카드에만 승인·반려 버튼이 있고, 반려를 누르면 사유 입력부터 열린다', async () => {
+    list.mockResolvedValue([pendingForMe]);
+    useRoom.mockReturnValue(roomWith(requestLine));
+    render(<CollabRoom threadId="room-1" />);
+
+    const reject = await screen.findByRole('button', { name: '반려' });
+    expect(screen.getByRole('button', { name: '승인' })).toBeTruthy();
+
+    fireEvent.click(reject);
+
+    expect(await screen.findByLabelText('반려 사유')).toBeTruthy();
+  });
+
+  it('내게 지정되지 않은 요청의 카드에는 버튼이 없다', async () => {
+    list.mockResolvedValue([{ ...pendingForMe, canDecide: false }]);
+    useRoom.mockReturnValue(roomWith(requestLine));
+    render(<CollabRoom threadId="room-1" />);
+
+    await vi.waitFor(() => expect(list).toHaveBeenCalled());
+    expect(screen.queryByRole('button', { name: '반려' })).toBeNull();
+    expect(screen.queryByRole('button', { name: '승인' })).toBeNull();
   });
 });
 

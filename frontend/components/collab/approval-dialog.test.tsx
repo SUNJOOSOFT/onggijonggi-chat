@@ -73,6 +73,20 @@ describe('ApprovalDialog', () => {
     ).toBeTruthy();
   });
 
+  it('승인 카드의 반려로 열면 반려 사유 입력부터 보인다', () => {
+    renderDialog({ initialRejecting: true });
+
+    expect(screen.getByLabelText('반려 사유')).toBeTruthy();
+    expect(screen.getByRole('button', { name: '반려 확정' })).toBeTruthy();
+    expect(screen.queryByRole('button', { name: '승인' })).toBeNull();
+  });
+
+  it('그냥 열면 사유 입력은 숨어 있다', () => {
+    renderDialog();
+
+    expect(screen.queryByLabelText('반려 사유')).toBeNull();
+  });
+
   it('요청이 없으면 아무것도 그리지 않는다', () => {
     renderDialog({ approval: null });
 

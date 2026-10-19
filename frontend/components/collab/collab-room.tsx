@@ -18,8 +18,9 @@
  메시지 시각과 AI 라벨(@FIN 같은 에이전트 구분)은 기획 시안에 있으나 그리지 않는다 — 프레임
  계약(#8)에 그 필드가 없어 서버가 보내주지 않는다. 계약이 넓어지면 여기에 붙일 자리다.
 
- 승인 요청(#407)은 메시지에 붙는 "승인 요청" 버튼으로 시작하고, 처리할 요청은 헤더의 "승인 대기" 버튼과 토스트로
- 모달을 연다. 목록 조회와 토스트 판단은 use-thread-approvals.ts가 맡고 이 파일은 모달을 여는 상태만 든다.
+ 승인 요청(#407)은 메시지에 붙는 "승인 요청" 버튼으로 시작하고, 처리할 요청은 헤더의 "승인 대기" 버튼과 토스트,
+ 그리고 대화 흐름의 승인 카드(#416)의 버튼으로 모달을 연다. 목록 조회와 토스트 판단은 use-thread-approvals.ts가
+ 맡고 이 파일은 모달을 여는 상태만 든다. 원글마다 지금의 승인 상태는 대화 흐름의 승인 줄에서 가린다.
 
  시스템 알림(#29)은 오류 배너와 자리는 같지만 성격이 다르다 — 오류는 방금 한 일이 실패했다는
  신호라 닫으면 끝이고, 알림은 배치가 사후에 알려주는 것이라 닫기 전까지 남는다. 색을 나눠 둔
@@ -43,11 +44,7 @@ import { Button } from '@/components/ui/button';
 import { fetchCollabThreads } from '@/lib/api/collab';
 import type { ThreadApproval } from '@/lib/api/thread-approvals';
 import { activityLabel } from '@/lib/chat/activity';
-import type {
-  RoomApprovalNotice,
-  RoomMembershipNotice,
-  RoomMessage,
-} from '@/lib/chat/room-state';
+import type { RoomMembershipNotice, RoomMessage } from '@/lib/chat/room-state';
 import {
   isApprovalNotice,
   isForbidden,
@@ -56,11 +53,20 @@ import {
 } from '@/lib/chat/room-state';
 import { useLingeringActivity } from '@/lib/chat/use-lingering-activity';
 import { typingLabel } from '@/lib/chat/typing';
+import {
+  type OriginApproval,
+  latestApprovalByOrigin,
+} from '@/lib/collab/approval-status';
 import { useThreadApprovals } from '@/lib/collab/use-thread-approvals';
 import {
   type RoomConnection,
   useCollabRoom,
 } from '@/lib/collab/use-collab-room';
+import {
+  ApprovalCard,
+  OriginStatusButton,
+  entryAnchorId,
+} from './approval-card';
 import { ApprovalDialog } from './approval-dialog';
 import { ApprovalRequestDialog } from './approval-request-dialog';
 import { CollabInput } from './collab-input';
@@ -84,28 +90,12 @@ const CONNECTION_LABEL: Record<RoomConnection, string> = {
 function MembershipRow({ notice }: { notice: RoomMembershipNotice }) {
   return (
     <p
+      id={entryAnchorId(notice.id)}
       title={notice.participant.subject}
       className="px-3 py-1 text-center text-xs text-muted-foreground"
     >
       {notice.participant.displayName}님이{' '}
       {notice.event === 'join' ? '입장했습니다' : '퇴장했습니다'}
-    </p>
-  );
-}
-
-/** 승인 요청이 생기거나 승인·반려로 처리된 줄(이슈 #407). 입퇴장 줄처럼 흐름 가운데에 옅게 남긴다. */
-function ApprovalRow({ notice }: { notice: RoomApprovalNotice }) {
-  const { requester, target } = notice;
-  return (
-    <p
-      title={`${requester.subject} → ${target.subject}`}
-      className="px-3 py-1 text-center text-xs text-muted-foreground"
-    >
-      {notice.event === 'requested'
-        ? `${requester.displayName}님이 ${target.displayName}님에게 승인을 요청했습니다`
-        : `${target.displayName}님이 ${requester.displayName}님의 요청을 ${
-            notice.event === 'approved' ? '승인' : '반려'
-          }했습니다`}
     </p>
   );
 }
@@ -119,20 +109,28 @@ function agentLabel(agent: RoomMessage['agent']): string {
  * 배경으로 구분한다(이슈 #357). */
 function MessageRow({
   message,
+  approval,
   onRequestApproval,
   activity = null,
 }: {
   message: RoomMessage;
+  /** 이 메시지에 대한 지금의 승인 상태. 승인 흐름에 없으면 null이다(이슈 #416). */
+  approval: OriginApproval | null;
   onRequestApproval: (messageId: string) => void;
   /** 이 답변의 턴이 지금 실행 중인 도구의 문구(이슈 #397). */
   activity?: string | null;
 }) {
   const isAi = message.from === null;
   // 쓰는 중인 답변은 서버가 승인 대상에서 제외하고, 본문 없는 메시지는 보여 줄 내용이 없어 요청하지 않는다.
-  const canRequestApproval = !message.streaming && message.content !== '';
+  // 대기 중이거나 이미 승인된 글에는 요청을 또 보내지 않고, 반려된 글만 다시 요청할 수 있다.
+  const canRequestApproval =
+    !message.streaming &&
+    message.content !== '' &&
+    (approval === null || approval.status === 'rejected');
   return (
     <div
-      className={`group flex flex-col gap-1 ${
+      id={entryAnchorId(message.id)}
+      className={`group flex flex-col gap-1 transition-shadow ${
         isAi ? 'rounded-lg bg-muted/60 px-3 py-2' : 'px-3 py-2'
       }`}
     >
@@ -167,13 +165,20 @@ function MessageRow({
           )}
         </>
       )}
+      {approval !== null && (
+        <OriginStatusButton
+          status={approval.status}
+          approverName={approval.notice.target.displayName}
+          noticeId={approval.notice.id}
+        />
+      )}
       {canRequestApproval && (
         <Button
           variant="ghost"
           className="h-auto w-fit self-start px-1 py-0 text-xs text-muted-foreground opacity-0 transition-opacity focus-visible:opacity-100 group-hover:opacity-100"
           onClick={() => onRequestApproval(message.id)}
         >
-          승인 요청
+          {approval === null ? '승인 요청' : '다시 요청'}
         </Button>
       )}
     </div>
@@ -231,12 +236,16 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   const [requestingMessageId, setRequestingMessageId] = useState<string | null>(
     null,
   );
-  const [reviewing, setReviewing] = useState<ThreadApproval | null>(null);
+  // rejecting은 승인 카드의 "반려"로 열었을 때 반려 사유 입력부터 보이게 한다.
+  const [reviewing, setReviewing] = useState<{
+    approval: ThreadApproval;
+    rejecting: boolean;
+  } | null>(null);
   const { decidable, nameOf, reload } = useThreadApprovals(threadId, {
     revision: approvalsRevision,
     open: connection === 'open',
     participantsRevision,
-    onOpenRequest: setReviewing,
+    onOpenRequest: (approval) => setReviewing({ approval, rejecting: false }),
   });
   const [containerRef, endRef] = useScrollToBottom<HTMLDivElement>();
   // 도구가 연달아 돌 때 그 사이 빈틈에 표시가 깜박이지 않게 지울 때만 잠깐 남긴다(이슈 #397).
@@ -256,10 +265,34 @@ export function CollabRoom({ threadId }: { threadId: string }) {
   const reviewingContent = useMemo(() => {
     if (reviewing === null) return null;
     const found = state.messages.find(
-      (entry) => !isNotice(entry) && entry.id === reviewing.messageId,
+      (entry) => !isNotice(entry) && entry.id === reviewing.approval.messageId,
     );
     return found && !isNotice(found) ? found.content : null;
   }, [reviewing, state.messages]);
+
+  // 원글마다 지금의 승인 상태와, 승인 카드가 앞부분을 보여 줄 원글을 미리 찾아 둔다(이슈 #416).
+  const approvalByOrigin = useMemo(
+    () => latestApprovalByOrigin(state.messages),
+    [state.messages],
+  );
+  const originById = useMemo(() => {
+    const origins = new Map<
+      string,
+      { id: string; label: string; content: string }
+    >();
+    for (const entry of state.messages) {
+      if (isNotice(entry) || entry.content === '') continue;
+      origins.set(entry.id, {
+        id: entry.id,
+        label:
+          entry.from === null
+            ? agentLabel(entry.agent)
+            : entry.from.displayName,
+        content: entry.content,
+      });
+    }
+    return origins;
+  }, [state.messages]);
 
   if (isForbidden(state.error)) {
     return (
@@ -306,7 +339,9 @@ export function CollabRoom({ threadId }: { threadId: string }) {
               <Button
                 variant="outline"
                 className="h-7 px-2 text-xs"
-                onClick={() => setReviewing(decidable[0])}
+                onClick={() =>
+                  setReviewing({ approval: decidable[0], rejecting: false })
+                }
               >
                 승인 대기 {decidable.length}건
               </Button>
@@ -360,11 +395,30 @@ export function CollabRoom({ threadId }: { threadId: string }) {
                 isMembershipNotice(entry) ? (
                   <MembershipRow key={entry.id} notice={entry} />
                 ) : isApprovalNotice(entry) ? (
-                  <ApprovalRow key={entry.id} notice={entry} />
+                  <ApprovalCard
+                    key={entry.id}
+                    notice={entry}
+                    origin={
+                      entry.originMsgId === null
+                        ? null
+                        : (originById.get(entry.originMsgId) ?? null)
+                    }
+                    decidable={
+                      entry.event === 'requested'
+                        ? (decidable.find(
+                            (approval) => approval.id === entry.approvalId,
+                          ) ?? null)
+                        : null
+                    }
+                    onReview={(approval, rejecting) =>
+                      setReviewing({ approval, rejecting })
+                    }
+                  />
                 ) : (
                   <MessageRow
                     key={entry.id}
                     message={entry}
+                    approval={approvalByOrigin.get(entry.id) ?? null}
                     onRequestApproval={setRequestingMessageId}
                     activity={
                       activity?.msgId === entry.id
@@ -421,9 +475,12 @@ export function CollabRoom({ threadId }: { threadId: string }) {
       />
       <ApprovalDialog
         threadId={threadId}
-        approval={reviewing}
+        approval={reviewing?.approval ?? null}
+        initialRejecting={reviewing?.rejecting ?? false}
         messageContent={reviewingContent}
-        requesterName={reviewing ? nameOf(reviewing.requesterSubject) : ''}
+        requesterName={
+          reviewing ? nameOf(reviewing.approval.requesterSubject) : ''
+        }
         onDecided={reload}
         onClose={() => setReviewing(null)}
       />
