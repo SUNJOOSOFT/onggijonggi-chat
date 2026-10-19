@@ -275,6 +275,11 @@ export function CollabRoom({ threadId }: { threadId: string }) {
     () => latestApprovalByOrigin(state.messages),
     [state.messages],
   );
+  // 요청 모달을 열어 둔 원글의 지금 승인 상태. 열린 사이 다른 사람이 요청했으면 모달이 그 사실을 알린다.
+  const requestingPending =
+    requestingMessageId === null
+      ? null
+      : (approvalByOrigin.get(requestingMessageId) ?? null);
   const originById = useMemo(() => {
     const origins = new Map<
       string,
@@ -470,6 +475,16 @@ export function CollabRoom({ threadId }: { threadId: string }) {
       <ApprovalRequestDialog
         threadId={threadId}
         messageId={requestingMessageId}
+        preview={
+          requestingMessageId === null
+            ? null
+            : (originById.get(requestingMessageId) ?? null)
+        }
+        pendingTargetSubject={
+          requestingPending?.status === 'pending'
+            ? requestingPending.notice.target.subject
+            : null
+        }
         onRequested={reload}
         onClose={() => setRequestingMessageId(null)}
       />
@@ -477,6 +492,8 @@ export function CollabRoom({ threadId }: { threadId: string }) {
         threadId={threadId}
         approval={reviewing?.approval ?? null}
         initialRejecting={reviewing?.rejecting ?? false}
+        queue={decidable}
+        onNavigate={(approval) => setReviewing({ approval, rejecting: false })}
         messageContent={reviewingContent}
         requesterName={
           reviewing ? nameOf(reviewing.approval.requesterSubject) : ''

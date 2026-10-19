@@ -135,6 +135,20 @@ describe('CollabRoom 승인 요청', () => {
     expect(screen.queryByRole('button', { name: '김민호' })).toBeNull();
   });
 
+  it('요청 모달은 요청할 메시지의 앞부분을 보여 주고, 사람을 골라도 확인 전에는 보내지 않는다', async () => {
+    render(<CollabRoom threadId="room-1" />);
+
+    fireEvent.click(screen.getByRole('button', { name: '승인 요청' }));
+
+    expect(await screen.findByText('승인 요청 보내기')).toBeTruthy();
+    // 대화에 한 번, 모달의 미리보기에 한 번 보인다.
+    expect(screen.getAllByText('제12조 개정안입니다')).toHaveLength(2);
+    fireEvent.click(await screen.findByRole('button', { name: '배수진' }));
+    expect(
+      screen.getByRole('button', { name: '배수진에게 요청 보내기' }),
+    ).toBeTruthy();
+  });
+
   it('쓰는 중인 답변과 본문 없는 메시지에는 "승인 요청"이 없다', () => {
     useRoom.mockReturnValue({
       ...room(),
@@ -271,6 +285,8 @@ describe('CollabRoom 승인 대기', () => {
     ).toBeTruthy();
     // 모달 안 인용과 대화 흐름에 같은 본문이 두 번 보인다.
     expect(screen.getAllByText('제12조 개정안입니다')).toHaveLength(2);
+    expect(screen.getByText('승인 요청 처리')).toBeTruthy();
+    expect(screen.getByText('대기 1건 중 1건')).toBeTruthy();
     expect(screen.getByRole('button', { name: '승인' })).toBeTruthy();
   });
 

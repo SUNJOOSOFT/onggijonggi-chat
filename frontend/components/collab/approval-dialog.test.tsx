@@ -2,7 +2,8 @@
 /********************************************************
  파일명 : approval-dialog.test.tsx (components/collab)
  설 명 : 승인 처리 모달이 요청된 메시지를 보여 주고, 승인·반려를 서버 계약대로 보내며, 거절되면 열어 둔 채
- 사유를 보여 주는지 본다(이슈 #407).
+ 사유를 보여 주는지 본다(이슈 #407). 대기 건 번호와 이전·다음 이동, 카드의 반려로 열 때 사유 입력부터 보이는 것도
+ 함께 본다(이슈 #416).
  *********************************************************/
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -71,6 +72,74 @@ describe('ApprovalDialog', () => {
     expect(
       screen.getByText('요청된 메시지를 불러오지 못했습니다.'),
     ).toBeTruthy();
+  });
+
+  it('제목이 요청 모달과 구분된다', () => {
+    renderDialog();
+
+    expect(screen.getByText('승인 요청 처리')).toBeTruthy();
+  });
+
+  describe('대기 건 이동', () => {
+    const second: ThreadApproval = { ...approval, id: 'apv-2' };
+    const third: ThreadApproval = { ...approval, id: 'apv-3' };
+
+    it('대기 건이 여럿이면 몇 번째인지 보이고 이전·다음으로 그 요청을 연다', () => {
+      const onNavigate = vi.fn();
+      renderDialog({
+        approval: second,
+        queue: [approval, second, third],
+        onNavigate,
+      });
+
+      expect(screen.getByText('대기 3건 중 2건')).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: '이전' }));
+      expect(onNavigate).toHaveBeenLastCalledWith(approval);
+      fireEvent.click(screen.getByRole('button', { name: '다음' }));
+      expect(onNavigate).toHaveBeenLastCalledWith(third);
+    });
+
+    it('처음 건에서는 이전이, 마지막 건에서는 다음이 막힌다', () => {
+      renderDialog({
+        approval,
+        queue: [approval, second],
+        onNavigate: vi.fn(),
+      });
+
+      expect(
+        (screen.getByRole('button', { name: '이전' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+      expect(
+        (screen.getByRole('button', { name: '다음' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(false);
+      cleanup();
+
+      renderDialog({
+        approval: second,
+        queue: [approval, second],
+        onNavigate: vi.fn(),
+      });
+      expect(
+        (screen.getByRole('button', { name: '다음' }) as HTMLButtonElement)
+          .disabled,
+      ).toBe(true);
+    });
+
+    it('대기 건이 하나뿐이면 번호만 보이고 이동 버튼은 없다', () => {
+      renderDialog({ queue: [approval], onNavigate: vi.fn() });
+
+      expect(screen.getByText('대기 1건 중 1건')).toBeTruthy();
+      expect(screen.queryByRole('button', { name: '이전' })).toBeNull();
+      expect(screen.queryByRole('button', { name: '다음' })).toBeNull();
+    });
+
+    it('이미 목록에서 빠진 요청에는 번호를 보이지 않는다', () => {
+      renderDialog({ queue: [second], onNavigate: vi.fn() });
+
+      expect(screen.queryByText(/대기 \d건 중/)).toBeNull();
+    });
   });
 
   it('승인 카드의 반려로 열면 반려 사유 입력부터 보인다', () => {

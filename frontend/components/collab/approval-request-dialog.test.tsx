@@ -1,7 +1,8 @@
 // @vitest-environment jsdom
 /********************************************************
  파일명 : approval-request-dialog.test.tsx (components/collab)
- 설 명 : 승인 요청 모달의 후보 선별과, 고른 사람에게 요청을 보내는 흐름을 본다(이슈 #407).
+ 설 명 : 승인 요청 모달의 후보 선별과, 고른 사람에게 요청을 보내는 흐름을 본다(이슈 #407). 고른 뒤 확인해야 보내는
+ 것, 요청할 메시지 미리보기, 이미 대기 중인 요청이 있을 때 후보를 막는 것도 함께 본다(이슈 #416).
  *********************************************************/
 
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
@@ -54,7 +55,10 @@ const ROSTER = [
 
 const created = {} as ThreadApproval;
 
-function renderDialog(messageId: string | null = 'm1') {
+function renderDialog(
+  messageId: string | null = 'm1',
+  extra: Partial<React.ComponentProps<typeof ApprovalRequestDialog>> = {},
+) {
   const onRequested = vi.fn();
   const onClose = vi.fn();
   render(
@@ -63,6 +67,7 @@ function renderDialog(messageId: string | null = 'm1') {
       messageId={messageId}
       onRequested={onRequested}
       onClose={onClose}
+      {...extra}
     />,
   );
   return { onRequested, onClose };
@@ -111,11 +116,73 @@ describe('ApprovalRequestDialog', () => {
     expect(participants).not.toHaveBeenCalled();
   });
 
+  it('사람을 고르는 것만으로는 요청이 나가지 않고, 확인 버튼을 눌러야 나간다', async () => {
+    renderDialog();
+
+    // 고르기 전에는 보낼 수 없다.
+    expect(
+      (screen.getByRole('button', { name: '요청 보내기' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+
+    fireEvent.click(await screen.findByRole('button', { name: 'minho 님' }));
+
+    expect(request).not.toHaveBeenCalled();
+    expect(
+      screen
+        .getByRole('button', { name: 'minho 님' })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      screen.getByRole('button', { name: 'minho 님에게 요청 보내기' }),
+    ).toBeTruthy();
+  });
+
+  it('제목을 처리 모달과 구분하고 요청할 메시지의 앞부분을 보여 준다', async () => {
+    renderDialog('m1', {
+      preview: { label: '배수진', content: '제12조 개정안입니다' },
+    });
+
+    expect(await screen.findByText('승인 요청 보내기')).toBeTruthy();
+    expect(screen.getByText('배수진')).toBeTruthy();
+    expect(screen.getByText('제12조 개정안입니다')).toBeTruthy();
+  });
+
+  it('이미 대기 중인 요청이 있으면 후보 전원을 막고 요청이 간 사람을 표시한다', async () => {
+    participants.mockResolvedValue([
+      person('sujin', { self: true }),
+      person('minho'),
+      person('hana'),
+    ]);
+    renderDialog('m1', { pendingTargetSubject: 'minho' });
+
+    expect(
+      await screen.findByText(/이미 대기 중인 요청이 있습니다/),
+    ).toBeTruthy();
+    expect(screen.getByText('이미 요청함')).toBeTruthy();
+    for (const name of ['minho 님', 'hana 님']) {
+      expect(
+        (
+          (await screen.findByRole('button', {
+            name: new RegExp(name),
+          })) as HTMLButtonElement
+        ).disabled,
+      ).toBe(true);
+    }
+    expect(
+      (screen.getByRole('button', { name: '요청 보내기' }) as HTMLButtonElement)
+        .disabled,
+    ).toBe(true);
+  });
+
   it('고른 사람을 대상으로 메시지 승인을 요청하고 목록을 다시 읽게 한 뒤 닫는다', async () => {
     request.mockResolvedValue(created);
     const { onRequested, onClose } = renderDialog();
 
     fireEvent.click(await screen.findByRole('button', { name: 'minho 님' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'minho 님에게 요청 보내기' }),
+    );
 
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
     expect(request).toHaveBeenCalledWith('room-1', {
@@ -132,12 +199,17 @@ describe('ApprovalRequestDialog', () => {
     const { onClose } = renderDialog();
 
     fireEvent.click(await screen.findByRole('button', { name: 'minho 님' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'minho 님에게 요청 보내기' }),
+    );
     expect((await screen.findByRole('alert')).textContent).toContain(
       '요청하지 못했어요.',
     );
     expect(onClose).not.toHaveBeenCalled();
 
-    fireEvent.click(screen.getByRole('button', { name: 'minho 님' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'minho 님에게 요청 보내기' }),
+    );
     await vi.waitFor(() => expect(onClose).toHaveBeenCalled());
 
     const [first, second] = request.mock.calls;
