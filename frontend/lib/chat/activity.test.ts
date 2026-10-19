@@ -20,6 +20,9 @@ describe('activityLabel', () => {
     expect(activityLabel('DOCUMENT_REVISE', '규정.docx')).toBe(
       '개정본 만드는 중… 규정.docx',
     );
+    expect(activityLabel('DOCUMENT_CREATE', '주간 보고')).toBe(
+      '문서 만드는 중… 주간 보고',
+    );
   });
 
   it('주소의 %인코딩은 풀어서 보이고, 풀 수 없으면 그대로 둔다', () => {
@@ -54,6 +57,7 @@ describe('activityLabel', () => {
 
   it('대상이 없으면 문구만, 모르는 코드면 일반 문구', () => {
     expect(activityLabel('WEB_SEARCH', null)).toBe('웹 검색 중…');
+    expect(activityLabel('DOCUMENT_CREATE', null)).toBe('문서 만드는 중…');
     expect(activityLabel('DOCUMENT_GENERATE', '보고서')).toBe(
       '작업 중… 보고서',
     );

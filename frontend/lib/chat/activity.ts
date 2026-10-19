@@ -15,6 +15,7 @@ const LABEL_BY_KIND: Record<string, string> = {
   WEB_FETCH: '페이지 읽는 중…',
   DOCUMENT_SEARCH: '방 문서 찾는 중…',
   DOCUMENT_REVISE: '개정본 만드는 중…',
+  DOCUMENT_CREATE: '문서 만드는 중…',
 };
 
 const GENERIC_LABEL = '작업 중…';
