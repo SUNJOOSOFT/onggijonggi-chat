@@ -5,6 +5,7 @@
 - `.env.example` — 환경변수 템플릿. **바로 도는 고정 자격증명이 채워져 있다**(`appuser`/`appuser`, `admin`/`admin`, 토큰 5개) — 공개된 값이니 시험용으로만. 접속 주소까지 채워져 있어 `.env`로 복사하면 그대로 돈다 — 채울 곳은 `LLM_API_KEY` 한 줄뿐이고 파일 맨 위에 있다(실제 `.env`는 커밋 금지). **처음 쓰는 사람이 읽는 파일이라 일부러 짧게 유지한다** — 설명을 늘려야 하면 INSTALL.md로 보낸다
 - `.env.multi.example` · `.env.ollama.example` · `.env.vllm.example` — 모델 구성별 템플릿. 네 벌 모두 같은 구조이고 **여는 모델과 채울 곳만 다르다**(공통 꼬리 30줄은 동일) — 공통 부분을 고칠 일이 생기면 네 벌을 함께 고친다. 각각 `LITELLM_CONFIG_FILE`로 짝이 되는 `config/litellm_config*.yaml`을 가리킨다
 - `utils/init-env.ps1`(Windows) · `utils/init-env.sh`(macOS·Linux) — 자격증명을 직접 정하고 싶을 때 쓰는 `.env` 생성 스크립트. **기본 설치 절차에는 쓰이지 않는다** — `.env.example`을 복사하면 그대로 돌기 때문이다. 비밀번호 2개만 입력받고 나머지 5개는 무작위로 채운다(사용자명·URL은 그대로 둔다). 두 스크립트의 결과는 무작위값을 빼면 동일하다
+- `scripts/usecase-seed.mjs` — 시연용 협업방을 넣는 스크립트. `node infra/scripts/usecase-seed.mjs import usecase1`이 `scripts/usecase1/`(HR 근로기준법 대응 시나리오: 요약→상충 확인→개정안→승인→변경본)을 넣고, 방 주소·로그인 계정·대화 순서를 출력한다. 먼저 스택을 띄우고 `node scripts/casbin-demo-accounts.mjs` → `docker restart infra-casbin`을 한 번 실행해 둔다. ES 색인은 담지 않는다
 - `Caddyfile` — 리버스 프록시 라우팅 규칙. caddy 프로필을 쓸 때만 읽힌다
 - `config/init-db.sql` — PostgreSQL 초기화
 - `elasticsearch/Dockerfile` — 한국어 형태소 분석기 nori를 넣은 Elasticsearch 이미지
